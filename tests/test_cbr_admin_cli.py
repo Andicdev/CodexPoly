@@ -67,6 +67,8 @@ class AdminCliTests(unittest.TestCase):
                     "https://polymarket.com/event/cbr-event",
                     "--account-name",
                     "preview-account",
+                    "--telegram-chat-id",
+                    "private-chat-id",
                 ]
             )
 
@@ -74,6 +76,8 @@ class AdminCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["mode"], "preview")
         self.assertEqual(len(payload["rules"]), 3)
+        self.assertTrue(payload["rules"][0]["tg_chat_id_present"])
+        self.assertNotIn("private-chat-id", output.getvalue())
         writer_class.assert_not_called()
 
     def test_apply_falls_back_to_selected_external_primary_url(

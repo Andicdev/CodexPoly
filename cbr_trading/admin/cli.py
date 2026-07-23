@@ -21,6 +21,7 @@ from cbr_trading.admin.templates import (
     build_three_way_rule_drafts,
 )
 from cbr_trading.db_config import resolve_admin_database_selection
+from cbr_trading.secret_guard import redact_sensitive_text
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -48,7 +49,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         drafts = build_three_way_rule_drafts(markets, config)
     except (MarketResolverError, ValueError) as exc:
-        _print_json({"ok": False, "error": str(exc)}, stream=sys.stderr)
+        _print_json(
+            {"ok": False, "error": redact_sensitive_text(exc)},
+            stream=sys.stderr,
+        )
         return 2
 
     preview = {
@@ -61,7 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "title": markets.event_title,
             "url": markets.event_url,
         },
-        "rules": [draft.as_record() for draft in drafts],
+        "rules": [_preview_record(draft.as_record()) for draft in drafts],
     }
     _print_json(preview)
 
@@ -86,7 +90,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         results = writer.apply_rules(drafts)
     except RuleWriteError as exc:
-        _print_json({"ok": False, "error": str(exc)}, stream=sys.stderr)
+        _print_json(
+            {"ok": False, "error": redact_sensitive_text(exc)},
+            stream=sys.stderr,
+        )
         return 3
     finally:
         writer.close()
@@ -201,6 +208,13 @@ def _load_dotenv_if_available() -> None:
     except ImportError:
         return
     load_dotenv()
+
+
+def _preview_record(record: dict[str, object]) -> dict[str, object]:
+    preview = dict(record)
+    chat_id = preview.pop("tg_chat_id", None)
+    preview["tg_chat_id_present"] = bool(chat_id)
+    return preview
 
 
 def _print_json(

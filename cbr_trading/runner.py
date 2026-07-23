@@ -22,6 +22,10 @@ from cbr_trading.rule_repository import (
     RuleLoadError,
     SqlAlchemyRuleRepository,
 )
+from cbr_trading.secret_guard import (
+    redact_exception,
+    redact_sensitive_text,
+)
 from cbr_trading.settings import CbrSettings
 from cbr_trading.telegram import TelegramError, TelegramNotifier
 
@@ -86,11 +90,11 @@ def main() -> int:
                     repository.load_active_cbr_rules()
                 )
             except RuleLoadError as exc:
-                rules_load_error = str(exc)[:240]
+                rules_load_error = redact_sensitive_text(exc)
                 logger.error(
                     "CBR rule preload failed; monitoring continues with "
                     "trading skipped: %s",
-                    exc,
+                    rules_load_error,
                 )
             finally:
                 repository.close()
@@ -226,11 +230,7 @@ def main() -> int:
 
 
 def _safe_exception(exc: Exception) -> str:
-    detail = " ".join(str(exc).split())[:240]
+    detail = redact_sensitive_text(exc)
     if isinstance(exc, LivePreparationError) and detail:
         return detail
-    return (
-        f"{type(exc).__name__}: {detail}"
-        if detail
-        else type(exc).__name__
-    )
+    return redact_exception(exc)

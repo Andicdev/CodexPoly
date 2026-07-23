@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir \
     -r cbr_trading/requirements-live.txt
 
 COPY cbr_trading cbr_trading
+COPY scripts scripts
 COPY tests tests
 
+RUN python scripts/check_no_secrets.py
 RUN python -m unittest discover -s tests -q
 
 RUN useradd --create-home --uid 10001 appuser

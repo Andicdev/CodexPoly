@@ -24,7 +24,10 @@ from restarting the completed event.
 
 ## Runtime variables
 
-Safe fixed values:
+Keep non-secret configuration on the service itself. Keep confidential values
+in a restricted Northflank Secret Group named `cbr-trading-secrets`.
+
+Safe fixed service values:
 
 ```dotenv
 PYTHONUNBUFFERED=1
@@ -50,7 +53,8 @@ CBR_LIVE_ALLOWED_ACCOUNT=kinderSman
 Northflank is outside Render's private network, so use
 `CBR_ON_RENDER=0` and the external Render database URL.
 
-Add these values securely in Northflank. Do not commit their contents:
+Create `cbr-trading-secrets` as a **Secret values** group, restrict inheritance
+to the `cbr-rate-trader` service, and enter these values manually:
 
 ```dotenv
 DATABASE_URL_SERVER_EXT=
@@ -58,6 +62,34 @@ ACCOUNTS_MASTER_KEY=
 TG_BOT_TOKEN=
 TELEGRAM_INGEST_CHAT_ID=
 ```
+
+Do not inspect, snapshot, screenshot, copy, or export Secret Group,
+service-Environment, protected-content, or password pages through an automated
+browser session. This applies even before values are revealed because password
+manager autofill can populate the page DOM. Automation may navigate to the
+page and must then hand control to a human. Once the group is inherited by the
+service, remove duplicate confidential keys from the service-level environment
+because direct service variables override inherited values.
+
+The safe migration order while the service is paused is:
+
+1. Create the restricted `cbr-trading-secrets` group.
+2. Enter and save the four values manually.
+3. Attach or inherit the group only for `cbr-rate-trader`.
+4. Remove the same four keys from the direct service environment.
+5. Restart in dry-run mode and check presence without exposing values:
+
+   ```text
+   python -m cbr_trading.secret_guard
+   ```
+
+The command reports key names as present or missing and never prints values,
+lengths, hashes, or connection details. The account encryption key requires a
+data migration before rotation; never replace it independently.
+
+For daily automation, use a Northflank role or API token that can deploy and
+read logs but cannot reveal Secret Group values. Grant secret editing only
+during an explicit human-supervised rotation.
 
 Controlled trading values must be set only after the final three-rule
 preflight:

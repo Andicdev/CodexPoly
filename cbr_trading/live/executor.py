@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from cbr_trading.live.account_repository import TradingAccountRecord
 from cbr_trading.live.safety import LiveOrderPlan, LiveSafetySettings
+from cbr_trading.secret_guard import redact_sensitive_text
 
 
 _COLLATERAL_SCALE = Decimal("1000000")
@@ -154,7 +155,7 @@ class LiveOrderExecutor:
                 order_id=None,
                 status="rejected",
                 error_code=str(response.code),
-                message=str(response.message),
+                message=redact_sensitive_text(response.message),
                 wallet_type=wallet_type,
                 collateral_balance=collateral_balance,
             )

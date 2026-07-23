@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from cbr_trading.client import DiscoveryResult
+from cbr_trading.secret_guard import redact_sensitive_text
 from cbr_trading.settings import CbrSettings
 
 
@@ -71,7 +72,7 @@ class CbrPoller:
                     "error=%s url=%s",
                     iteration,
                     result.status_code,
-                    result.error,
+                    redact_sensitive_text(result.error),
                     result.url,
                 )
             elif (

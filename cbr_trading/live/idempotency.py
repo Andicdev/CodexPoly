@@ -11,6 +11,7 @@ from cbr_trading.rule_repository import (
     CBR_EXECUTION_PATH,
     CBR_TICKER,
 )
+from cbr_trading.secret_guard import redact_sensitive_text
 
 
 _TABLE_READY_SQL = """
@@ -387,7 +388,7 @@ def _integer_or_none(value: int | str | None) -> int | None:
 def _safe_error(value: str | None) -> str | None:
     if not value:
         return None
-    return " ".join(str(value).split())[:500]
+    return redact_sensitive_text(value, max_length=500)
 
 
 def _normalize_database_url(value: str) -> str:

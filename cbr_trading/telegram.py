@@ -5,6 +5,7 @@ from typing import Any
 
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.pipeline import PipelineOutcome
+from cbr_trading.secret_guard import redact_sensitive_text
 
 
 class TelegramError(RuntimeError):
@@ -191,11 +192,14 @@ def build_pipeline_message(
             lines.append(f"  detail: {_safe_detail(result.error)}")
 
     if outcome.execution_error:
-        lines.append(f"Order execution error: {outcome.execution_error}")
+        lines.append(
+            "Order execution error: "
+            f"{_safe_detail(outcome.execution_error)}"
+        )
     if outcome.rules_load_error:
         lines.append(
             "Trading skipped: rule database unavailable "
-            f"({outcome.rules_load_error})."
+            f"({_safe_detail(outcome.rules_load_error)})."
         )
     elif outcome.change_bps is None:
         lines.append(
@@ -210,4 +214,4 @@ def build_pipeline_message(
 
 
 def _safe_detail(value: str) -> str:
-    return " ".join(str(value or "").split())[:240]
+    return redact_sensitive_text(value)

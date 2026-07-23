@@ -30,6 +30,10 @@ from cbr_trading.rule_repository import (
     RuleLoadError,
     SqlAlchemyRuleRepository,
 )
+from cbr_trading.secret_guard import (
+    redact_exception,
+    redact_sensitive_text,
+)
 from cbr_trading.trading_rules import resolve_order_price
 
 
@@ -111,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ValueError,
     ) as exc:
         _print_json(
-            {"ok": False, "error": str(exc)},
+            {"ok": False, "error": redact_sensitive_text(exc)},
             stream=sys.stderr,
         )
         return 3
@@ -138,7 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except LiveOrderError as exc:
             _print_json(
-                {"ok": False, "error": str(exc)},
+                {"ok": False, "error": redact_sensitive_text(exc)},
                 stream=sys.stderr,
             )
             return 5
@@ -190,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except LiveOrderError as exc:
         _print_json(
-            {"ok": False, "error": str(exc)},
+            {"ok": False, "error": redact_sensitive_text(exc)},
             stream=sys.stderr,
         )
         return 5
@@ -284,7 +288,7 @@ def _run_runner_preflight(
         rules = rule_repository.load_active_cbr_rules()
     except RuleLoadError as exc:
         _print_json(
-            {"ok": False, "error": str(exc)},
+            {"ok": False, "error": redact_sensitive_text(exc)},
             stream=sys.stderr,
         )
         return 3
@@ -439,12 +443,7 @@ def _decimal_or_none(value: Decimal | None) -> str | None:
 
 
 def _safe_exception(exc: Exception) -> str:
-    detail = " ".join(str(exc).split())[:240]
-    return (
-        f"{type(exc).__name__}: {detail}"
-        if detail
-        else type(exc).__name__
-    )
+    return redact_exception(exc)
 
 
 def _load_dotenv_if_available() -> None:

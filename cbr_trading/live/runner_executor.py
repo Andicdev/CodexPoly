@@ -29,6 +29,10 @@ from cbr_trading.pipeline import (
     OrderExecutionResult,
     OrderIntent,
 )
+from cbr_trading.secret_guard import (
+    redact_exception,
+    redact_sensitive_text,
+)
 from cbr_trading.trading_rules import resolve_order_price
 
 
@@ -286,7 +290,7 @@ class WarmLiveOrderExecutor:
                 status="SKIPPED",
                 attempted=False,
                 success=None,
-                error=str(exc),
+                error=redact_sensitive_text(exc),
             )
 
         if not claim.acquired:
@@ -294,7 +298,10 @@ class WarmLiveOrderExecutor:
                 f"idempotency={claim.existing_status or 'UNKNOWN'}"
             )
             if claim.existing_error:
-                detail += f" error={claim.existing_error}"
+                detail += (
+                    " error="
+                    + redact_sensitive_text(claim.existing_error)
+                )
             return OrderExecutionResult(
                 intent=intent,
                 status="DUPLICATE_SKIPPED",
@@ -372,7 +379,7 @@ class WarmLiveOrderExecutor:
                     error=ledger_warning,
                 )
 
-            error = (
+            error = redact_sensitive_text(
                 f"{str(response.code)}: "
                 f"{str(response.message)}"
             )
@@ -643,9 +650,4 @@ def _rule_key(rule_id: int | str | None) -> str:
 
 
 def _safe_exception(exc: Exception) -> str:
-    detail = " ".join(str(exc).split())[:220]
-    return (
-        f"{type(exc).__name__}: {detail}"
-        if detail
-        else type(exc).__name__
-    )
+    return redact_exception(exc, max_length=220)

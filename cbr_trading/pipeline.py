@@ -5,6 +5,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.release import classify_change
+from cbr_trading.secret_guard import redact_exception
 from cbr_trading.trading_rules import RuleEvaluation, evaluate_rules
 
 
@@ -207,5 +208,4 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _safe_exception(exc: Exception) -> str:
-    detail = " ".join(str(exc).split())[:240]
-    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+    return redact_exception(exc)
