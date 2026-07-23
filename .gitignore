@@ -1,8 +1,10 @@
 # .gitignore
 .env
 __pycache__/
+.venv/
 *.pyc
 *.sqlite3
 .DS_Store
 .env.*
+!.env.example
 /reports/
