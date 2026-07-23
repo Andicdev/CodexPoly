@@ -57,6 +57,8 @@ class OrderExecutor(Protocol):
     def execute(
         self,
         intents: Sequence[OrderIntent],
+        *,
+        release: DiscoveryResult,
     ) -> Sequence[OrderExecutionResult]: ...
 
 
@@ -66,6 +68,8 @@ class DryRunOrderExecutor:
     def execute(
         self,
         intents: Sequence[OrderIntent],
+        *,
+        release: DiscoveryResult,
     ) -> list[OrderExecutionResult]:
         results: list[OrderExecutionResult] = []
         for intent in intents:
@@ -134,7 +138,9 @@ class TradingPipeline:
         execution_error: str | None = None
         order_results: tuple[OrderExecutionResult, ...]
         try:
-            order_results = tuple(self.executor.execute(intents))
+            order_results = tuple(
+                self.executor.execute(intents, release=release)
+            )
         except Exception as exc:
             execution_error = _safe_exception(exc)
             order_results = ()

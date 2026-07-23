@@ -60,9 +60,14 @@ class SpyExecutor:
     def execute(
         self,
         intents: list[OrderIntent],
+        *,
+        release: DiscoveryResult,
     ) -> list[OrderExecutionResult]:
         self.trace.append("executor_started")
-        results = DryRunOrderExecutor().execute(intents)
+        results = DryRunOrderExecutor().execute(
+            intents,
+            release=release,
+        )
         self.trace.append("executor_finished")
         return results
 
@@ -74,6 +79,8 @@ class FailingExecutor:
     def execute(
         self,
         intents: list[OrderIntent],
+        *,
+        release: DiscoveryResult,
     ) -> list[OrderExecutionResult]:
         self.trace.append("order_attempt")
         raise RuntimeError("CLOB unavailable")

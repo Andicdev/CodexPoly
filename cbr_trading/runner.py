@@ -5,8 +5,15 @@ import logging
 from dataclasses import asdict
 
 from cbr_trading.client import CbrClient, RequestsTransport
+from cbr_trading.live.runner_executor import (
+    LivePreparationError,
+    UnavailableLiveOrderExecutor,
+    WarmLiveOrderExecutor,
+)
+from cbr_trading.live.safety import LiveSafetySettings
 from cbr_trading.pipeline import (
     DryRunOrderExecutor,
+    OrderExecutor,
     PipelineOutcome,
     TradingPipeline,
 )
@@ -30,11 +37,6 @@ def _load_dotenv_if_available() -> None:
 def main() -> int:
     _load_dotenv_if_available()
     settings = CbrSettings.from_env()
-    if not settings.dry_run:
-        raise RuntimeError(
-            "Live order execution is not connected yet. "
-            "Set CBR_DRY_RUN=1."
-        )
     logging.basicConfig(
         level=getattr(logging, settings.log_level, logging.INFO),
         format=(
@@ -103,6 +105,49 @@ def main() -> int:
                 "monitoring continues with trading skipped"
             )
 
+    executor: OrderExecutor
+    if settings.dry_run:
+        executor = DryRunOrderExecutor()
+    elif rules_load_error:
+        executor = UnavailableLiveOrderExecutor(rules_load_error)
+    elif not subscriptions:
+        executor = UnavailableLiveOrderExecutor(
+            "no active CBR rules"
+        )
+    elif not settings.rules_database_url:
+        executor = UnavailableLiveOrderExecutor(
+            "primary database URL is not configured"
+        )
+    else:
+        live_executor: WarmLiveOrderExecutor | None = None
+        try:
+            live_executor = WarmLiveOrderExecutor(
+                subscriptions=subscriptions,
+                database_url=settings.rules_database_url,
+                safety=LiveSafetySettings.from_env(),
+            )
+            summary = live_executor.prepare()
+        except Exception as exc:
+            if live_executor is not None:
+                live_executor.close()
+            safe_error = _safe_exception(exc)
+            executor = UnavailableLiveOrderExecutor(safe_error)
+            logger.error(
+                "CBR live executor preparation failed; monitoring "
+                "continues with trading skipped: %s",
+                safe_error,
+            )
+        else:
+            executor = live_executor
+            logger.info(
+                "CBR live executor warmed before polling rules=%s "
+                "accounts=%s outcomes=%s maximum_notional=%s",
+                summary.rule_count,
+                summary.account_count,
+                summary.outcome_count,
+                summary.maximum_notional,
+            )
+
     client = CbrClient(
         RequestsTransport(),
         settings.client_config(),
@@ -110,65 +155,82 @@ def main() -> int:
     poller = CbrPoller(client, settings, logger=logger)
 
     try:
-        if settings.mode == "live_once":
-            result = poller.run_once()
-        else:
-            result = poller.run_until_published()
-    except KeyboardInterrupt:
-        logger.info("CBR detector stopped by user")
-        return 130
+        try:
+            if settings.mode == "live_once":
+                result = poller.run_once()
+            else:
+                result = poller.run_until_published()
+        except KeyboardInterrupt:
+            logger.info("CBR detector stopped by user")
+            return 130
 
-    output = asdict(result)
-    if result.ok:
-        telegram = (
-            TelegramNotifier(
-                bot_token=settings.telegram_bot_token or "",
-                chat_id=settings.telegram_chat_id or "",
-                timeout=settings.telegram_timeout,
+        output = asdict(result)
+        if result.ok:
+            telegram = (
+                TelegramNotifier(
+                    bot_token=settings.telegram_bot_token or "",
+                    chat_id=settings.telegram_chat_id or "",
+                    timeout=settings.telegram_timeout,
+                )
+                if settings.telegram_enabled
+                else None
             )
-            if settings.telegram_enabled
-            else None
-        )
 
-        def notify_after_orders(outcome: PipelineOutcome) -> None:
-            if telegram is None:
-                return
-            try:
-                sent = telegram.notify_pipeline(
-                    outcome,
-                    dry_run=settings.dry_run,
-                )
-                logger.info(
-                    "CBR Telegram notification sent after order processing "
-                    "message_id=%s",
-                    sent.message_id,
-                )
-            except TelegramError as exc:
-                logger.error(
-                    "CBR Telegram notification failed after order "
-                    "processing: %s",
-                    exc,
-                )
+            def notify_after_orders(outcome: PipelineOutcome) -> None:
+                if telegram is None:
+                    return
+                try:
+                    sent = telegram.notify_pipeline(
+                        outcome,
+                        dry_run=settings.dry_run,
+                    )
+                    logger.info(
+                        "CBR Telegram notification sent after order "
+                        "processing message_id=%s",
+                        sent.message_id,
+                    )
+                except TelegramError as exc:
+                    logger.error(
+                        "CBR Telegram notification failed after order "
+                        "processing: %s",
+                        exc,
+                    )
 
-        pipeline = TradingPipeline(
-            executor=DryRunOrderExecutor(),
-            notifier=notify_after_orders,
-        )
-        outcome = pipeline.process(
-            release=result,
-            previous_rate=settings.previous_rate,
-            subscriptions=subscriptions,
-            rules_load_error=rules_load_error,
-        )
-        output = asdict(outcome)
-        logger.info(
-            "CBR dry-run pipeline completed change_bps=%s rules=%s "
-            "orders=%s execution_error=%s",
-            outcome.change_bps,
-            len(outcome.evaluations),
-            len(outcome.order_results),
-            outcome.execution_error,
-        )
+            pipeline = TradingPipeline(
+                executor=executor,
+                notifier=notify_after_orders,
+            )
+            outcome = pipeline.process(
+                release=result,
+                previous_rate=settings.previous_rate,
+                subscriptions=subscriptions,
+                rules_load_error=rules_load_error,
+            )
+            output = asdict(outcome)
+            logger.info(
+                "CBR %s pipeline completed change_bps=%s rules=%s "
+                "orders=%s execution_error=%s",
+                "dry-run" if settings.dry_run else "live",
+                outcome.change_bps,
+                len(outcome.evaluations),
+                len(outcome.order_results),
+                outcome.execution_error,
+            )
 
-    print(json.dumps(output, ensure_ascii=False))
-    return 0
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+    finally:
+        close = getattr(executor, "close", None)
+        if callable(close):
+            close()
+
+
+def _safe_exception(exc: Exception) -> str:
+    detail = " ".join(str(exc).split())[:240]
+    if isinstance(exc, LivePreparationError) and detail:
+        return detail
+    return (
+        f"{type(exc).__name__}: {detail}"
+        if detail
+        else type(exc).__name__
+    )

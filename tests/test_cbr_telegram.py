@@ -125,6 +125,52 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertIn("DRY_RUN: YES", message)
         self.assertIn("No live orders were sent.", message)
 
+    def test_live_message_includes_order_id_and_failure_detail(
+        self,
+    ) -> None:
+        intent = OrderIntent(
+            rule_id=1,
+            rule_key="cbr_cut",
+            account_name="main",
+            condition_id="condition-1",
+            action="YES",
+            quantity=100,
+            limit_price=0.20,
+            ready=True,
+            reason="ready",
+        )
+        outcome = PipelineOutcome(
+            release=_published_release(),
+            previous_rate=14.5,
+            change_bps=-25,
+            direction="decrease",
+            evaluations=(),
+            order_results=(
+                OrderExecutionResult(
+                    intent=intent,
+                    status="LIVE",
+                    attempted=True,
+                    success=True,
+                    order_id="order-123",
+                ),
+                OrderExecutionResult(
+                    intent=intent,
+                    status="SKIPPED",
+                    attempted=False,
+                    success=None,
+                    error="safety:buy_would_cross_current_ask",
+                ),
+            ),
+        )
+
+        message = build_pipeline_message(outcome, dry_run=False)
+
+        self.assertIn("order_id=order-123", message)
+        self.assertIn(
+            "detail: safety:buy_would_cross_current_ask",
+            message,
+        )
+
     def test_pipeline_message_reports_database_rule_failure(self) -> None:
         outcome = PipelineOutcome(
             release=_published_release(),

@@ -1,7 +1,16 @@
-# Manual Polymarket live preflight
+# Polymarket live preflight
 
-This module is intentionally separate from the continuous CBR runner. The
-runner remains dry-run until the manual order lifecycle has been verified.
+Run the full warmed preflight used by the continuous CBR runner:
+
+```powershell
+python -m cbr_trading.live --runner-preflight
+```
+
+It loads every active CBR rule, verifies the execution ledger, decrypts and
+authenticates each account, checks collateral, and prepares both YES and NO
+outcome tokens. It never submits an order and does not require
+`CBR_LIVE_TRADING_ENABLED=1`; the output reports whether that final switch is
+currently enabled.
 
 Preview the only active CBR fast-path rule:
 

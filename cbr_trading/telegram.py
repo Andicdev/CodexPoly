@@ -177,13 +177,18 @@ def build_pipeline_message(
 
     for result in outcome.order_results:
         intent = result.intent
-        lines.append(
+        order_line = (
             "- "
             f"{result.status}: {intent.action} "
             f"qty={intent.quantity} price={intent.limit_price} "
             f"account={intent.account_name or '-'} "
             f"condition={intent.condition_id or '-'}"
         )
+        if result.order_id:
+            order_line += f" order_id={result.order_id}"
+        lines.append(order_line)
+        if result.error:
+            lines.append(f"  detail: {_safe_detail(result.error)}")
 
     if outcome.execution_error:
         lines.append(f"Order execution error: {outcome.execution_error}")
@@ -202,3 +207,7 @@ def build_pipeline_message(
         lines.append("No live orders were sent.")
     lines.append(f"URL: {outcome.release.url}")
     return "\n".join(lines)
+
+
+def _safe_detail(value: str) -> str:
+    return " ".join(str(value or "").split())[:240]

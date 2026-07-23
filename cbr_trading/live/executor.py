@@ -17,6 +17,10 @@ _SIGNATURE_TYPE_BY_WALLET = {
 }
 
 
+def signature_type_for_wallet(wallet_type: str) -> int | None:
+    return _SIGNATURE_TYPE_BY_WALLET.get(str(wallet_type or ""))
+
+
 class LiveOrderError(RuntimeError):
     """Fail-closed live order setup or execution error."""
 
@@ -199,9 +203,7 @@ class LiveOrderExecutor:
         wallet_type = str(
             getattr(client, "wallet_type", "") or ""
         )
-        detected_signature_type = _SIGNATURE_TYPE_BY_WALLET.get(
-            wallet_type
-        )
+        detected_signature_type = signature_type_for_wallet(wallet_type)
         if detected_signature_type != account.signature_type:
             raise LiveOrderError(
                 "Detected wallet signature type does not match "

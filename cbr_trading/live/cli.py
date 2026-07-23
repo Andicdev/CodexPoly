@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
@@ -20,6 +21,7 @@ from cbr_trading.live.market import (
     MarketPreflightError,
     PolymarketMarketGateway,
 )
+from cbr_trading.live.runner_executor import WarmLiveOrderExecutor
 from cbr_trading.live.safety import (
     LiveSafetySettings,
     build_live_order_plan,
@@ -48,6 +50,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             stream=sys.stderr,
         )
         return 3
+
+    if args.runner_preflight:
+        return _run_runner_preflight(
+            database_url=database.url,
+            database_target=database.target,
+        )
+    if not args.action:
+        _print_json(
+            {
+                "ok": False,
+                "error": (
+                    "--action YES|NO is required unless "
+                    "--runner-preflight is used"
+                ),
+            },
+            stream=sys.stderr,
+        )
+        return 2
 
     rule_repository = SqlAlchemyRuleRepository(
         database_url=database.url
@@ -205,7 +225,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        required=True,
         choices=("YES", "NO", "yes", "no"),
         help="Outcome token to BUY for this isolated live check.",
     )
@@ -233,6 +252,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable the order-submission branch.",
     )
+    mode_group.add_argument(
+        "--runner-preflight",
+        action="store_true",
+        help=(
+            "Warm every active CBR rule exactly as the continuous live "
+            "runner will, including the account, balance, both outcome "
+            "books, and idempotency table. Never submits an order."
+        ),
+    )
     parser.add_argument(
         "--confirm-live-order",
         action="store_true",
@@ -242,6 +270,77 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _run_runner_preflight(
+    *,
+    database_url: str,
+    database_target: str,
+) -> int:
+    rule_repository = SqlAlchemyRuleRepository(
+        database_url=database_url
+    )
+    try:
+        rules = rule_repository.load_active_cbr_rules()
+    except RuleLoadError as exc:
+        _print_json(
+            {"ok": False, "error": str(exc)},
+            stream=sys.stderr,
+        )
+        return 3
+    finally:
+        rule_repository.close()
+
+    safety = LiveSafetySettings.from_env()
+    validation_safety = replace(safety, trading_enabled=True)
+    executor = WarmLiveOrderExecutor(
+        subscriptions=rules,
+        database_url=database_url,
+        safety=validation_safety,
+    )
+    try:
+        summary = executor.prepare()
+    except Exception as exc:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "runner_preflight",
+                "order_submitted": False,
+                "error": _safe_exception(exc),
+            },
+            stream=sys.stderr,
+        )
+        return 5
+    finally:
+        executor.close()
+
+    _print_json(
+        {
+            "ok": True,
+            "mode": "runner_preflight",
+            "order_submitted": False,
+            "database_target": database_target,
+            "rules": summary.rule_count,
+            "accounts": summary.account_count,
+            "prepared_outcomes": summary.outcome_count,
+            "maximum_notional": str(summary.maximum_notional),
+            "safety": {
+                "live_trading_enabled": safety.trading_enabled,
+                "post_only": safety.post_only,
+                "allowed_account": safety.allowed_account,
+                "max_order_quantity": _decimal_or_none(
+                    safety.max_order_quantity
+                ),
+                "max_notional": _decimal_or_none(
+                    safety.max_notional
+                ),
+                "master_key_present": bool(
+                    safety.accounts_master_key
+                ),
+            },
+        }
+    )
+    return 0
 
 
 def _select_rule(
@@ -334,6 +433,15 @@ def _preview_payload(
 
 def _decimal_or_none(value: Decimal | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _safe_exception(exc: Exception) -> str:
+    detail = " ".join(str(exc).split())[:240]
+    return (
+        f"{type(exc).__name__}: {detail}"
+        if detail
+        else type(exc).__name__
+    )
 
 
 def _load_dotenv_if_available() -> None:
