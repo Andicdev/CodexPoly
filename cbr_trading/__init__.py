@@ -16,6 +16,14 @@ from cbr_trading.release import (
     parse_datetime,
     parse_release_rate_from_title,
 )
+from cbr_trading.rule_repository import (
+    CBR_CHANGE_METRIC,
+    CBR_EXECUTION_PATH,
+    CBR_TICKER,
+    RuleLoadError,
+    SqlAlchemyRuleRepository,
+    normalize_rule_rows,
+)
 from cbr_trading.pipeline import (
     DryRunOrderExecutor,
     OrderExecutionResult,
@@ -35,6 +43,9 @@ from cbr_trading.trading_rules import (
 __all__ = [
     "CbrClient",
     "CbrClientConfig",
+    "CBR_CHANGE_METRIC",
+    "CBR_EXECUTION_PATH",
+    "CBR_TICKER",
     "DEFAULT_RELEASE_TIME_SUFFIX",
     "DiscoveryResult",
     "DryRunOrderExecutor",
@@ -43,7 +54,9 @@ __all__ = [
     "OrderIntent",
     "PipelineOutcome",
     "RequestsTransport",
+    "RuleLoadError",
     "RuleEvaluation",
+    "SqlAlchemyRuleRepository",
     "TradingPipeline",
     "build_predicted_release_url",
     "build_order_intent",
@@ -53,6 +66,7 @@ __all__ = [
     "evaluate_rules",
     "extract_title",
     "looks_like_key_rate_release",
+    "normalize_rule_rows",
     "parse_datetime",
     "parse_release_rate_from_title",
     "resolve_order_price",

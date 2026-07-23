@@ -11,6 +11,10 @@ from cbr_trading.pipeline import (
     TradingPipeline,
 )
 from cbr_trading.poller import CbrPoller
+from cbr_trading.rule_repository import (
+    RuleLoadError,
+    SqlAlchemyRuleRepository,
+)
 from cbr_trading.settings import CbrSettings
 from cbr_trading.telegram import TelegramError, TelegramNotifier
 
@@ -41,15 +45,43 @@ def main() -> int:
 
     logger.info(
         "CBR title-only detector starting mode=%s interval=%s "
-        "release_date=%s suffix=%s cache_bust=%s dry_run=%s telegram=%s",
+        "release_date=%s suffix=%s cache_bust=%s dry_run=%s "
+        "rules_db=%s telegram=%s",
         settings.mode,
         settings.poll_interval,
         settings.release_date,
         settings.release_time_suffix,
         settings.cache_bust,
         settings.dry_run,
+        settings.rules_db_enabled,
         settings.telegram_enabled,
     )
+
+    subscriptions: tuple[dict, ...] = ()
+    if settings.rules_db_enabled:
+        repository = SqlAlchemyRuleRepository(
+            database_url=settings.rules_database_url,
+        )
+        try:
+            subscriptions = tuple(
+                repository.load_active_cbr_rules()
+            )
+        except RuleLoadError as exc:
+            logger.error(
+                "CBR rule preload failed; detector will not start: %s",
+                exc,
+            )
+            return 2
+        finally:
+            repository.close()
+        logger.info(
+            "CBR rules preloaded read-only count=%s",
+            len(subscriptions),
+        )
+        if not subscriptions:
+            logger.warning(
+                "CBR rule preload returned no active fast-path rules"
+            )
 
     client = CbrClient(
         RequestsTransport(),
@@ -105,7 +137,7 @@ def main() -> int:
         outcome = pipeline.process(
             release=result,
             previous_rate=settings.previous_rate,
-            subscriptions=(),
+            subscriptions=subscriptions,
         )
         output = asdict(outcome)
         logger.info(

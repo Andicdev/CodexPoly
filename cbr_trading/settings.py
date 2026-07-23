@@ -50,6 +50,8 @@ class CbrSettings:
     log_level: str = "INFO"
     dry_run: bool = True
     previous_rate: float | None = None
+    rules_db_enabled: bool = False
+    rules_database_url: str | None = field(default=None, repr=False)
     telegram_enabled: bool = False
     telegram_bot_token: str | None = field(default=None, repr=False)
     telegram_chat_id: str | None = None
@@ -99,6 +101,17 @@ class CbrSettings:
             log_level=(_clean(env.get("LOG_LEVEL")) or "INFO").upper(),
             dry_run=_bool(env.get("CBR_DRY_RUN"), default=True),
             previous_rate=_optional_float(env.get("BOR_PREV_RATE")),
+            rules_db_enabled=_bool(
+                env.get("CBR_RULES_DB_ENABLED"),
+                default=False,
+            ),
+            rules_database_url=(
+                _clean(
+                    env.get("CBR_DATABASE_URL")
+                    or env.get("DATABASE_URL")
+                )
+                or None
+            ),
             telegram_enabled=_bool(
                 env.get("CBR_TELEGRAM_ENABLED"),
                 default=False,
@@ -135,6 +148,11 @@ class CbrSettings:
             )
         if self.telegram_timeout <= 0:
             raise ValueError("TG_HTTP_TIMEOUT must be positive")
+        if self.rules_db_enabled and not self.rules_database_url:
+            raise ValueError(
+                "CBR_DATABASE_URL (or DATABASE_URL) is required when "
+                "CBR_RULES_DB_ENABLED=1"
+            )
         if self.telegram_enabled and not self.telegram_bot_token:
             raise ValueError(
                 "TG_BOT_TOKEN is required when CBR_TELEGRAM_ENABLED=1"
