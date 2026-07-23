@@ -1,0 +1,3 @@
+-r requirements-db.txt
+polymarket-client==0.1.0
+cryptography>=42,<47
