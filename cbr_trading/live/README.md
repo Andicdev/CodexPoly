@@ -13,6 +13,16 @@ The preview reads the rule and account in read-only database transactions,
 fetches the current public order book, and prints all safety blockers. It does
 not decrypt the private key or authenticate with Polymarket.
 
+After adding the existing `ACCOUNTS_MASTER_KEY`, verify authentication, wallet
+type, collateral balance, and a fresh order book without submitting an order:
+
+```powershell
+python -m cbr_trading.live --action YES --auth-check
+```
+
+This authenticated check may derive or create CLOB API credentials, but it
+does not call the order submission endpoint.
+
 Real submission additionally requires:
 
 - `CBR_LIVE_TRADING_ENABLED=1`;

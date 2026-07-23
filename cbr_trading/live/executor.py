@@ -33,6 +33,13 @@ class LivePlacementResult:
     collateral_balance: Decimal
 
 
+@dataclass(frozen=True)
+class AuthenticatedPreflightResult:
+    wallet_type: str
+    collateral_balance: Decimal
+    current_best_ask: Decimal | None
+
+
 class LiveOrderExecutor:
     """Submit one post-only BUY through the official Polymarket SDK."""
 
@@ -44,6 +51,48 @@ class LiveOrderExecutor:
     ):
         self._client_factory = client_factory
         self._decryptor = decryptor or decrypt_private_key
+
+    def check_authenticated(
+        self,
+        *,
+        plan: LiveOrderPlan,
+        account: TradingAccountRecord,
+        settings: LiveSafetySettings,
+    ) -> AuthenticatedPreflightResult:
+        non_activation_blockers = tuple(
+            blocker
+            for blocker in plan.blockers
+            if blocker != "live_trading_disabled"
+        )
+        if non_activation_blockers:
+            raise LiveOrderError(
+                "Authenticated preflight is blocked: "
+                + ",".join(non_activation_blockers)
+            )
+
+        client = self._open_client(
+            account=account,
+            settings=settings,
+        )
+        try:
+            (
+                wallet_type,
+                collateral_balance,
+                current_best_ask,
+            ) = self._validate_authenticated_client(
+                client=client,
+                plan=plan,
+                account=account,
+            )
+            return AuthenticatedPreflightResult(
+                wallet_type=wallet_type,
+                collateral_balance=collateral_balance,
+                current_best_ask=current_best_ask,
+            )
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
 
     def place(
         self,
@@ -57,56 +106,25 @@ class LiveOrderExecutor:
                 "Live order plan is blocked: "
                 + ",".join(plan.blockers)
             )
-        if not settings.accounts_master_key:
-            raise LiveOrderError("ACCOUNTS_MASTER_KEY is not configured")
         if plan.account_name.casefold() != account.name.casefold():
             raise LiveOrderError(
                 "Order plan account does not match loaded account"
             )
 
-        private_key = self._decryptor(
-            account.encrypted_private_key,
-            settings.accounts_master_key,
-        )
-        client = self._new_client(
-            private_key=private_key,
-            wallet=account.wallet_address,
+        client = self._open_client(
+            account=account,
+            settings=settings,
         )
         try:
-            wallet = str(getattr(client, "wallet", "") or "")
-            if wallet.casefold() != account.wallet_address.casefold():
-                raise LiveOrderError(
-                    "Authenticated wallet does not match the database"
-                )
-
-            wallet_type = str(
-                getattr(client, "wallet_type", "") or ""
+            (
+                wallet_type,
+                collateral_balance,
+                _current_best_ask,
+            ) = self._validate_authenticated_client(
+                client=client,
+                plan=plan,
+                account=account,
             )
-            detected_signature_type = _SIGNATURE_TYPE_BY_WALLET.get(
-                wallet_type
-            )
-            if detected_signature_type != account.signature_type:
-                raise LiveOrderError(
-                    "Detected wallet signature type does not match "
-                    "the database"
-                )
-
-            self._refresh_book_guard(client, plan)
-            balance = client.get_balance_allowance(
-                asset_type="COLLATERAL"
-            )
-            collateral_balance = (
-                Decimal(int(balance.balance)) / _COLLATERAL_SCALE
-            )
-            required_raw = int(
-                (plan.notional * _COLLATERAL_SCALE).to_integral_value(
-                    rounding=ROUND_CEILING
-                )
-            )
-            if int(balance.balance) < required_raw:
-                raise LiveOrderError(
-                    "Insufficient collateral balance for the order"
-                )
 
             response = client.place_limit_order(
                 token_id=plan.token_id,
@@ -148,6 +166,66 @@ class LiveOrderExecutor:
             if callable(close):
                 close()
 
+    def _open_client(
+        self,
+        *,
+        account: TradingAccountRecord,
+        settings: LiveSafetySettings,
+    ) -> Any:
+        if not settings.accounts_master_key:
+            raise LiveOrderError("ACCOUNTS_MASTER_KEY is not configured")
+        private_key = self._decryptor(
+            account.encrypted_private_key,
+            settings.accounts_master_key,
+        )
+        return self._new_client(
+            private_key=private_key,
+            wallet=account.wallet_address,
+        )
+
+    def _validate_authenticated_client(
+        self,
+        *,
+        client: Any,
+        plan: LiveOrderPlan,
+        account: TradingAccountRecord,
+    ) -> tuple[str, Decimal, Decimal | None]:
+        wallet = str(getattr(client, "wallet", "") or "")
+        if wallet.casefold() != account.wallet_address.casefold():
+            raise LiveOrderError(
+                "Authenticated wallet does not match the database"
+            )
+
+        wallet_type = str(
+            getattr(client, "wallet_type", "") or ""
+        )
+        detected_signature_type = _SIGNATURE_TYPE_BY_WALLET.get(
+            wallet_type
+        )
+        if detected_signature_type != account.signature_type:
+            raise LiveOrderError(
+                "Detected wallet signature type does not match "
+                "the database"
+            )
+
+        current_best_ask = self._refresh_book_guard(client, plan)
+        balance = client.get_balance_allowance(
+            asset_type="COLLATERAL"
+        )
+        collateral_balance = (
+            Decimal(int(balance.balance)) / _COLLATERAL_SCALE
+        )
+        required_raw = int(
+            (plan.notional * _COLLATERAL_SCALE).to_integral_value(
+                rounding=ROUND_CEILING
+            )
+        )
+        if int(balance.balance) < required_raw:
+            raise LiveOrderError(
+                "Insufficient collateral balance for the order"
+            )
+        return wallet_type, collateral_balance, current_best_ask
+
     def _new_client(self, *, private_key: str, wallet: str) -> Any:
         if self._client_factory is not None:
             return self._client_factory(private_key, wallet)
@@ -163,7 +241,10 @@ class LiveOrderExecutor:
         )
 
     @staticmethod
-    def _refresh_book_guard(client: Any, plan: LiveOrderPlan) -> None:
+    def _refresh_book_guard(
+        client: Any,
+        plan: LiveOrderPlan,
+    ) -> Decimal | None:
         book = client.get_order_book(token_id=plan.token_id)
         if str(book.condition_id).casefold() != (
             plan.condition_id.casefold()
@@ -189,6 +270,7 @@ class LiveOrderExecutor:
             raise LiveOrderError(
                 "BUY would cross the latest ask; post-only order skipped"
             )
+        return best_ask
 
 
 def decrypt_private_key(

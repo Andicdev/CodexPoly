@@ -109,6 +109,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
 
+    if args.auth_check:
+        try:
+            checked = LiveOrderExecutor().check_authenticated(
+                plan=plan,
+                account=account,
+                settings=safety,
+            )
+        except LiveOrderError as exc:
+            _print_json(
+                {"ok": False, "error": str(exc)},
+                stream=sys.stderr,
+            )
+            return 5
+        _print_json(
+            {
+                "ok": True,
+                "mode": "authenticated_preflight",
+                "order_submitted": False,
+                "wallet_type": checked.wallet_type,
+                "collateral_balance": str(
+                    checked.collateral_balance
+                ),
+                "current_best_ask": _decimal_or_none(
+                    checked.current_best_ask
+                ),
+            }
+        )
+        return 0
+
     if not args.apply:
         return 0
     if not args.confirm_live_order:
@@ -189,7 +218,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "active CBR fast-path rule must exist."
         ),
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--auth-check",
+        action="store_true",
+        help=(
+            "Decrypt and authenticate the account, verify wallet type, "
+            "balance, and the latest book, but never submit an order. "
+            "This may derive or create CLOB API credentials."
+        ),
+    )
+    mode_group.add_argument(
         "--apply",
         action="store_true",
         help="Enable the order-submission branch.",

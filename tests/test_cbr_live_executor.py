@@ -31,9 +31,12 @@ def _account() -> TradingAccountRecord:
     )
 
 
-def _settings() -> LiveSafetySettings:
+def _settings(
+    *,
+    trading_enabled: bool = True,
+) -> LiveSafetySettings:
     return LiveSafetySettings(
-        trading_enabled=True,
+        trading_enabled=trading_enabled,
         post_only=True,
         allowed_account="kinderSman",
         max_order_quantity=Decimal("100"),
@@ -42,7 +45,11 @@ def _settings() -> LiveSafetySettings:
     )
 
 
-def _plan() -> object:
+def _plan(
+    *,
+    settings: LiveSafetySettings | None = None,
+) -> object:
+    used_settings = settings or _settings()
     snapshot = MarketSnapshot(
         condition_id=CONDITION_ID,
         question="CBR decrease?",
@@ -62,7 +69,7 @@ def _plan() -> object:
         quantity=Decimal("100"),
         limit_price=Decimal("0.20"),
         snapshot=snapshot,
-        settings=_settings(),
+        settings=used_settings,
     )
 
 
@@ -102,6 +109,26 @@ class _Client:
 
 
 class LiveExecutorTests(unittest.TestCase):
+    def test_authenticated_check_never_places_order(self) -> None:
+        client = _Client()
+        settings = _settings(trading_enabled=False)
+        executor = LiveOrderExecutor(
+            client_factory=lambda private_key, wallet: client,
+            decryptor=lambda encrypted, master: "private",
+        )
+
+        result = executor.check_authenticated(
+            plan=_plan(settings=settings),
+            account=_account(),
+            settings=settings,
+        )
+
+        self.assertEqual(result.wallet_type, "GNOSIS_SAFE")
+        self.assertEqual(result.collateral_balance, Decimal("50"))
+        self.assertEqual(result.current_best_ask, Decimal("0.64"))
+        self.assertIsNone(client.place_kwargs)
+        self.assertTrue(client.closed)
+
     def test_places_only_post_only_buy_after_fresh_book_check(
         self,
     ) -> None:
