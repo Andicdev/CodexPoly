@@ -56,7 +56,8 @@ def _rule() -> dict:
 
 
 class RunnerRulePreloadTests(unittest.TestCase):
-    def test_database_failure_stops_before_cbr_network(self) -> None:
+    def test_database_failure_continues_without_trading(self) -> None:
+        output = io.StringIO()
         with (
             patch.object(
                 runner,
@@ -73,11 +74,19 @@ class RunnerRulePreloadTests(unittest.TestCase):
                 side_effect=RuleLoadError("read failed"),
             ),
             patch.object(runner, "RequestsTransport") as transport,
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
         ):
+            poller_class.return_value.run_once.return_value = _release()
             exit_code = runner.main()
 
-        self.assertEqual(exit_code, 2)
-        transport.assert_not_called()
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        transport.assert_called_once()
+        self.assertEqual(payload["rules_load_error"], "read failed")
+        self.assertEqual(payload["evaluations"], [])
+        self.assertEqual(payload["order_results"], [])
 
     def test_preloaded_rules_reach_pipeline(self) -> None:
         output = io.StringIO()

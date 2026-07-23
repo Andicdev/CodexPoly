@@ -46,6 +46,7 @@ class PipelineOutcome:
     evaluations: tuple[RuleEvaluation, ...]
     order_results: tuple[OrderExecutionResult, ...]
     execution_error: str | None = None
+    rules_load_error: str | None = None
 
     @property
     def tradable(self) -> bool:
@@ -109,6 +110,7 @@ class TradingPipeline:
         release: DiscoveryResult,
         previous_rate: float | None,
         subscriptions: Sequence[Mapping[str, Any]],
+        rules_load_error: str | None = None,
     ) -> PipelineOutcome:
         change_bps, direction = classify_change(
             previous_rate,
@@ -145,6 +147,7 @@ class TradingPipeline:
             evaluations=tuple(evaluations),
             order_results=order_results,
             execution_error=execution_error,
+            rules_load_error=rules_load_error,
         )
 
         if self.notifier is not None:

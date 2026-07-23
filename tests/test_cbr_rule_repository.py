@@ -158,11 +158,12 @@ class RuleRepositorySettingsTests(unittest.TestCase):
         )
         self.assertNotIn("secret", repr(settings))
 
-    def test_enabled_database_rules_require_url(self) -> None:
-        with self.assertRaisesRegex(ValueError, "CBR_DATABASE_URL"):
-            CbrSettings.from_env(
-                {"CBR_RULES_DB_ENABLED": "1"}
-            )
+    def test_missing_database_url_does_not_block_monitoring(self) -> None:
+        settings = CbrSettings.from_env(
+            {"CBR_RULES_DB_ENABLED": "1"}
+        )
+        self.assertTrue(settings.rules_db_enabled)
+        self.assertIsNone(settings.rules_database_url)
 
 
 if __name__ == "__main__":

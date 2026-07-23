@@ -58,6 +58,7 @@ def main() -> int:
     )
 
     subscriptions: tuple[dict, ...] = ()
+    rules_load_error: str | None = None
     if settings.rules_db_enabled:
         repository = SqlAlchemyRuleRepository(
             database_url=settings.rules_database_url,
@@ -67,20 +68,23 @@ def main() -> int:
                 repository.load_active_cbr_rules()
             )
         except RuleLoadError as exc:
+            rules_load_error = str(exc)[:240]
             logger.error(
-                "CBR rule preload failed; detector will not start: %s",
+                "CBR rule preload failed; monitoring continues with "
+                "trading skipped: %s",
                 exc,
             )
-            return 2
         finally:
             repository.close()
-        logger.info(
-            "CBR rules preloaded read-only count=%s",
-            len(subscriptions),
-        )
-        if not subscriptions:
+        if rules_load_error is None:
+            logger.info(
+                "CBR rules preloaded read-only count=%s",
+                len(subscriptions),
+            )
+        if not subscriptions and rules_load_error is None:
             logger.warning(
-                "CBR rule preload returned no active fast-path rules"
+                "CBR rule preload returned no active fast-path rules; "
+                "monitoring continues with trading skipped"
             )
 
     client = CbrClient(
@@ -138,6 +142,7 @@ def main() -> int:
             release=result,
             previous_rate=settings.previous_rate,
             subscriptions=subscriptions,
+            rules_load_error=rules_load_error,
         )
         output = asdict(outcome)
         logger.info(

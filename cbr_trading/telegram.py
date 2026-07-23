@@ -187,6 +187,17 @@ def build_pipeline_message(
 
     if outcome.execution_error:
         lines.append(f"Order execution error: {outcome.execution_error}")
+    if outcome.rules_load_error:
+        lines.append(
+            "Trading skipped: rule database unavailable "
+            f"({outcome.rules_load_error})."
+        )
+    elif outcome.change_bps is None:
+        lines.append(
+            "Trading skipped: previous key rate is not configured."
+        )
+    elif not outcome.evaluations:
+        lines.append("Trading skipped: no active rules.")
     if dry_run:
         lines.append("No live orders were sent.")
     lines.append(f"URL: {outcome.release.url}")

@@ -125,6 +125,37 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertIn("DRY_RUN: YES", message)
         self.assertIn("No live orders were sent.", message)
 
+    def test_pipeline_message_reports_database_rule_failure(self) -> None:
+        outcome = PipelineOutcome(
+            release=_published_release(),
+            previous_rate=14.5,
+            change_bps=-25,
+            direction="decrease",
+            evaluations=(),
+            order_results=(),
+            rules_load_error="Failed to load rules: OperationalError",
+        )
+
+        message = build_pipeline_message(outcome, dry_run=True)
+
+        self.assertIn("rule database unavailable", message)
+        self.assertIn("Trading skipped", message)
+        self.assertIn("No live orders were sent.", message)
+
+    def test_pipeline_message_reports_no_active_rules(self) -> None:
+        outcome = PipelineOutcome(
+            release=_published_release(),
+            previous_rate=14.5,
+            change_bps=-25,
+            direction="decrease",
+            evaluations=(),
+            order_results=(),
+        )
+
+        message = build_pipeline_message(outcome, dry_run=True)
+
+        self.assertIn("Trading skipped: no active rules.", message)
+
     def test_sends_plain_text_message(self) -> None:
         session = FakeSession(
             FakeResponse(

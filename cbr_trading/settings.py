@@ -148,11 +148,6 @@ class CbrSettings:
             )
         if self.telegram_timeout <= 0:
             raise ValueError("TG_HTTP_TIMEOUT must be positive")
-        if self.rules_db_enabled and not self.rules_database_url:
-            raise ValueError(
-                "CBR_DATABASE_URL (or DATABASE_URL) is required when "
-                "CBR_RULES_DB_ENABLED=1"
-            )
         if self.telegram_enabled and not self.telegram_bot_token:
             raise ValueError(
                 "TG_BOT_TOKEN is required when CBR_TELEGRAM_ENABLED=1"
