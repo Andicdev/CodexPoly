@@ -20,6 +20,7 @@ from cbr_trading.admin.templates import (
     RuleTemplateConfig,
     build_three_way_rule_drafts,
 )
+from cbr_trading.db_config import resolve_admin_database_selection
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -67,9 +68,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.apply:
         return 0
 
-    writer = SqlAlchemyRuleWriter(
-        database_url=os.getenv("CBR_ADMIN_DATABASE_URL"),
-    )
+    database = resolve_admin_database_selection(os.environ)
+    if not database.url:
+        _print_json(
+            {
+                "ok": False,
+                "error": (
+                    database.error
+                    or "Admin database URL is not configured"
+                ),
+            },
+            stream=sys.stderr,
+        )
+        return 3
+
+    writer = SqlAlchemyRuleWriter(database_url=database.url)
     try:
         results = writer.apply_rules(drafts)
     except RuleWriteError as exc:
@@ -82,6 +95,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         {
             "ok": True,
             "mode": "applied",
+            "database": {
+                "target": database.target,
+                "source": database.source,
+            },
             "results": [
                 {
                     "id": result.rule_id,
@@ -160,7 +177,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help=(
-            "Write rules using CBR_ADMIN_DATABASE_URL. "
+            "Write rules using CBR_ADMIN_DATABASE_URL or the selected "
+            "primary database URL. "
             "Without this flag the command only prints a preview."
         ),
     )

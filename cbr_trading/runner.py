@@ -46,7 +46,8 @@ def main() -> int:
     logger.info(
         "CBR title-only detector starting mode=%s interval=%s "
         "release_date=%s suffix=%s cache_bust=%s dry_run=%s "
-        "rules_db=%s telegram=%s",
+        "rules_db=%s primary_db=%s/%s analytics_db=%s/%s "
+        "telegram=%s",
         settings.mode,
         settings.poll_interval,
         settings.release_date,
@@ -54,28 +55,43 @@ def main() -> int:
         settings.cache_bust,
         settings.dry_run,
         settings.rules_db_enabled,
+        settings.primary_database_target,
+        settings.primary_database_source,
+        settings.analytics_database_target,
+        settings.analytics_database_source,
         settings.telegram_enabled,
     )
 
     subscriptions: tuple[dict, ...] = ()
     rules_load_error: str | None = None
     if settings.rules_db_enabled:
-        repository = SqlAlchemyRuleRepository(
-            database_url=settings.rules_database_url,
-        )
-        try:
-            subscriptions = tuple(
-                repository.load_active_cbr_rules()
+        if not settings.rules_database_url:
+            rules_load_error = (
+                settings.primary_database_error
+                or "Primary database URL is not configured"
             )
-        except RuleLoadError as exc:
-            rules_load_error = str(exc)[:240]
             logger.error(
                 "CBR rule preload failed; monitoring continues with "
                 "trading skipped: %s",
-                exc,
+                rules_load_error,
             )
-        finally:
-            repository.close()
+        else:
+            repository = SqlAlchemyRuleRepository(
+                database_url=settings.rules_database_url,
+            )
+            try:
+                subscriptions = tuple(
+                    repository.load_active_cbr_rules()
+                )
+            except RuleLoadError as exc:
+                rules_load_error = str(exc)[:240]
+                logger.error(
+                    "CBR rule preload failed; monitoring continues with "
+                    "trading skipped: %s",
+                    exc,
+                )
+            finally:
+                repository.close()
         if rules_load_error is None:
             logger.info(
                 "CBR rules preloaded read-only count=%s",

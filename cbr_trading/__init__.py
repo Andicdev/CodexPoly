@@ -7,6 +7,11 @@ from cbr_trading.client import (
     FetchResult,
     RequestsTransport,
 )
+from cbr_trading.db_config import (
+    DatabaseSelection,
+    resolve_admin_database_selection,
+    resolve_database_selection,
+)
 from cbr_trading.release import (
     DEFAULT_RELEASE_TIME_SUFFIX,
     build_predicted_release_url,
@@ -47,6 +52,7 @@ __all__ = [
     "CBR_EXECUTION_PATH",
     "CBR_TICKER",
     "DEFAULT_RELEASE_TIME_SUFFIX",
+    "DatabaseSelection",
     "DiscoveryResult",
     "DryRunOrderExecutor",
     "FetchResult",
@@ -70,4 +76,6 @@ __all__ = [
     "parse_datetime",
     "parse_release_rate_from_title",
     "resolve_order_price",
+    "resolve_admin_database_selection",
+    "resolve_database_selection",
 ]

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from cbr_trading.client import CbrClientConfig
+from cbr_trading.db_config import resolve_database_selection
 from cbr_trading.release import DEFAULT_RELEASE_TIME_SUFFIX
 
 
@@ -52,6 +53,15 @@ class CbrSettings:
     previous_rate: float | None = None
     rules_db_enabled: bool = False
     rules_database_url: str | None = field(default=None, repr=False)
+    primary_database_target: str = "server_ext"
+    primary_database_source: str = "DATABASE_URL_SERVER_EXT"
+    primary_database_error: str | None = None
+    analytics_database_url: str | None = field(default=None, repr=False)
+    analytics_database_target: str = "server_ext"
+    analytics_database_source: str = (
+        "ANALYTICS_DATABASE_URL_SERVER_EXT"
+    )
+    analytics_database_error: str | None = None
     telegram_enabled: bool = False
     telegram_bot_token: str | None = field(default=None, repr=False)
     telegram_chat_id: str | None = None
@@ -69,6 +79,11 @@ class CbrSettings:
                 "BOR_MODE must be 'hot' or 'live_once' for cbr_trading"
             )
 
+        primary_database = resolve_database_selection("primary", env)
+        analytics_database = resolve_database_selection(
+            "analytics",
+            env,
+        )
         settings = cls(
             mode=mode,
             release_date=_clean(env.get("BOR_RELEASE_DATE")) or None,
@@ -105,13 +120,14 @@ class CbrSettings:
                 env.get("CBR_RULES_DB_ENABLED"),
                 default=False,
             ),
-            rules_database_url=(
-                _clean(
-                    env.get("CBR_DATABASE_URL")
-                    or env.get("DATABASE_URL")
-                )
-                or None
-            ),
+            rules_database_url=primary_database.url,
+            primary_database_target=primary_database.target,
+            primary_database_source=primary_database.source,
+            primary_database_error=primary_database.error,
+            analytics_database_url=analytics_database.url,
+            analytics_database_target=analytics_database.target,
+            analytics_database_source=analytics_database.source,
+            analytics_database_error=analytics_database.error,
             telegram_enabled=_bool(
                 env.get("CBR_TELEGRAM_ENABLED"),
                 default=False,

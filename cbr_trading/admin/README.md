@@ -21,6 +21,7 @@ python -m cbr_trading.admin `
   --apply
 ```
 
-`--apply` requires `CBR_ADMIN_DATABASE_URL`. The monitoring runtime
-never imports this writer and continues to use `CBR_DATABASE_URL` for
-read-only rule loading.
+`--apply` uses `CBR_ADMIN_DATABASE_URL` when configured. Otherwise it
+uses the selected primary database URL (`DATABASE_URL_SERVER_INT` on
+Render, `DATABASE_URL_SERVER_EXT` locally and on a VPS). The monitoring
+runtime never imports this writer.

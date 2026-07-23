@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import cbr_trading.admin.cli as cli
+from cbr_trading.admin.rule_writer import RuleWriteResult
 
 
 def _event() -> dict:
@@ -73,6 +75,53 @@ class AdminCliTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "preview")
         self.assertEqual(len(payload["rules"]), 3)
         writer_class.assert_not_called()
+
+    def test_apply_falls_back_to_selected_external_primary_url(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CBR_ON_RENDER": "0",
+                    "DATABASE_URL_SERVER_EXT": (
+                        "postgresql://external-primary"
+                    ),
+                },
+                clear=True,
+            ),
+            patch.object(cli, "_load_dotenv_if_available"),
+            patch.object(cli, "GammaClient") as gamma_class,
+            patch.object(cli, "SqlAlchemyRuleWriter") as writer_class,
+            redirect_stdout(output),
+        ):
+            gamma_class.return_value.get_event_by_slug.return_value = (
+                _event()
+            )
+            writer_class.return_value.apply_rules.return_value = [
+                RuleWriteResult(
+                    rule_id=1,
+                    rule_key="cbr_decrease_fast",
+                    action="created",
+                    condition_id="0x" + "a" * 64,
+                )
+            ]
+            exit_code = cli.main(
+                [
+                    "--event-url",
+                    "https://polymarket.com/event/cbr-event",
+                    "--account-name",
+                    "main",
+                    "--apply",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        writer_class.assert_called_once_with(
+            database_url="postgresql://external-primary"
+        )
+        writer_class.return_value.close.assert_called_once()
 
 
 if __name__ == "__main__":
