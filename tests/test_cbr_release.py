@@ -71,6 +71,31 @@ class ReleaseParsingTests(unittest.TestCase):
         self.assertEqual(classify_change(18.0, 18.0), (0.0, "no_change"))
 
 class ReleaseDiscoveryTests(unittest.TestCase):
+    def test_fetch_error_preserves_http_status(self) -> None:
+        class HttpError(Exception):
+            def __init__(self) -> None:
+                super().__init__("403 Client Error")
+                self.response = SimpleNamespace(status_code=403)
+
+        class FailingTransport:
+            def fetch_prefix(
+                self,
+                url: str,
+                **_: object,
+            ) -> FetchResult:
+                raise HttpError()
+
+        result = CbrClient(
+            FailingTransport(),
+            CbrClientConfig(cache_bust=False),
+        ).discover_predicted_release(
+            now=datetime(2026, 7, 23, tzinfo=timezone.utc)
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, "fetch_failed")
+        self.assertEqual(result.status_code, 403)
+
     def test_404_means_not_published(self) -> None:
         transport = FakeTransport(
             FetchResult("", 404, "text/html", "")

@@ -69,6 +69,7 @@ def _safety() -> LiveSafetySettings:
         allowed_account="kinderSman",
         max_order_quantity=Decimal("100"),
         max_notional=Decimal("20"),
+        max_total_notional=Decimal("20"),
         accounts_master_key="test-master-key",
     )
 
@@ -187,6 +188,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         *,
         client: _Client,
         ledger: _Ledger,
+        safety: LiveSafetySettings | None = None,
     ) -> tuple[
         WarmLiveOrderExecutor,
         _AccountRepository,
@@ -195,7 +197,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         executor = WarmLiveOrderExecutor(
             subscriptions=[_subscription()],
             database_url="postgresql://unused",
-            safety=_safety(),
+            safety=safety or _safety(),
             account_repository=repository,
             market_gateway=_MarketGateway(),
             ledger=ledger,
@@ -280,6 +282,30 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertIn("buy_would_cross_current_ask", result.error or "")
         self.assertEqual(client.placements, [])
         self.assertEqual(ledger.completions[0]["status"], "FAILED")
+
+    def test_aggregate_notional_cap_fails_closed(self) -> None:
+        client = _Client()
+        ledger = _Ledger()
+        safety = LiveSafetySettings(
+            trading_enabled=True,
+            post_only=True,
+            allowed_account="kinderSman",
+            max_order_quantity=Decimal("100"),
+            max_notional=Decimal("20"),
+            max_total_notional=Decimal("19"),
+            accounts_master_key="test-master-key",
+        )
+        executor, _ = self._executor(
+            client=client,
+            ledger=ledger,
+            safety=safety,
+        )
+
+        with self.assertRaisesRegex(
+            Exception,
+            "aggregate notional cap",
+        ):
+            executor.prepare()
 
     def test_unavailable_executor_reports_reason(self) -> None:
         executor = UnavailableLiveOrderExecutor("database offline")

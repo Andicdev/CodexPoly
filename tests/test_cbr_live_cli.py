@@ -43,6 +43,7 @@ class RunnerPreflightCliTests(unittest.TestCase):
             allowed_account="kinderSman",
             max_order_quantity=Decimal("100"),
             max_notional=Decimal("20"),
+            max_total_notional=Decimal("20"),
             accounts_master_key="present",
         )
 

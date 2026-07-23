@@ -188,6 +188,20 @@ class WarmLiveOrderExecutor:
                 )
             rule_count += 1
 
+        maximum_total_notional = sum(
+            maximum_by_account.values(),
+            Decimal("0"),
+        )
+        if (
+            self._safety.max_total_notional is None
+            or maximum_total_notional
+            > self._safety.max_total_notional
+        ):
+            raise LivePreparationError(
+                "Prepared rules exceed the configured aggregate "
+                "notional cap"
+            )
+
         self._prepared_ok = True
         return LivePreparationSummary(
             rule_count=rule_count,
@@ -195,10 +209,7 @@ class WarmLiveOrderExecutor:
                 {id(client) for client in self._clients.values()}
             ),
             outcome_count=len(self._prepared),
-            maximum_notional=sum(
-                maximum_by_account.values(),
-                Decimal("0"),
-            ),
+            maximum_notional=maximum_total_notional,
         )
 
     def execute(
@@ -435,6 +446,8 @@ class WarmLiveOrderExecutor:
             blockers.append("max_order_qty_not_configured")
         if self._safety.max_notional is None:
             blockers.append("max_notional_not_configured")
+        if self._safety.max_total_notional is None:
+            blockers.append("max_total_notional_not_configured")
         if not self._safety.accounts_master_key:
             blockers.append("accounts_master_key_missing")
         if blockers:

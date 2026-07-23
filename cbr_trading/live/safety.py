@@ -16,6 +16,7 @@ class LiveSafetySettings:
     allowed_account: str = ""
     max_order_quantity: Decimal | None = None
     max_notional: Decimal | None = None
+    max_total_notional: Decimal | None = None
     accounts_master_key: str | None = field(
         default=None,
         repr=False,
@@ -44,6 +45,9 @@ class LiveSafetySettings:
             ),
             max_notional=_optional_decimal(
                 env.get("CBR_LIVE_MAX_NOTIONAL")
+            ),
+            max_total_notional=_optional_decimal(
+                env.get("CBR_LIVE_MAX_TOTAL_NOTIONAL")
             ),
             accounts_master_key=(
                 _clean(env.get("ACCOUNTS_MASTER_KEY")) or None

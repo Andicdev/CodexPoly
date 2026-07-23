@@ -67,8 +67,10 @@ class CbrPoller:
 
             if result.reason == "fetch_failed":
                 self.logger.warning(
-                    "CBR fetch failed iteration=%s error=%s url=%s",
+                    "CBR fetch failed iteration=%s status=%s "
+                    "error=%s url=%s",
                     iteration,
+                    result.status_code,
                     result.error,
                     result.url,
                 )
@@ -78,8 +80,10 @@ class CbrPoller:
                 >= self.settings.heartbeat_interval
             ):
                 self.logger.info(
-                    "CBR waiting iteration=%s reason=%s title=%s url=%s",
+                    "CBR waiting iteration=%s status=%s reason=%s "
+                    "title=%s url=%s",
                     iteration,
+                    result.status_code,
                     result.reason,
                     result.title,
                     result.url,

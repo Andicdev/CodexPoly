@@ -13,12 +13,14 @@ def _result(
     ok: bool,
     reason: str,
     rate: float | None = None,
+    status_code: int | None = None,
 ) -> DiscoveryResult:
     return DiscoveryResult(
         ok=ok,
         reason=reason,
         url="https://cbr.ru/expected",
         request_url="https://cbr.ru/expected?_ts=1",
+        status_code=status_code,
         title=(
             f"Bank of Russia cuts the key rate to {rate}%"
             if rate is not None
@@ -100,6 +102,59 @@ class SettingsTests(unittest.TestCase):
 
 
 class PollingTests(unittest.TestCase):
+    def test_heartbeat_includes_http_status(self) -> None:
+        clock = FakeClock()
+        client = SequenceClient(
+            clock,
+            [
+                _result(
+                    ok=False,
+                    reason="not_published_yet",
+                    status_code=200,
+                )
+            ],
+        )
+        settings = CbrSettings(heartbeat_interval=0)
+        logger = logging.getLogger("test.poller.status")
+        poller = CbrPoller(
+            client,
+            settings,
+            logger=logger,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+        with self.assertLogs(logger, level="INFO") as captured:
+            poller.run_until_published(max_iterations=1)
+
+        self.assertIn("status=200", "\n".join(captured.output))
+
+    def test_fetch_failure_includes_403_status(self) -> None:
+        clock = FakeClock()
+        client = SequenceClient(
+            clock,
+            [
+                _result(
+                    ok=False,
+                    reason="fetch_failed",
+                    status_code=403,
+                )
+            ],
+        )
+        logger = logging.getLogger("test.poller.403")
+        poller = CbrPoller(
+            client,
+            CbrSettings(),
+            logger=logger,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+        with self.assertLogs(logger, level="WARNING") as captured:
+            poller.run_until_published(max_iterations=1)
+
+        self.assertIn("status=403", "\n".join(captured.output))
+
     def test_uses_fixed_start_to_start_interval(self) -> None:
         clock = FakeClock()
         client = SequenceClient(

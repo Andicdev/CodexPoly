@@ -334,6 +334,9 @@ def _run_runner_preflight(
                 "max_notional": _decimal_or_none(
                     safety.max_notional
                 ),
+                "max_total_notional": _decimal_or_none(
+                    safety.max_total_notional
+                ),
                 "master_key_present": bool(
                     safety.accounts_master_key
                 ),

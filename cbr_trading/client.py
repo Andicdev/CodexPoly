@@ -223,11 +223,22 @@ class CbrClient:
                 published_at=release_date,
             )
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            raw_status = getattr(response, "status_code", None)
+            try:
+                status_code = (
+                    int(raw_status)
+                    if raw_status is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                status_code = None
             return DiscoveryResult(
                 ok=False,
                 reason="fetch_failed",
                 url=url,
                 request_url=request_url,
+                status_code=status_code,
                 published_at=release_date,
                 error=f"{type(exc).__name__}: {exc}",
             )
