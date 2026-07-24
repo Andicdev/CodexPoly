@@ -319,8 +319,9 @@ The first adapters live in `cbr_trading.sources.cbr` and
   `PreparedExecutor` contract, including monitor-only operation;
 - legacy `PipelineOutcome` is now only a compatibility DTO for the existing
   JSON and Telegram format, not the runtime orchestration path;
-- the additive supervisor migrations remain explicit and have not been applied
-  by the runner;
+- the additive supervisor migrations remain explicit and are never applied by
+  the runner; migrations 001 and 002 were applied separately to the configured
+  primary database on 2026-07-24, after which `ensure_ready()` passed;
 - the official supervision gateway, market-channel adapter, strict book-level
   inference, source-neutral detector, active-watch loader, and recovery loop
   are composed behind the disabled-by-default supervision gate;

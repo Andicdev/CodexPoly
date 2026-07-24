@@ -26,3 +26,16 @@ objects during normal runner startup.
 There is intentionally no destructive down migration. If the new supervisor
 is disabled, the additional tables can remain in place without affecting the
 legacy runtime.
+
+## Deployment checkpoint
+
+On 2026-07-24, migrations 001 and 002 were explicitly applied to the
+configured primary database outside normal runner startup. The post-migration
+check confirmed:
+
+- all four new tables started with zero rows;
+- all four required partial/audit indexes were present;
+- the expected foreign-key counts were `0`, `1`, `1`, and `2` respectively;
+- `SqlAlchemyOrderGroupRepository.ensure_ready()` passed;
+- the legacy schema remained at 58 tables and 770 columns before and after the
+  migration.

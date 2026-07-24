@@ -140,10 +140,13 @@ The existing live-trading account and safety configuration is still required.
 The runner never applies database migrations. Apply migrations 001 and 002
 through the controlled deployment process before enabling the gate;
 `ensure_ready()` blocks live preparation if any required table or column is
-missing.
+missing. For the configured primary database, both migrations were applied and
+independently verified on 2026-07-24. The four new tables were empty after
+creation, all required indexes and foreign keys were present, and the legacy
+schema was unchanged.
 
 A live rule with `RepriceOnTickChange` is deliberately non-submitting while
-the gate is disabled. The current warm executor also still requires the
-initial limit price to align to the current book tick. Preparing `0.99` from a
-desired `0.999` while the market is still at `0.01` remains the next
-checkpoint.
+the gate is disabled. The warm executor keeps `desired_price` separate from
+the initially signed price: a desired BUY price of `0.999` is prepared at
+`0.99` while tick `0.01` is active, then the supervisor replaces it at `0.999`
+after tick `0.001` is confirmed.
