@@ -23,6 +23,7 @@ from cbr_trading.execution.order_supervisor import TickSizeChange
 from cbr_trading.execution.supervision_gateway import (
     OrderObservation,
 )
+from cbr_trading.execution.tick_size_detector import TickSizeWatch
 from cbr_trading.secret_guard import redact_sensitive_text
 
 
@@ -215,6 +216,37 @@ _SELECT_ACTIVE_FOR_ASSET_SQL = (
         ),
     )
 )
+
+_SELECT_ACTIVE_TICK_WATCHES_SQL = """
+SELECT
+    asset_id,
+    trigger_old_tick,
+    trigger_new_tick
+FROM resolution_order_groups
+WHERE status = 'ACTIVE'
+  AND policy_kind = 'reprice_on_tick_change'
+  AND reprice_count < max_reprices
+GROUP BY asset_id, trigger_old_tick, trigger_new_tick
+ORDER BY asset_id, trigger_old_tick, trigger_new_tick
+""".strip()
+
+_HAS_PENDING_SUPERVISION_WORK_SQL = """
+SELECT EXISTS (
+    SELECT 1
+    FROM resolution_order_groups
+    WHERE policy_kind = 'reprice_on_tick_change'
+      AND reprice_count < max_reprices
+      AND (
+          status = 'ACTIVE'
+          OR (
+              status IN ('FAILED', 'REPRICING')
+              AND (
+                  metadata ->> 'reconciliation_manual_review'
+              ) IS DISTINCT FROM 'true'
+          )
+      )
+) AS pending
+""".strip()
 
 _SELECT_RECONCILIATION_CANDIDATES_SQL = """
 WITH candidate_groups AS (
@@ -717,6 +749,51 @@ class SqlAlchemyOrderGroupRepository:
         except Exception as exc:
             raise OrderGroupRepositoryError(
                 "Failed to load active order groups: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def load_active_tick_size_watches(
+        self,
+    ) -> tuple[TickSizeWatch, ...]:
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                rows = session.execute(
+                    text_factory(_SELECT_ACTIVE_TICK_WATCHES_SQL)
+                ).mappings().all()
+            watches = tuple(
+                TickSizeWatch(
+                    asset_id=row.get("asset_id"),
+                    old_tick=row.get("trigger_old_tick"),
+                    new_tick=row.get("trigger_new_tick"),
+                )
+                for row in rows
+            )
+            asset_ids = [watch.asset_id for watch in watches]
+            if len(asset_ids) != len(set(asset_ids)):
+                raise OrderGroupRepositoryError(
+                    "Conflicting active tick-size watches for one asset"
+                )
+            return watches
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to load active tick-size watches: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def has_pending_supervision_work(self) -> bool:
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_HAS_PENDING_SUPERVISION_WORK_SQL)
+                ).mappings().one()
+            return bool(row.get("pending"))
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to inspect pending supervision work: "
                 f"{type(exc).__name__}"
             ) from exc
 

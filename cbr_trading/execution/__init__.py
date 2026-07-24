@@ -50,6 +50,9 @@ from cbr_trading.execution.supervision_gateway import (
     SupervisionOrderGateway,
     replacement_price_for_tick,
 )
+from cbr_trading.execution.supervised_executor import (
+    SupervisedPreparedExecutor,
+)
 from cbr_trading.execution.tick_size_detector import (
     TickSizeChangeDetector,
     TickSizeDispatch,
@@ -87,6 +90,7 @@ __all__ = [
     "SupervisionEventStatus",
     "SupervisionStatus",
     "SupervisionOrderGateway",
+    "SupervisedPreparedExecutor",
     "TickSizeChange",
     "TickSizeChangeDetector",
     "TickSizeDispatch",

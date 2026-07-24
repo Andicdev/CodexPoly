@@ -442,6 +442,85 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         )
         self.assertIn("groups.status = 'ACTIVE'", session.calls[0][0])
 
+    def test_loads_unique_active_tick_size_watches(self) -> None:
+        session = _Session(
+            [
+                _Result(
+                    all_rows=[
+                        {
+                            "asset_id": "asset-no",
+                            "trigger_old_tick": Decimal("0.01"),
+                            "trigger_new_tick": Decimal("0.001"),
+                        },
+                        {
+                            "asset_id": "asset-yes",
+                            "trigger_old_tick": Decimal("0.01"),
+                            "trigger_new_tick": Decimal("0.001"),
+                        },
+                    ]
+                )
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        watches = repository.load_active_tick_size_watches()
+
+        self.assertEqual(
+            tuple(watch.asset_id for watch in watches),
+            ("asset-no", "asset-yes"),
+        )
+        statement, params = session.calls[0]
+        self.assertIsNone(params)
+        self.assertIn("status = 'ACTIVE'", statement)
+        self.assertIn("reprice_count < max_reprices", statement)
+
+    def test_conflicting_active_watches_fail_closed(self) -> None:
+        session = _Session(
+            [
+                _Result(
+                    all_rows=[
+                        {
+                            "asset_id": "asset-yes",
+                            "trigger_old_tick": Decimal("0.01"),
+                            "trigger_new_tick": Decimal("0.001"),
+                        },
+                        {
+                            "asset_id": "asset-yes",
+                            "trigger_old_tick": Decimal("0.1"),
+                            "trigger_new_tick": Decimal("0.01"),
+                        },
+                    ]
+                )
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        with self.assertRaisesRegex(
+            OrderGroupRepositoryError,
+            "Conflicting",
+        ):
+            repository.load_active_tick_size_watches()
+
+    def test_pending_supervision_query_includes_recovery_work(self) -> None:
+        session = _Session([_Result(one={"pending": True})])
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        self.assertTrue(repository.has_pending_supervision_work())
+
+        statement, params = session.calls[0]
+        self.assertIsNone(params)
+        self.assertIn("status IN ('FAILED', 'REPRICING')", statement)
+        self.assertIn("reconciliation_manual_review", statement)
+
     def test_load_reconciliation_candidates_is_stale_and_quarantine_scoped(
         self,
     ) -> None:

@@ -195,11 +195,46 @@ The same adapter exposes `observation_for_book(..., source=PERIODIC_BOOK)` for
 a future periodic snapshot check. That fallback will feed the same detector
 instead of creating a second repricing path.
 
-The live adapters, market channel, and reconciliation scan are not composed
-into the production runner yet. Loading active watches from persistent order
-groups, recovery scheduling, runner lifecycle composition, applying the
-existing migrations to a real database, and enabling supervision remain
-separate checkpoints.
+### Supervision runtime composition
+
+`SupervisedPreparedExecutor` decorates any `PreparedExecutor`. Immediately
+after an attempted result returns known orders and an `ExecutionHandle`, it
+registers only `RepriceOnTickChange` ownership with `OrderSupervisor`.
+`KeepOpenPolicy` results do not create permanent inactive supervision rows.
+If registration fails after submission, the known order result becomes
+`AMBIGUOUS` and retains its handle and order IDs; the failure is never reported
+as an ordinary successful submission.
+
+`SqlAlchemyOrderGroupRepository.load_active_tick_size_watches()` derives the
+subscription set only from active persisted groups whose reprice budget is not
+exhausted. Multiple groups may share one identical asset transition, but
+conflicting transitions for the same asset fail closed.
+
+`OrderSupervisionRuntime` starts before executor preparation and remains active
+while the source is being polled. It:
+
+1. runs bounded reconciliation on its configured interval;
+2. refreshes active watches and restarts the exact SDK subscription only when
+   the watched set changes or the channel ends;
+3. picks up a newly registered order group on the next refresh, after which a
+   fresh full-book subscription can recover a missed tick event;
+4. keeps the runner alive after source completion while an active or
+   recoverable persisted group exists;
+5. closes the market channel, gateway, repository, and background thread when
+   persistent work becomes idle or shutdown is requested.
+
+The CBR runner composes this path only when
+`RESOLUTION_SUPERVISION_ENABLED=1` and `CBR_DRY_RUN=0`. A live rule containing
+`RepriceOnTickChange` is rejected before order preparation when the gate is
+off. When the gate is on, schema readiness is checked before the live executor
+can reserve or submit anything. Runtime startup failure also swaps in the
+non-submitting executor before preparation.
+
+The gate never applies migrations. Migrations 001 and 002 remain explicit,
+forward-only deployment actions. The current warm CBR executor also still
+requires its initially prepared limit price to align to the current book tick;
+preparing a desired finer price at the old tick is the next executor
+checkpoint.
 
 ## Invariants
 
@@ -226,6 +261,11 @@ separate checkpoints.
   invents an unconfigured transition.
 - Tick observation state is committed only after supervisor dispatch returns;
   transport-specific duplicate observations share one transition event ID.
+- A live repricing policy cannot submit through the CBR runner unless
+  supervision is enabled, its schema is ready, and its runtime starts before
+  executor preparation.
+- Known submitted repricing orders are persisted synchronously before their
+  result is reported as `SUBMITTED`; registration failure is `AMBIGUOUS`.
 
 ## Compatibility checkpoint
 
@@ -254,11 +294,10 @@ The first adapters live in `cbr_trading.sources.cbr` and
   `PreparedExecutor` contract, including monitor-only operation;
 - legacy `PipelineOutcome` is now only a compatibility DTO for the existing
   JSON and Telegram format, not the runtime orchestration path;
-- the additive supervisor migration and persistent supervisor are defined but
-  are not yet applied or consumed by the production runner;
-- the official Polymarket supervision gateway is implemented and tested with
-  fake authenticated clients, but is not instantiated by the runner and has
-  made no real cancellation or placement;
-- the official public market-channel adapter, strict book-level inference, and
-  source-neutral tick detector are implemented and tested, but active watches
-  are not yet loaded or started by the runner.
+- the additive supervisor migrations remain explicit and have not been applied
+  by the runner;
+- the official supervision gateway, market-channel adapter, strict book-level
+  inference, source-neutral detector, active-watch loader, and recovery loop
+  are composed behind the disabled-by-default supervision gate;
+- no real supervision cancellation or replacement has been made by this
+  implementation work.

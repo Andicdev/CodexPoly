@@ -15,6 +15,7 @@ from cbr_trading.execution.order_supervisor import TickSizeChange
 from cbr_trading.execution.supervision_gateway import (
     OrderObservation,
 )
+from cbr_trading.execution.tick_size_detector import TickSizeWatch
 
 
 class OrderGroupRepository(Protocol):
@@ -34,6 +35,12 @@ class OrderGroupRepository(Protocol):
         self,
         asset_id: str,
     ) -> Sequence[OrderGroupRecord]: ...
+
+    def load_active_tick_size_watches(
+        self,
+    ) -> Sequence[TickSizeWatch]: ...
+
+    def has_pending_supervision_work(self) -> bool: ...
 
     def claim_tick_size_change(
         self,

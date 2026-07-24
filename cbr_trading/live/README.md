@@ -88,13 +88,13 @@ and the batch request. Database result updates and Telegram happen afterward.
 ## Order supervision status
 
 The source-neutral persistent supervisor and
-`PolymarketSupervisionOrderGateway` are implemented but are not connected to
-this runner. The gateway uses only exact order-ID batch cancellation and
-rechecks the authenticated account, order book, target tick, minimum size, and
-live safety caps before a replacement. It reads each exact order both before
-and after cancellation. Replacement uses only the final unfilled quantity; a
-full fill creates no replacement, and an unconfirmed post-cancel state fails
-closed.
+`PolymarketSupervisionOrderGateway` are connected to the CBR runner behind the
+disabled-by-default `RESOLUTION_SUPERVISION_ENABLED` gate. The gateway uses
+only exact order-ID batch cancellation and rechecks the authenticated account,
+order book, target tick, minimum size, and live safety caps before a
+replacement. It reads each exact order both before and after cancellation.
+Replacement uses only the final unfilled quantity; a full fill creates no
+replacement, and an unconfirmed post-cancel state fails closed.
 
 The supervisor also has a bounded background recovery scan for stale
 `REPRICING` and `FAILED` groups. It only reads exact persisted order IDs and
@@ -104,10 +104,9 @@ against terminal source orders. Missing IDs, overlapping live generations, or
 sizing mismatches are quarantined for manual review; transient CLOB lookup
 failures remain retryable.
 
-The public `PolymarketMarketChannel` adapter is also implemented but not
-started by this runner. It subscribes to exact watched token IDs and sends a
-configured tick transition to the same supervisor when any of these proves
-the new tick:
+The public `PolymarketMarketChannel` subscribes to exact token IDs loaded from
+active persisted order groups. It sends a configured tick transition to the
+same supervisor when any of these proves the new tick:
 
 - the explicit WebSocket `tick_size_change` event;
 - `tick_size` on a full order-book event;
@@ -120,6 +119,31 @@ heartbeat, reconnect, and subscription resend. A reusable periodic-book entry
 point feeds the same deduplicating detector, although no polling scheduler is
 started in this checkpoint.
 
-Do not enable this path in production yet. Active-watch loading, explicit
-database migration application, recovery scheduling, and runner composition
-are separate checkpoints.
+When enabled, the supervision runtime starts before live executor preparation,
+refreshes the active watch set, and runs recovery on a separate interval. A
+known submitted repricing order is registered synchronously. If that database
+registration fails, the result is reported as `AMBIGUOUS`, not `SUBMITTED`.
+After the release result is printed, the runner remains alive while an active
+or automatically recoverable group still exists.
+
+Required non-secret configuration:
+
+```text
+RESOLUTION_SUPERVISION_ENABLED=1
+RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC=2
+RESOLUTION_SUPERVISION_RECONCILE_SEC=30
+RESOLUTION_SUPERVISION_STALE_SEC=300
+RESOLUTION_SUPERVISION_BATCH_SIZE=100
+```
+
+The existing live-trading account and safety configuration is still required.
+The runner never applies database migrations. Apply migrations 001 and 002
+through the controlled deployment process before enabling the gate;
+`ensure_ready()` blocks live preparation if any required table or column is
+missing.
+
+A live rule with `RepriceOnTickChange` is deliberately non-submitting while
+the gate is disabled. The current warm executor also still requires the
+initial limit price to align to the current book tick. Preparing `0.99` from a
+desired `0.999` while the market is still at `0.01` remains the next
+checkpoint.

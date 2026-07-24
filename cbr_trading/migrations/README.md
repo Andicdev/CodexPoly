@@ -19,6 +19,10 @@ They do not alter or drop legacy tables, columns, constraints, or data.
 transaction. `ensure_ready()` independently verifies all required new tables
 and columns before an `OrderSupervisor` is allowed to use them.
 
+The opt-in supervision runtime calls `ensure_ready()` before the live executor
+is prepared. It never calls `migrate()` and cannot create or modify schema
+objects during normal runner startup.
+
 There is intentionally no destructive down migration. If the new supervisor
 is disabled, the additional tables can remain in place without affecting the
 legacy runtime.

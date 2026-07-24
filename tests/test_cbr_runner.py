@@ -5,9 +5,10 @@ import json
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.live.runner_executor import LivePreparationError
@@ -73,7 +74,83 @@ def _rule() -> dict:
     }
 
 
+def _reprice_rule() -> dict:
+    rule = _rule()
+    rule["params"] = {
+        **rule["params"],
+        "order_lifecycle": {
+            "kind": "reprice_on_tick_change",
+            "old_tick": "0.01",
+            "new_tick": "0.001",
+            "max_reprices": 1,
+        },
+    }
+    return rule
+
+
 class RunnerRulePreloadTests(unittest.TestCase):
+    def test_supervision_builder_checks_schema_without_migrating(self) -> None:
+        settings = replace(
+            _live_settings(),
+            order_supervision_enabled=True,
+            supervision_watch_refresh_interval=0.5,
+            supervision_reconciliation_interval=15,
+            supervision_reconciliation_stale_after=120,
+            supervision_reconciliation_batch_size=25,
+        )
+        with (
+            patch.object(
+                runner,
+                "SqlAlchemyOrderGroupRepository",
+            ) as repository_class,
+            patch.object(
+                runner,
+                "PolymarketSupervisionOrderGateway",
+            ) as gateway_class,
+            patch.object(
+                runner,
+                "PersistentOrderSupervisor",
+            ) as supervisor_class,
+            patch.object(
+                runner,
+                "OrderSupervisionRuntime",
+            ) as runtime_class,
+        ):
+            runtime = runtime_class.return_value
+            actual_runtime, actual_supervisor = (
+                runner._build_order_supervision(
+                    settings=settings,
+                    safety=object(),
+                    logger=runner.logging.getLogger(
+                        "test.supervision-builder"
+                    ),
+                )
+            )
+
+        self.assertIs(actual_runtime, runtime)
+        self.assertIs(
+            actual_supervisor,
+            supervisor_class.return_value,
+        )
+        repository_class.assert_called_once_with(
+            database_url=settings.rules_database_url,
+        )
+        repository_class.return_value.migrate.assert_not_called()
+        runtime.ensure_ready.assert_called_once_with()
+        supervisor_class.assert_called_once_with(
+            repository=repository_class.return_value,
+            gateway=gateway_class.return_value,
+            reconciliation_stale_after=timedelta(seconds=120),
+            reconciliation_batch_size=25,
+        )
+        runtime_class.assert_called_once_with(
+            repository=repository_class.return_value,
+            supervisor=supervisor_class.return_value,
+            watch_refresh_interval=0.5,
+            reconciliation_interval=15,
+            logger=ANY,
+        )
+
     def test_not_published_keeps_discovery_result_shape(self) -> None:
         output = io.StringIO()
         release_url = build_predicted_release_url()
@@ -386,6 +463,273 @@ class RunnerRulePreloadTests(unittest.TestCase):
         self.assertEqual(payload["order_results"][0]["status"], "SKIPPED")
         self.assertIn(
             "ledger missing",
+            payload["order_results"][0]["error"],
+        )
+
+    def test_repricing_rule_is_blocked_when_supervision_is_disabled(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        with (
+            patch.object(
+                runner,
+                "_load_dotenv_if_available",
+            ),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=_live_settings(),
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_reprice_rule()],
+            ),
+            patch.object(
+                runner,
+                "WarmLiveOrderExecutor",
+            ) as live_executor,
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
+        ):
+            poller_class.return_value.run_once.return_value = _release()
+            exit_code = runner.main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        live_executor.assert_not_called()
+        self.assertEqual(
+            payload["order_results"][0]["status"],
+            "SKIPPED",
+        )
+        self.assertIn(
+            "supervision is disabled",
+            payload["order_results"][0]["error"],
+        )
+
+    def test_enabled_supervision_wraps_execution_and_owns_lifecycle(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        trace: list[str] = []
+
+        class FakeLiveExecutor:
+            def prepare(self, **kwargs: object) -> object:
+                trace.append("prepare")
+                return SimpleNamespace(
+                    rule_count=1,
+                    account_count=1,
+                    outcome_count=2,
+                    maximum_notional=102,
+                    prepared_orders=(
+                        SimpleNamespace(
+                            rule_id=1,
+                            rule_key="cbr_cut",
+                            account_name="main",
+                            condition_id="condition-1",
+                            outcome="YES",
+                            token_id="asset-yes",
+                            quantity=Decimal("100"),
+                            limit_price=Decimal("0.51"),
+                        ),
+                        SimpleNamespace(
+                            rule_id=1,
+                            rule_key="cbr_cut",
+                            account_name="main",
+                            condition_id="condition-1",
+                            outcome="NO",
+                            token_id="asset-no",
+                            quantity=Decimal("100"),
+                            limit_price=Decimal("0.51"),
+                        ),
+                    ),
+                )
+
+            def execute(
+                self,
+                intents: list,
+                *,
+                release: DiscoveryResult,
+            ) -> list:
+                trace.append("execute")
+                return [
+                    SimpleNamespace(
+                        intent=intents[0],
+                        status="SUBMITTED",
+                        attempted=True,
+                        success=True,
+                        order_id="order-1",
+                        error=None,
+                    )
+                ]
+
+            def close(self) -> None:
+                trace.append("executor_close")
+
+        class FakeSupervisor:
+            def register(
+                self,
+                handle: object,
+                *,
+                policy: object,
+            ) -> None:
+                trace.append("register")
+
+        class FakeRuntime:
+            def start(self) -> None:
+                trace.append("runtime_start")
+
+            def release_when_idle(self) -> None:
+                trace.append("runtime_release")
+
+            def wait(self) -> None:
+                trace.append("runtime_wait")
+
+            def stop(self) -> None:
+                trace.append("runtime_stop")
+
+        settings = replace(
+            _live_settings(),
+            order_supervision_enabled=True,
+        )
+        runtime = FakeRuntime()
+        supervisor = FakeSupervisor()
+        with (
+            patch.object(
+                runner,
+                "_load_dotenv_if_available",
+            ),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=settings,
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_reprice_rule()],
+            ),
+            patch.object(
+                runner.LiveSafetySettings,
+                "from_env",
+                return_value=object(),
+            ),
+            patch.object(
+                runner,
+                "_build_order_supervision",
+                return_value=(runtime, supervisor),
+            ),
+            patch.object(
+                runner,
+                "WarmLiveOrderExecutor",
+                return_value=FakeLiveExecutor(),
+            ),
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
+        ):
+            poller_class.return_value.run_once.side_effect = (
+                lambda: trace.append("poll") or _release()
+            )
+            exit_code = runner.main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["order_results"][0]["status"],
+            "SUBMITTED",
+        )
+        self.assertEqual(
+            trace,
+            [
+                "runtime_start",
+                "prepare",
+                "poll",
+                "execute",
+                "register",
+                "runtime_release",
+                "runtime_wait",
+                "executor_close",
+                "runtime_stop",
+            ],
+        )
+
+    def test_supervision_start_failure_prevents_live_preparation(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        trace: list[str] = []
+
+        class FakeLiveExecutor:
+            def prepare(self, **kwargs: object) -> object:
+                trace.append("prepare")
+                raise AssertionError("live preparation must not run")
+
+            def close(self) -> None:
+                trace.append("executor_close")
+
+        class FailingRuntime:
+            def start(self) -> None:
+                trace.append("runtime_start")
+                raise RuntimeError("websocket runtime unavailable")
+
+        settings = replace(
+            _live_settings(),
+            order_supervision_enabled=True,
+        )
+        with (
+            patch.object(
+                runner,
+                "_load_dotenv_if_available",
+            ),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=settings,
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_reprice_rule()],
+            ),
+            patch.object(
+                runner.LiveSafetySettings,
+                "from_env",
+                return_value=object(),
+            ),
+            patch.object(
+                runner,
+                "_build_order_supervision",
+                return_value=(FailingRuntime(), object()),
+            ),
+            patch.object(
+                runner,
+                "WarmLiveOrderExecutor",
+                return_value=FakeLiveExecutor(),
+            ),
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
+        ):
+            poller_class.return_value.run_once.return_value = _release()
+            exit_code = runner.main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            trace,
+            ["runtime_start", "executor_close"],
+        )
+        self.assertEqual(
+            payload["order_results"][0]["status"],
+            "SKIPPED",
+        )
+        self.assertIn(
+            "websocket runtime unavailable",
             payload["order_results"][0]["error"],
         )
 

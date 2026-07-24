@@ -100,6 +100,46 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BOR_MODE"):
             CbrSettings.from_env({"BOR_MODE": "replay_url"})
 
+    def test_reads_supervision_runtime_settings(self) -> None:
+        settings = CbrSettings.from_env(
+            {
+                "RESOLUTION_SUPERVISION_ENABLED": "1",
+                "RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC": "0.5",
+                "RESOLUTION_SUPERVISION_RECONCILE_SEC": "15",
+                "RESOLUTION_SUPERVISION_STALE_SEC": "120",
+                "RESOLUTION_SUPERVISION_BATCH_SIZE": "25",
+            }
+        )
+
+        self.assertTrue(settings.order_supervision_enabled)
+        self.assertEqual(
+            settings.supervision_watch_refresh_interval,
+            0.5,
+        )
+        self.assertEqual(
+            settings.supervision_reconciliation_interval,
+            15,
+        )
+        self.assertEqual(
+            settings.supervision_reconciliation_stale_after,
+            120,
+        )
+        self.assertEqual(
+            settings.supervision_reconciliation_batch_size,
+            25,
+        )
+
+    def test_rejects_invalid_supervision_intervals(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "WATCH_REFRESH",
+        ):
+            CbrSettings.from_env(
+                {
+                    "RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC": "0",
+                }
+            )
+
 
 class PollingTests(unittest.TestCase):
     def test_heartbeat_includes_http_status(self) -> None:

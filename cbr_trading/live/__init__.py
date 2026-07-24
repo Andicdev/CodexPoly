@@ -29,6 +29,10 @@ from cbr_trading.live.supervision_gateway import (
     PolymarketSupervisionGatewayError,
     PolymarketSupervisionOrderGateway,
 )
+from cbr_trading.live.supervision_runtime import (
+    OrderSupervisionRuntime,
+    OrderSupervisionRuntimeError,
+)
 
 __all__ = [
     "LiveOrderPlan",
@@ -37,6 +41,8 @@ __all__ = [
     "MarketSnapshot",
     "MarketChannelError",
     "OrderGroupRepositoryError",
+    "OrderSupervisionRuntime",
+    "OrderSupervisionRuntimeError",
     "PolymarketMarketChannel",
     "PolymarketMarketGateway",
     "PolymarketTickObservationAdapter",

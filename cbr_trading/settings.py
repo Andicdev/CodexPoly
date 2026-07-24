@@ -62,6 +62,11 @@ class CbrSettings:
         "ANALYTICS_DATABASE_URL_SERVER_EXT"
     )
     analytics_database_error: str | None = None
+    order_supervision_enabled: bool = False
+    supervision_watch_refresh_interval: float = 2.0
+    supervision_reconciliation_interval: float = 30.0
+    supervision_reconciliation_stale_after: float = 300.0
+    supervision_reconciliation_batch_size: int = 100
     telegram_enabled: bool = False
     telegram_bot_token: str | None = field(default=None, repr=False)
     telegram_chat_id: str | None = None
@@ -128,6 +133,42 @@ class CbrSettings:
             analytics_database_target=analytics_database.target,
             analytics_database_source=analytics_database.source,
             analytics_database_error=analytics_database.error,
+            order_supervision_enabled=_bool(
+                env.get("RESOLUTION_SUPERVISION_ENABLED"),
+                default=False,
+            ),
+            supervision_watch_refresh_interval=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC"
+                    )
+                )
+                or "2"
+            ),
+            supervision_reconciliation_interval=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_SUPERVISION_RECONCILE_SEC"
+                    )
+                )
+                or "30"
+            ),
+            supervision_reconciliation_stale_after=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_SUPERVISION_STALE_SEC"
+                    )
+                )
+                or "300"
+            ),
+            supervision_reconciliation_batch_size=int(
+                _clean(
+                    env.get(
+                        "RESOLUTION_SUPERVISION_BATCH_SIZE"
+                    )
+                )
+                or "100"
+            ),
             telegram_enabled=_bool(
                 env.get("CBR_TELEGRAM_ENABLED"),
                 default=False,
@@ -164,6 +205,32 @@ class CbrSettings:
             )
         if self.telegram_timeout <= 0:
             raise ValueError("TG_HTTP_TIMEOUT must be positive")
+        if self.supervision_watch_refresh_interval <= 0:
+            raise ValueError(
+                "RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC "
+                "must be positive"
+            )
+        if self.supervision_reconciliation_interval <= 0:
+            raise ValueError(
+                "RESOLUTION_SUPERVISION_RECONCILE_SEC "
+                "must be positive"
+            )
+        if self.supervision_reconciliation_stale_after <= 0:
+            raise ValueError(
+                "RESOLUTION_SUPERVISION_STALE_SEC must be positive"
+            )
+        if (
+            isinstance(
+                self.supervision_reconciliation_batch_size,
+                bool,
+            )
+            or self.supervision_reconciliation_batch_size < 1
+            or self.supervision_reconciliation_batch_size > 1000
+        ):
+            raise ValueError(
+                "RESOLUTION_SUPERVISION_BATCH_SIZE "
+                "must be between 1 and 1000"
+            )
         if self.telegram_enabled and not self.telegram_bot_token:
             raise ValueError(
                 "TG_BOT_TOKEN is required when CBR_TELEGRAM_ENABLED=1"
