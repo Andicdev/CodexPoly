@@ -84,3 +84,15 @@ orders before polling. After the release it evaluates the rules and immediately
 submits all selected orders for one account through one batch request. There
 are no database, balance, book, signing, or Telegram calls between detection
 and the batch request. Database result updates and Telegram happen afterward.
+
+## Order supervision status
+
+The source-neutral persistent supervisor and
+`PolymarketSupervisionOrderGateway` are implemented but are not connected to
+this runner. The gateway uses only exact order-ID batch cancellation and
+rechecks the authenticated account, order book, target tick, minimum size, and
+live safety caps before a replacement.
+
+Do not enable this path in production yet. Remote fill and remaining-quantity
+reconciliation, the market-channel listener, explicit database migration, and
+runner composition are separate checkpoints.

@@ -98,9 +98,29 @@ are explicit repository operations.
    recorded as `UNKNOWN` on the failure path for later reconciliation.
 
 This checkpoint defines and tests the supervisor and its order-gateway
-contract only. It does not yet connect a real market-channel listener, scan
-remote open orders during reconciliation, apply the migration to a real
-database, or enable supervision in the production runner.
+contract. `PolymarketSupervisionOrderGateway` is the first live implementation
+of that contract. It uses the official `SecureClient` and:
+
+- authenticates the persisted account and verifies its wallet and signature
+  type before any cancellation or placement;
+- requires the existing live-trading switch, allowed-account setting, and
+  account master key;
+- calls only `cancel_orders(order_ids=...)` with the exact group-owned IDs;
+  it never calls account-wide or market-wide cancellation;
+- preserves partial cancellation results so confirmed external effects can be
+  persisted before the group fails;
+- refreshes the order book and verifies condition, asset, target tick,
+  minimum size, BUY/SELL post-only crossing, and all configured quantity and
+  notional caps before submitting one GTC replacement;
+- supports either persisted share quantity or currency notional sizing and
+  normalizes accepted and rejected SDK responses without exposing secrets.
+
+The live adapter is not composed into the production runner yet. This stage
+also does not connect a real market-channel listener, inspect remote fills or
+remaining quantity during reconciliation, apply the migration to a real
+database, or enable supervision. Until remote order-state reconciliation is
+implemented, replacement sizing comes from the persisted execution handle;
+therefore this adapter must remain disabled in production.
 
 ## Invariants
 
@@ -149,5 +169,7 @@ The first adapters live in `cbr_trading.sources.cbr` and
 - legacy `PipelineOutcome` is now only a compatibility DTO for the existing
   JSON and Telegram format, not the runtime orchestration path;
 - the additive supervisor migration and persistent supervisor are defined but
-  are not yet applied, connected to a real order gateway, or consumed by the
-  production runner.
+  are not yet applied or consumed by the production runner;
+- the official Polymarket supervision gateway is implemented and tested with
+  fake authenticated clients, but is not instantiated by the runner and has
+  made no real cancellation or placement.
