@@ -19,6 +19,13 @@ ResolutionTradingCoordinator
 
 1. A `Source` acquires and parses one external publication. It emits
    source-neutral `ResolutionSignal` objects and never places orders.
+   Company earnings keep upstream delivery channels internal: SEC WebSocket
+   or company IR metadata becomes an `EarningsDocumentCandidate`, a
+   company parser produces an `EarningsFactCandidate`, and
+   `EarningsResolutionSource` emits one canonical signal under a stable
+   fiscal-period scope such as `earnings:NVTS:2026Q2`. Providers are evidence
+   channels, not separate trading sources. The earnings package currently
+   runs only in shadow mode and has no strategy or execution dependency.
 2. A `Strategy` exposes all static `OrderTemplate` alternatives before the
    event. After a signal arrives, it selects templates and binds them into
    concrete, idempotent `OrderIntent` objects.

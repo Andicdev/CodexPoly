@@ -19,6 +19,16 @@ or any legacy object.
 `scope_id` plus `template_id` before polling can submit an order, and stores
 the terminal submission and controlled-test cleanup result.
 
+`004_add_earnings_source_tables.sql` creates only:
+
+- `earnings_market_rules`;
+- `earnings_source_events`;
+- `earnings_fact_candidates`.
+
+These tables hold shadow earnings source configuration, normalized document
+metadata, and validated EPS candidates. They do not call a strategy or an
+executor, and migration 004 does not seed an armed trading rule.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in
@@ -64,3 +74,14 @@ before/after checkpoint confirmed:
 After the controlled live smoke test, a read-only aggregate audit showed one
 `EXECUTED` claim and one claim containing `smoke_cleanup`; no pending or error
 claim remained.
+
+Later on 2026-07-24, migration 004 was explicitly applied through
+`python -m scripts.manage_earnings_schema --apply --seed-nvts-shadow`. Its
+before/after checkpoint confirmed:
+
+- the three earnings tables were newly created;
+- one NVTS Q2 2026 rule was saved with source status `SHADOW`;
+- both runtime tables started with zero rows;
+- `SqlAlchemyEarningsStore.ensure_ready()` passed;
+- the separately counted legacy schema remained at 58 tables and 815 columns
+  before and after migration 004.
