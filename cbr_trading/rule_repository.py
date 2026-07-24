@@ -11,7 +11,11 @@ _SET_READ_ONLY_SQL = "SET TRANSACTION READ ONLY"
 _SELECT_RULES_SQL = """
 SELECT
     id,
+    type,
+    ticker,
     rule_key,
+    status,
+    priority,
     params,
     tg_chat_id,
     account_name,
@@ -27,6 +31,26 @@ WHERE status = :status
 ORDER BY priority ASC, id ASC
 """.strip()
 
+_SELECT_ACTIVE_RULE_BY_ID_SQL = """
+SELECT
+    id,
+    type,
+    ticker,
+    rule_key,
+    status,
+    priority,
+    params,
+    tg_chat_id,
+    account_name,
+    condition_id,
+    question,
+    order_qty,
+    order_price
+FROM monitored_news
+WHERE id = :rule_id
+  AND status = :status
+""".strip()
+
 
 class RuleLoadError(RuntimeError):
     """Safe error raised when active rules cannot be loaded."""
@@ -34,6 +58,8 @@ class RuleLoadError(RuntimeError):
 
 class RuleRepository(Protocol):
     def load_active_cbr_rules(self) -> list[dict[str, Any]]: ...
+
+    def load_active_rule(self, rule_id: int) -> dict[str, Any]: ...
 
 
 class SqlAlchemyRuleRepository:
@@ -81,6 +107,38 @@ class SqlAlchemyRuleRepository:
             ) from exc
 
         return normalize_rule_rows(rows)
+
+    def load_active_rule(self, rule_id: int) -> dict[str, Any]:
+        try:
+            normalized_rule_id = int(rule_id)
+        except (TypeError, ValueError) as exc:
+            raise RuleLoadError("Rule id must be an integer") from exc
+        if normalized_rule_id <= 0:
+            raise RuleLoadError("Rule id must be positive")
+
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                session.execute(text_factory(_SET_READ_ONLY_SQL))
+                result = session.execute(
+                    text_factory(_SELECT_ACTIVE_RULE_BY_ID_SQL),
+                    {
+                        "rule_id": normalized_rule_id,
+                        "status": "active",
+                    },
+                )
+                rows = result.mappings().all()
+        except Exception as exc:
+            raise RuleLoadError(
+                "Failed to load active rule from database: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+        if len(rows) != 1:
+            raise RuleLoadError(
+                f"Active rule id={normalized_rule_id} was not found"
+            )
+        return normalize_rule_rows(rows)[0]
 
     def _resolve_dependencies(
         self,
@@ -147,7 +205,7 @@ def normalize_rule_rows(
             row_id = int(row["id"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuleLoadError(
-                "Database returned a CBR rule with an invalid id"
+                "Database returned a rule with an invalid id"
             ) from exc
 
         raw_params = row.get("params")
@@ -159,7 +217,11 @@ def normalize_rule_rows(
         rules.append(
             {
                 "id": row_id,
+                "type": str(row.get("type") or ""),
+                "ticker": str(row.get("ticker") or ""),
                 "rule_key": str(row.get("rule_key") or "default"),
+                "status": str(row.get("status") or ""),
+                "priority": _int_or_none(row.get("priority")),
                 "params": params,
                 "tg_chat_id": row.get("tg_chat_id"),
                 "account_name": row.get("account_name"),
@@ -177,6 +239,15 @@ def _float_or_none(value: Any) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

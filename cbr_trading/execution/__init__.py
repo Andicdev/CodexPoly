@@ -39,6 +39,10 @@ from cbr_trading.execution.persistent_order_supervisor import (
     OrderSupervisorError,
     PersistentOrderSupervisor,
 )
+from cbr_trading.execution.polymarket_preflight import (
+    PolymarketPreflightDetail,
+    PolymarketPreflightPreparedExecutor,
+)
 from cbr_trading.execution.supervision_gateway import (
     CancellationResult,
     OrderInspectionResult,
@@ -82,6 +86,8 @@ __all__ = [
     "PreparationSummary",
     "PreparedExecutor",
     "PersistentOrderSupervisor",
+    "PolymarketPreflightDetail",
+    "PolymarketPreflightPreparedExecutor",
     "RemoteOrderSnapshot",
     "RemoteOrderState",
     "ReplacementOrderRequest",

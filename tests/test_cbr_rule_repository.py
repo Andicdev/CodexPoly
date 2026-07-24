@@ -48,7 +48,11 @@ class FakeSession:
 def _row() -> dict:
     return {
         "id": 17,
+        "type": "cbr_key_rate",
+        "ticker": "CBR",
         "rule_key": "cbr_cut",
+        "status": "active",
+        "priority": 300,
         "params": {
             "metric_key": CBR_CHANGE_METRIC,
             "execution_path": CBR_EXECUTION_PATH,
@@ -96,6 +100,40 @@ class RuleRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(rules[0]["order_qty"], 100.5)
         self.assertEqual(rules[0]["order_price"], 0.51)
+        self.assertEqual(rules[0]["type"], "cbr_key_rate")
+        self.assertEqual(rules[0]["ticker"], "CBR")
+
+    def test_loads_one_active_rule_by_id_without_cbr_filter(self) -> None:
+        row = _row()
+        row.update(
+            {
+                "type": "resolution_market",
+                "ticker": "ANTHROPIC",
+                "rule_key": "opus_yes",
+            }
+        )
+        session = FakeSession([row])
+        repository = SqlAlchemyRuleRepository(
+            session_factory=lambda: session,
+            text_factory=lambda statement: statement,
+        )
+
+        rule = repository.load_active_rule(103)
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(
+            session.calls[0][0],
+            "SET TRANSACTION READ ONLY",
+        )
+        select_sql, params = session.calls[1]
+        self.assertIn("WHERE id = :rule_id", select_sql)
+        self.assertNotIn("ticker = :ticker", select_sql)
+        self.assertEqual(
+            params,
+            {"rule_id": 103, "status": "active"},
+        )
+        self.assertEqual(rule["type"], "resolution_market")
+        self.assertEqual(rule["ticker"], "ANTHROPIC")
 
     def test_invalid_optional_values_are_left_for_pipeline_validation(
         self,

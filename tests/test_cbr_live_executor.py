@@ -80,6 +80,7 @@ class _Client:
         self.wallet_type = "GNOSIS_SAFE"
         self.best_ask = best_ask
         self.place_kwargs: dict[str, object] | None = None
+        self.presign_kwargs: dict[str, object] | None = None
         self.closed = False
 
     def get_order_book(self, *, token_id: str) -> object:
@@ -105,6 +106,14 @@ class _Client:
             status="live",
         )
 
+    def create_limit_order(self, **kwargs: object) -> object:
+        self.presign_kwargs = kwargs
+        return SimpleNamespace(
+            token_id=kwargs["token_id"],
+            order_type="GTC",
+            post_only=kwargs["post_only"],
+        )
+
     def close(self) -> None:
         self.closed = True
 
@@ -127,6 +136,38 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(result.wallet_type, "GNOSIS_SAFE")
         self.assertEqual(result.collateral_balance, Decimal("50"))
         self.assertEqual(result.current_best_ask, Decimal("0.64"))
+        self.assertIsNone(client.place_kwargs)
+        self.assertIsNone(client.presign_kwargs)
+        self.assertTrue(client.closed)
+
+    def test_authenticated_preflight_can_presign_without_posting(
+        self,
+    ) -> None:
+        client = _Client()
+        settings = _settings(trading_enabled=False)
+        executor = LiveOrderExecutor(
+            client_factory=lambda private_key, wallet: client,
+            decryptor=lambda encrypted, master: "private",
+        )
+
+        result = executor.check_authenticated(
+            plan=_plan(settings=settings),
+            account=_account(),
+            settings=settings,
+            presign=True,
+        )
+
+        self.assertTrue(result.order_presigned)
+        self.assertEqual(
+            client.presign_kwargs,
+            {
+                "token_id": "yes-token",
+                "price": "0.20",
+                "size": "100",
+                "side": "BUY",
+                "post_only": False,
+            },
+        )
         self.assertIsNone(client.place_kwargs)
         self.assertTrue(client.closed)
 

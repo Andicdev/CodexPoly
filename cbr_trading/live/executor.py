@@ -43,6 +43,7 @@ class AuthenticatedPreflightResult:
     wallet_type: str
     collateral_balance: Decimal
     current_best_ask: Decimal | None
+    order_presigned: bool = False
 
 
 class LiveOrderExecutor:
@@ -63,6 +64,7 @@ class LiveOrderExecutor:
         plan: LiveOrderPlan,
         account: TradingAccountRecord,
         settings: LiveSafetySettings,
+        presign: bool = False,
     ) -> AuthenticatedPreflightResult:
         non_activation_blockers = tuple(
             blocker
@@ -89,11 +91,21 @@ class LiveOrderExecutor:
                 plan=plan,
                 account=account,
             )
+            if presign:
+                self._presign_guard(client=client, plan=plan)
             return AuthenticatedPreflightResult(
                 wallet_type=wallet_type,
                 collateral_balance=collateral_balance,
                 current_best_ask=current_best_ask,
+                order_presigned=bool(presign),
             )
+        except LiveOrderError:
+            raise
+        except Exception as exc:
+            raise LiveOrderError(
+                "Authenticated preflight failed: "
+                f"{type(exc).__name__}"
+            ) from exc
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -278,6 +290,31 @@ class LiveOrderExecutor:
                 "BUY would cross the latest ask; post-only order skipped"
             )
         return best_ask
+
+    @staticmethod
+    def _presign_guard(
+        *,
+        client: Any,
+        plan: LiveOrderPlan,
+    ) -> None:
+        signed_order = client.create_limit_order(
+            token_id=plan.token_id,
+            price=str(plan.limit_price),
+            size=str(plan.quantity),
+            side="BUY",
+            post_only=plan.post_only,
+        )
+        if (
+            str(getattr(signed_order, "token_id", ""))
+            != plan.token_id
+            or str(getattr(signed_order, "order_type", ""))
+            != "GTC"
+            or bool(getattr(signed_order, "post_only", False))
+            != plan.post_only
+        ):
+            raise LiveOrderError(
+                "Pre-signed order does not match the GTC order plan"
+            )
 
 
 def decrypt_private_key(

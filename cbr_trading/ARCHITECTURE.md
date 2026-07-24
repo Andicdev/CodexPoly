@@ -327,3 +327,23 @@ The first adapters live in `cbr_trading.sources.cbr` and
   are composed behind the disabled-by-default supervision gate;
 - no real supervision cancellation or replacement has been made by this
   implementation work.
+
+## Source-neutral fixed-outcome preflight
+
+The first non-CBR rule path is additive:
+
+- `SqlAlchemyRuleRepository.load_active_rule()` loads one active rule by ID
+  without a CBR ticker, metric, or execution-path filter;
+- `FixedOutcomeStrategy` turns an exact source/subject/metric/value match into
+  one configured BUY template and never prepares the opposite outcome;
+- `ManualResolutionSource` emits an explicit controlled signal once;
+- `PolymarketPreflightPreparedExecutor` authenticates, refreshes the book,
+  checks balance and safety caps, and locally pre-signs arbitrary universal
+  templates without reserving or submitting an order;
+- `python -m cbr_trading.resolution_live --rule-id <id>` composes these pieces
+  through `ResolutionTradingCoordinator` and requires a final `DRY_RUN`.
+
+This preflight does not reuse `CbrWarmPreparedExecutorAdapter`: that adapter
+still validates the CBR source scope, prepares both binary outcomes, and uses
+the legacy CBR execution ledger. Source-neutral idempotency and real
+submission remain a separate checkpoint.
