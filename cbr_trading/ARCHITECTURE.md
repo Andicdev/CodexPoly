@@ -55,6 +55,28 @@ An explicit monitor-only preparation is allowed when an event has no active
 order templates. It still resolves the source event through the same
 coordinator, but cannot submit an order.
 
+## Persistent order ownership
+
+The supervisor persistence boundary is additive and source-neutral:
+
+- `resolution_order_groups` stores immutable intent ownership, lifecycle
+  policy, optimistic `revision`, and the current group state;
+- `resolution_order_group_orders` stores every initial and replacement order
+  owned by a group, including its generation and lifecycle state;
+- `resolution_supervision_events` provides per-group event idempotency and
+  records atomic tick-change claims.
+
+An `ExecutionHandle` carries the optional signal/template/strategy and order
+parameters needed to persist a replaceable order without re-reading a
+source-specific rule. Repricing registration requires side, desired price,
+and exactly one sizing mode.
+
+The first migration is intentionally forward-only and additive. It uses only
+`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`; it does not
+alter or drop any legacy table, column, constraint, or data. The production
+runner does not apply it automatically. Migration and readiness verification
+are explicit repository operations.
+
 ## Invariants
 
 - Sources have no dependency on strategies or execution.
@@ -68,6 +90,11 @@ coordinator, but cannot submit an order.
 - A prepared executor is single-use after a scope-valid execution attempt.
 - Legacy result-count mismatches and exceptions after submission starts are
   reported as `AMBIGUOUS`, never silently retried.
+- A tick event is claimed by changing one group from `ACTIVE` to `REPRICING`
+  under an optimistic revision. Duplicate or competing events cannot acquire
+  the same group.
+- Persistent cancellation scope is the exact order IDs recorded for one
+  `order_group`; legacy asset-wide ownership is never inferred.
 
 ## Compatibility checkpoint
 
@@ -96,4 +123,5 @@ The first adapters live in `cbr_trading.sources.cbr` and
   `PreparedExecutor` contract, including monitor-only operation;
 - legacy `PipelineOutcome` is now only a compatibility DTO for the existing
   JSON and Telegram format, not the runtime orchestration path;
-- no database schema has changed.
+- the additive supervisor migration is defined but is not yet applied or
+  consumed by the production runner.

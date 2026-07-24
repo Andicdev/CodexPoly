@@ -420,6 +420,13 @@ def _from_legacy_result(
             outcome=intent.outcome,
             asset_id=prepared.legacy.token_id,
             live_order_ids=(order.order_id,),
+            signal_id=intent.signal_id,
+            template_id=intent.template_id,
+            strategy_id=intent.strategy_id,
+            side=intent.side,
+            desired_price=intent.desired_price,
+            quantity=intent.quantity,
+            notional=intent.notional,
         )
         return OrderExecutionResult(
             intent=intent,

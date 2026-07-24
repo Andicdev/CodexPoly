@@ -191,6 +191,17 @@ class CbrPreparedExecutorAdapterTests(unittest.TestCase):
         self.assertEqual(result.orders[0].asset_id, "asset-yes")
         self.assertEqual(result.orders[0].effective_price, Decimal("0.999"))
         self.assertEqual(result.handle.live_order_ids, ("order-yes",))
+        self.assertEqual(result.handle.signal_id, signal.signal_id)
+        self.assertEqual(
+            result.handle.template_id,
+            intents[0].template_id,
+        )
+        self.assertEqual(result.handle.side, intents[0].side)
+        self.assertEqual(
+            result.handle.desired_price,
+            Decimal("0.999"),
+        )
+        self.assertEqual(result.handle.quantity, Decimal("100"))
         self.assertTrue(
             result.handle.order_group_id.startswith("order-group:")
         )
