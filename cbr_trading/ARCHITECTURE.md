@@ -43,3 +43,13 @@ Source -> ResolutionSignal -> Strategy -> OrderIntent -> PreparedExecutor
 The existing DTOs in `cbr_trading.pipeline` remain the runtime API for the
 tested CBR executor. The new contracts are additive. A later step will add
 adapters and migrate one boundary at a time without changing live behavior.
+
+The first adapters live in `cbr_trading.sources.cbr` and
+`cbr_trading.strategies.cbr_rate_decision`:
+
+- the canonical release URL produces a stable `signal_id`;
+- the existing CBR comparison and decision-mode functions remain authoritative;
+- every active rule exposes preparable YES and NO templates;
+- the selected intent binds `signal_id` to the already prepared `template_id`;
+- the production runner still uses the original CBR DTOs until a separate
+  integration checkpoint.
