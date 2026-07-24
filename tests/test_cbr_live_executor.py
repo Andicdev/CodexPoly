@@ -34,10 +34,11 @@ def _account() -> TradingAccountRecord:
 def _settings(
     *,
     trading_enabled: bool = True,
+    post_only: bool = False,
 ) -> LiveSafetySettings:
     return LiveSafetySettings(
         trading_enabled=trading_enabled,
-        post_only=True,
+        post_only=post_only,
         allowed_account="kinderSman",
         max_order_quantity=Decimal("100"),
         max_notional=Decimal("20"),
@@ -129,7 +130,7 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertIsNone(client.place_kwargs)
         self.assertTrue(client.closed)
 
-    def test_places_only_post_only_buy_after_fresh_book_check(
+    def test_places_ordinary_gtc_buy_after_fresh_book_check(
         self,
     ) -> None:
         client = _Client()
@@ -159,26 +160,44 @@ class LiveExecutorTests(unittest.TestCase):
                 "price": "0.20",
                 "size": "100",
                 "side": "BUY",
-                "post_only": True,
+                "post_only": False,
             },
         )
         self.assertTrue(client.closed)
 
-    def test_stale_crossing_book_skips_submission(self) -> None:
+    def test_crossing_book_submits_aggressive_gtc_order(self) -> None:
         client = _Client(best_ask="0.20")
         executor = LiveOrderExecutor(
             client_factory=lambda private_key, wallet: client,
             decryptor=lambda encrypted, master: "private",
         )
 
+        result = executor.place(
+            plan=_plan(),
+            account=_account(),
+            settings=_settings(),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(client.place_kwargs["post_only"], False)
+        self.assertTrue(client.closed)
+
+    def test_post_only_crossing_book_skips_submission(self) -> None:
+        client = _Client(best_ask="0.20")
+        executor = LiveOrderExecutor(
+            client_factory=lambda private_key, wallet: client,
+            decryptor=lambda encrypted, master: "private",
+        )
+        settings = _settings(post_only=True)
+
         with self.assertRaisesRegex(
             LiveOrderError,
-            "cross",
+            "post-only order skipped",
         ):
             executor.place(
-                plan=_plan(),
+                plan=_plan(settings=settings),
                 account=_account(),
-                settings=_settings(),
+                settings=settings,
             )
 
         self.assertIsNone(client.place_kwargs)

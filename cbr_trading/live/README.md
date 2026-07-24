@@ -37,7 +37,7 @@ Real submission additionally requires:
 - `CBR_LIVE_TRADING_ENABLED=1`;
 - `CBR_LIVE_ALLOWED_ACCOUNT` matching the stored account name;
 - `CBR_LIVE_MAX_ORDER_QTY` and `CBR_LIVE_MAX_NOTIONAL`;
-- `CBR_LIVE_POST_ONLY=1`;
+- `CBR_LIVE_POST_ONLY=0` for an ordinary aggressive GTC limit order;
 - the existing Fernet `ACCOUNTS_MASTER_KEY`;
 - both `--apply` and `--confirm-live-order`.
 
@@ -47,6 +47,9 @@ Example (do not run without checking the preview first):
 python -m cbr_trading.live --action YES --apply --confirm-live-order
 ```
 
-All orders from this utility are BUY, post-only, and GTC. Post-only prevents
-immediate execution when the order would cross the book. A resting GTC order
-can still fill later until it is cancelled or the market closes.
+All orders from this utility are limit BUY and GTC. With
+`CBR_LIVE_POST_ONLY=0`, available asks at or below the limit execute
+immediately and any unfilled remainder rests at the configured limit until it
+is cancelled or the market closes. Set `CBR_LIVE_POST_ONLY=1` only when
+maker-only behavior is explicitly required; such an order is skipped if it
+would cross the current ask.

@@ -354,7 +354,7 @@ class WarmLiveOrderExecutor:
                 price=str(plan.limit_price),
                 size=str(plan.quantity),
                 side="BUY",
-                post_only=True,
+                post_only=plan.post_only,
             )
             if response.ok:
                 order_id = str(response.order_id)
@@ -445,8 +445,6 @@ class WarmLiveOrderExecutor:
         blockers: list[str] = []
         if not self._safety.trading_enabled:
             blockers.append("live_trading_disabled")
-        if not self._safety.post_only:
-            blockers.append("post_only_must_be_enabled")
         if not self._safety.allowed_account:
             blockers.append("allowed_account_not_configured")
         if self._safety.max_order_quantity is None:

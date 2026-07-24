@@ -39,7 +39,7 @@ class RunnerPreflightCliTests(unittest.TestCase):
         executor = FakeExecutor()
         safety = LiveSafetySettings(
             trading_enabled=False,
-            post_only=True,
+            post_only=False,
             allowed_account="kinderSman",
             max_order_quantity=Decimal("100"),
             max_notional=Decimal("20"),

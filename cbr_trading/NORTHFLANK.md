@@ -46,7 +46,8 @@ BOR_PREV_RATE=14.25
 CBR_ON_RENDER=0
 CBR_RULES_DB_ENABLED=1
 CBR_TELEGRAM_ENABLED=1
-CBR_LIVE_POST_ONLY=1
+# Ordinary GTC: immediately take asks up to the limit, then rest any remainder.
+CBR_LIVE_POST_ONLY=0
 CBR_LIVE_ALLOWED_ACCOUNT=kinderSman
 ```
 

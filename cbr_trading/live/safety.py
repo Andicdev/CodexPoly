@@ -12,7 +12,7 @@ from cbr_trading.live.market import MarketSnapshot
 @dataclass(frozen=True)
 class LiveSafetySettings:
     trading_enabled: bool = False
-    post_only: bool = True
+    post_only: bool = False
     allowed_account: str = ""
     max_order_quantity: Decimal | None = None
     max_notional: Decimal | None = None
@@ -35,7 +35,7 @@ class LiveSafetySettings:
             ),
             post_only=_parse_bool(
                 env.get("CBR_LIVE_POST_ONLY"),
-                default=True,
+                default=False,
             ),
             allowed_account=_clean(
                 env.get("CBR_LIVE_ALLOWED_ACCOUNT")
@@ -101,8 +101,6 @@ def build_live_order_plan(
 
     if not settings.trading_enabled:
         blockers.append("live_trading_disabled")
-    if not settings.post_only:
-        blockers.append("post_only_must_be_enabled")
     if not settings.allowed_account:
         blockers.append("allowed_account_not_configured")
     elif (
@@ -128,7 +126,7 @@ def build_live_order_plan(
         blockers.append("invalid_limit_price")
     elif not _is_tick_aligned(price, snapshot.tick_size):
         blockers.append("limit_price_not_tick_aligned")
-    if snapshot.would_cross_buy(price):
+    if settings.post_only and snapshot.would_cross_buy(price):
         blockers.append("buy_would_cross_current_ask")
 
     return LiveOrderPlan(
@@ -150,7 +148,7 @@ def build_live_order_plan(
         last_trade_price=snapshot.last_trade_price,
         tick_size=snapshot.tick_size,
         minimum_order_size=snapshot.minimum_order_size,
-        post_only=True,
+        post_only=settings.post_only,
         time_in_force="GTC",
         blockers=tuple(blockers),
     )

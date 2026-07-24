@@ -46,7 +46,7 @@ class AuthenticatedPreflightResult:
 
 
 class LiveOrderExecutor:
-    """Submit one post-only BUY through the official Polymarket SDK."""
+    """Submit one limit BUY through the official Polymarket SDK."""
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class LiveOrderExecutor:
                 price=str(plan.limit_price),
                 size=str(plan.quantity),
                 side="BUY",
-                post_only=True,
+                post_only=plan.post_only,
             )
             if response.ok:
                 return LivePlacementResult(
@@ -269,7 +269,11 @@ class LiveOrderExecutor:
 
         asks = [Decimal(str(level.price)) for level in book.asks]
         best_ask = min(asks) if asks else None
-        if best_ask is not None and plan.limit_price >= best_ask:
+        if (
+            plan.post_only
+            and best_ask is not None
+            and plan.limit_price >= best_ask
+        ):
             raise LiveOrderError(
                 "BUY would cross the latest ask; post-only order skipped"
             )

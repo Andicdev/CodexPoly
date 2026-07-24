@@ -65,7 +65,7 @@ def _release() -> DiscoveryResult:
 def _safety() -> LiveSafetySettings:
     return LiveSafetySettings(
         trading_enabled=True,
-        post_only=True,
+        post_only=False,
         allowed_account="kinderSman",
         max_order_quantity=Decimal("100"),
         max_notional=Decimal("20"),
@@ -206,7 +206,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         )
         return executor, repository
 
-    def test_prepare_warms_once_then_places_post_only(self) -> None:
+    def test_prepare_warms_once_then_places_ordinary_gtc(self) -> None:
         client = _Client()
         ledger = _Ledger()
         executor, repository = self._executor(
@@ -238,7 +238,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
                     "price": "0.2",
                     "size": "100",
                     "side": "BUY",
-                    "post_only": True,
+                    "post_only": False,
                 }
             ],
         )
@@ -266,7 +266,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertFalse(result.attempted)
         self.assertEqual(client.placements, [])
 
-    def test_fresh_crossing_ask_fails_closed_after_claim(self) -> None:
+    def test_fresh_crossing_ask_places_aggressive_gtc(self) -> None:
         client = _Client(fresh_ask="0.20")
         ledger = _Ledger()
         executor, _ = self._executor(client=client, ledger=ledger)
@@ -277,18 +277,18 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
             release=_release(),
         )[0]
 
-        self.assertEqual(result.status, "SKIPPED")
-        self.assertFalse(result.attempted)
-        self.assertIn("buy_would_cross_current_ask", result.error or "")
-        self.assertEqual(client.placements, [])
-        self.assertEqual(ledger.completions[0]["status"], "FAILED")
+        self.assertEqual(result.status, "LIVE")
+        self.assertTrue(result.attempted)
+        self.assertTrue(result.success)
+        self.assertEqual(client.placements[0]["post_only"], False)
+        self.assertEqual(ledger.completions[0]["status"], "EXECUTED")
 
     def test_aggregate_notional_cap_fails_closed(self) -> None:
         client = _Client()
         ledger = _Ledger()
         safety = LiveSafetySettings(
             trading_enabled=True,
-            post_only=True,
+            post_only=False,
             allowed_account="kinderSman",
             max_order_quantity=Decimal("100"),
             max_notional=Decimal("20"),

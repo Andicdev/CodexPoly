@@ -40,7 +40,7 @@ def _snapshot(*, best_ask: str = "0.64") -> MarketSnapshot:
 def _settings(**overrides: object) -> LiveSafetySettings:
     values: dict[str, object] = {
         "trading_enabled": True,
-        "post_only": True,
+        "post_only": False,
         "allowed_account": "KinderSman",
         "max_order_quantity": Decimal("100"),
         "max_notional": Decimal("20"),
@@ -51,7 +51,12 @@ def _settings(**overrides: object) -> LiveSafetySettings:
 
 
 class LiveSafetyTests(unittest.TestCase):
-    def test_exact_safety_caps_allow_non_crossing_order(self) -> None:
+    def test_environment_defaults_to_ordinary_gtc(self) -> None:
+        settings = LiveSafetySettings.from_env({})
+
+        self.assertFalse(settings.post_only)
+
+    def test_exact_safety_caps_allow_ordinary_gtc_order(self) -> None:
         plan = build_live_order_plan(
             account=_account(),
             rule_id=98,
@@ -65,9 +70,10 @@ class LiveSafetyTests(unittest.TestCase):
         self.assertTrue(plan.ready_to_apply)
         self.assertEqual(plan.notional, Decimal("20.00"))
         self.assertEqual(plan.blockers, ())
-        self.assertTrue(plan.post_only)
+        self.assertFalse(plan.post_only)
+        self.assertEqual(plan.time_in_force, "GTC")
 
-    def test_disabled_missing_key_and_crossing_are_blockers(self) -> None:
+    def test_aggressive_gtc_allows_crossing_ask(self) -> None:
         plan = build_live_order_plan(
             account=_account(),
             rule_id=98,
@@ -76,16 +82,50 @@ class LiveSafetyTests(unittest.TestCase):
             limit_price=Decimal("0.64"),
             snapshot=_snapshot(),
             settings=_settings(
+                max_notional=Decimal("100"),
+            ),
+        )
+
+        self.assertTrue(plan.ready_to_apply)
+        self.assertNotIn(
+            "buy_would_cross_current_ask",
+            plan.blockers,
+        )
+
+    def test_post_only_crossing_order_is_blocked(self) -> None:
+        plan = build_live_order_plan(
+            account=_account(),
+            rule_id=98,
+            rule_key="cbr_decrease_fast",
+            quantity=Decimal("100"),
+            limit_price=Decimal("0.64"),
+            snapshot=_snapshot(),
+            settings=_settings(
+                post_only=True,
+                max_notional=Decimal("100"),
+            ),
+        )
+
+        self.assertFalse(plan.ready_to_apply)
+        self.assertIn("buy_would_cross_current_ask", plan.blockers)
+
+    def test_disabled_and_missing_key_are_blockers(self) -> None:
+        plan = build_live_order_plan(
+            account=_account(),
+            rule_id=98,
+            rule_key="cbr_decrease_fast",
+            quantity=Decimal("100"),
+            limit_price=Decimal("0.20"),
+            snapshot=_snapshot(),
+            settings=_settings(
                 trading_enabled=False,
                 accounts_master_key=None,
-                max_notional=Decimal("100"),
             ),
         )
 
         self.assertFalse(plan.ready_to_apply)
         self.assertIn("live_trading_disabled", plan.blockers)
         self.assertIn("accounts_master_key_missing", plan.blockers)
-        self.assertIn("buy_would_cross_current_ask", plan.blockers)
 
     def test_quantity_and_notional_caps_fail_closed(self) -> None:
         plan = build_live_order_plan(

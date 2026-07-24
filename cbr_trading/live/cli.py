@@ -269,8 +269,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm-live-order",
         action="store_true",
         help=(
-            "Acknowledge that the real post-only GTC order can fill "
-            "later while it remains on the book."
+            "Acknowledge that the real GTC limit order can execute "
+            "immediately and that any remainder can fill later."
         ),
     )
     return parser
