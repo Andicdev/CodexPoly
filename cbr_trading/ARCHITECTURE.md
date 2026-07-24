@@ -6,10 +6,15 @@ repository at `C:\polymarket-bot` is a read-only reference and is not modified.
 ## Runtime flow
 
 ```text
-Source -> ResolutionSignal -> Strategy -> OrderIntent -> PreparedExecutor
-                                                        |
-                                                        v
-                                                 OrderSupervisor
+ResolutionTradingCoordinator
+    |
+    +-> Source -> ResolutionSignal -> Strategy -> OrderIntent
+    |                                             |
+    +---------------------------------------------v
+                                          PreparedExecutor
+                                                 |
+                                                 v
+                                          OrderSupervisor
 ```
 
 1. A `Source` acquires and parses one external publication. It emits
@@ -27,6 +32,24 @@ Source -> ResolutionSignal -> Strategy -> OrderIntent -> PreparedExecutor
 5. `OrderSupervisor` handles post-submission lifecycle. A
    `RepriceOnTickChange` policy may cancel only the live order IDs owned by its
    group and submit replacements at the newly valid tick.
+
+## Coordinator lifecycle
+
+`cbr_trading.application.ResolutionTradingCoordinator` owns one event scope:
+
+1. It verifies that the source and `PreparationContext` agree, gathers static
+   templates from one or more strategies, rejects duplicate identities, and
+   performs exactly one executor preparation.
+2. `WAITING`, an unrelated signal, or a transient source exception leaves the
+   prepared coordinator reusable for the next poll.
+3. A signal matching both `source` and `scope_id` is evaluated by every
+   configured strategy. Every selected intent must be the exact binding of a
+   template included in preparation.
+4. All selected intents are handed to the executor in one call. An empty
+   selection is also handed over so the executor can release reservations.
+5. A valid execution result completes the coordinator. Strategy contract
+   errors, execution exceptions, and malformed execution results are terminal
+   and are never retried automatically.
 
 ## Invariants
 
@@ -60,5 +83,7 @@ The first adapters live in `cbr_trading.sources.cbr` and
 - preparation publishes only non-secret order metadata needed to match legacy
   prepared orders to universal templates;
 - execution returns source-neutral results and an owned `order_group` handle;
+- the real CBR source and strategy have an end-to-end coordinator contract
+  test;
 - the production runner still uses the original CBR DTOs until a separate
   integration checkpoint, and no database schema has changed.
