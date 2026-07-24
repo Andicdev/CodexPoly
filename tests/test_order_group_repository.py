@@ -7,6 +7,7 @@ from cbr_trading.domain import (
     ExecutionHandle,
     OrderSide,
     Outcome,
+    PlacedOrder,
     RepriceOnTickChange,
 )
 from cbr_trading.execution import (
@@ -396,7 +397,7 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
     def test_fail_claim_updates_group_and_event_together(self) -> None:
         session = _Session(
             [
-                _Result(rowcount=1),
+                _Result(one_or_none={"failed_generation": 1}),
                 _Result(rowcount=1),
             ]
         )
@@ -418,6 +419,137 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
             session.calls[0][1]["error"],
             "replacement failed",
         )
+
+    def test_complete_reprice_closes_exact_orders_and_tracks_replacement(
+        self,
+    ) -> None:
+        replacement = PlacedOrder(
+            order_id="order-2",
+            asset_id="asset-yes",
+            effective_price=Decimal("0.999"),
+            quantity=Decimal("25"),
+        )
+        session = _Session(
+            [
+                _Result(
+                    one_or_none={
+                        "reprice_count": 1,
+                        "status": "COMPLETED",
+                        "revision": 2,
+                    }
+                ),
+                _Result(all_rows=[{"order_id": "order-1"}]),
+                _Result(rowcount=1),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="tick-event-1",
+            order_group_id="group-1",
+            acquired=True,
+            revision=1,
+        )
+
+        repository.complete_reprice(
+            claim,
+            cancelled_order_ids=("order-1",),
+            replacement_orders=(replacement,),
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertEqual(session.calls[1][1]["order_ids"], ["order-1"])
+        self.assertEqual(session.calls[1][1]["status"], "REPLACED")
+        self.assertEqual(session.calls[2][1]["order_id"], "order-2")
+        self.assertEqual(session.calls[2][1]["status"], "LIVE")
+        self.assertEqual(session.calls[2][1]["generation"], 1)
+
+    def test_complete_reprice_rejects_non_owned_order_transition(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(
+                    one_or_none={
+                        "reprice_count": 1,
+                        "status": "COMPLETED",
+                        "revision": 2,
+                    }
+                ),
+                _Result(all_rows=[]),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="tick-event-1",
+            order_group_id="group-1",
+            acquired=True,
+            revision=1,
+        )
+
+        with self.assertRaisesRegex(
+            OrderGroupRepositoryError,
+            "ownership no longer matches",
+        ):
+            repository.complete_reprice(
+                claim,
+                cancelled_order_ids=("order-1",),
+                replacement_orders=(
+                    PlacedOrder(
+                        order_id="order-2",
+                        asset_id="asset-yes",
+                        effective_price=Decimal("0.999"),
+                        quantity=Decimal("25"),
+                    ),
+                ),
+            )
+
+        self.assertEqual(session.commits, 0)
+        self.assertEqual(session.rollbacks, 1)
+
+    def test_fail_claim_records_known_external_side_effects(self) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"failed_generation": 1}),
+                _Result(all_rows=[{"order_id": "order-1"}]),
+                _Result(rowcount=1),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="tick-event-1",
+            order_group_id="group-1",
+            acquired=True,
+            revision=1,
+        )
+
+        repository.fail_claim(
+            claim,
+            error="state persistence failed after placement",
+            cancelled_order_ids=("order-1",),
+            replacement_orders=(
+                PlacedOrder(
+                    order_id="order-2",
+                    asset_id="asset-yes",
+                    effective_price=Decimal("0.999"),
+                    quantity=Decimal("25"),
+                ),
+            ),
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertEqual(session.calls[1][1]["status"], "CANCELLED")
+        self.assertEqual(session.calls[2][1]["status"], "UNKNOWN")
 
 
 if __name__ == "__main__":

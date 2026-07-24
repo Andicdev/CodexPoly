@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from cbr_trading.domain.intents import OrderLifecyclePolicy
-from cbr_trading.domain.results import ExecutionHandle
+from cbr_trading.domain.results import ExecutionHandle, PlacedOrder
 from cbr_trading.execution.order_group_state import (
     OrderGroupRecord,
     OrderGroupRegistration,
@@ -260,6 +260,70 @@ WHERE event_id = :event_id
   AND status = 'RECEIVED'
 """.strip()
 
+_COMPLETE_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    reprice_count = reprice_count + 1,
+    status = CASE
+        WHEN reprice_count + 1 >= max_reprices THEN 'COMPLETED'
+        ELSE 'ACTIVE'
+    END,
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+RETURNING reprice_count, status, revision
+""".strip()
+
+_CLOSE_OWNED_ORDERS_SQL = """
+UPDATE resolution_order_group_orders
+SET
+    status = :status,
+    closed_at = now(),
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'LIVE'
+  AND order_id = ANY(:order_ids)
+RETURNING order_id
+""".strip()
+
+_INSERT_REPLACEMENT_ORDER_SQL = """
+INSERT INTO resolution_order_group_orders (
+    order_group_id,
+    order_id,
+    generation,
+    status,
+    effective_price,
+    quantity,
+    parent_order_id,
+    metadata
+)
+VALUES (
+    :order_group_id,
+    :order_id,
+    :generation,
+    :status,
+    :effective_price,
+    :quantity,
+    :parent_order_id,
+    CAST(:metadata AS jsonb)
+)
+""".strip()
+
+_COMPLETE_EVENT_SQL = """
+UPDATE resolution_supervision_events
+SET
+    status = 'COMPLETED',
+    error = NULL,
+    updated_at = now()
+WHERE event_id = :event_id
+  AND order_group_id = :order_group_id
+  AND status = 'CLAIMED'
+  AND claimed_revision = :revision
+""".strip()
+
 _FAIL_GROUP_SQL = """
 UPDATE resolution_order_groups
 SET
@@ -270,6 +334,7 @@ SET
 WHERE order_group_id = :order_group_id
   AND status = 'REPRICING'
   AND revision = :revision
+RETURNING reprice_count + 1 AS failed_generation
 """.strip()
 
 _FAIL_EVENT_SQL = """
@@ -511,12 +576,23 @@ class SqlAlchemyOrderGroupRepository:
         claim: SupervisionClaim,
         *,
         error: str,
+        cancelled_order_ids: Sequence[str] = (),
+        replacement_orders: Sequence[PlacedOrder] = (),
     ) -> None:
         if not claim.acquired or claim.revision is None:
             raise ValueError("only an acquired supervision claim can fail")
         safe_error = redact_sensitive_text(error, max_length=500)
         if not safe_error:
             raise ValueError("error is required")
+        cancelled = _normalized_order_ids(
+            cancelled_order_ids,
+            name="cancelled_order_ids",
+            required=False,
+        )
+        replacements = _validated_replacement_orders(
+            replacement_orders,
+            required=False,
+        )
         params = {
             "event_id": claim.event_id,
             "order_group_id": claim.order_group_id,
@@ -526,18 +602,57 @@ class SqlAlchemyOrderGroupRepository:
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
-                group_result = session.execute(
+                failed_group = session.execute(
                     text_factory(_FAIL_GROUP_SQL),
                     params,
+                ).mappings().one_or_none()
+                if failed_group is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision claim is no longer current"
+                    )
+                generation = int(failed_group["failed_generation"])
+
+                if cancelled:
+                    closed = session.execute(
+                        text_factory(_CLOSE_OWNED_ORDERS_SQL),
+                        {
+                            **params,
+                            "status": "CANCELLED",
+                            "order_ids": list(cancelled),
+                        },
+                    ).mappings().all()
+                    try:
+                        _require_exact_closed_orders(
+                            closed,
+                            expected=cancelled,
+                        )
+                    except OrderGroupRepositoryError:
+                        session.rollback()
+                        raise
+
+                parent_order_id = (
+                    cancelled[0]
+                    if len(cancelled) == 1
+                    else None
                 )
+                for replacement in replacements:
+                    session.execute(
+                        text_factory(_INSERT_REPLACEMENT_ORDER_SQL),
+                        _replacement_params(
+                            claim=claim,
+                            replacement=replacement,
+                            generation=generation,
+                            status="UNKNOWN",
+                            parent_order_id=parent_order_id,
+                        ),
+                    )
+
                 event_result = session.execute(
                     text_factory(_FAIL_EVENT_SQL),
                     params,
                 )
-                if (
-                    int(group_result.rowcount or 0) != 1
-                    or int(event_result.rowcount or 0) != 1
-                ):
+                if int(event_result.rowcount or 0) != 1:
                     session.rollback()
                     raise OrderGroupRepositoryError(
                         "Supervision claim is no longer current"
@@ -548,6 +663,97 @@ class SqlAlchemyOrderGroupRepository:
         except Exception as exc:
             raise OrderGroupRepositoryError(
                 "Failed to mark supervision claim failed: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def complete_reprice(
+        self,
+        claim: SupervisionClaim,
+        *,
+        cancelled_order_ids: Sequence[str],
+        replacement_orders: Sequence[PlacedOrder],
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired supervision claim can complete"
+            )
+        cancelled = _normalized_order_ids(
+            cancelled_order_ids,
+            name="cancelled_order_ids",
+            required=True,
+        )
+        replacements = _validated_replacement_orders(
+            replacement_orders,
+            required=True,
+        )
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                completed_group = session.execute(
+                    text_factory(_COMPLETE_GROUP_SQL),
+                    params,
+                ).mappings().one_or_none()
+                if completed_group is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision claim is no longer current"
+                    )
+                generation = int(completed_group["reprice_count"])
+
+                closed = session.execute(
+                    text_factory(_CLOSE_OWNED_ORDERS_SQL),
+                    {
+                        **params,
+                        "status": "REPLACED",
+                        "order_ids": list(cancelled),
+                    },
+                ).mappings().all()
+                try:
+                    _require_exact_closed_orders(
+                        closed,
+                        expected=cancelled,
+                    )
+                except OrderGroupRepositoryError:
+                    session.rollback()
+                    raise
+
+                parent_order_id = (
+                    cancelled[0]
+                    if len(cancelled) == 1
+                    else None
+                )
+                for replacement in replacements:
+                    session.execute(
+                        text_factory(_INSERT_REPLACEMENT_ORDER_SQL),
+                        _replacement_params(
+                            claim=claim,
+                            replacement=replacement,
+                            generation=generation,
+                            status="LIVE",
+                            parent_order_id=parent_order_id,
+                        ),
+                    )
+
+                completed_event = session.execute(
+                    text_factory(_COMPLETE_EVENT_SQL),
+                    params,
+                )
+                if int(completed_event.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision event completion was not persisted"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to complete order repricing: "
                 f"{type(exc).__name__}"
             ) from exc
 
@@ -661,6 +867,84 @@ def _event_params(
                 "old_tick": str(event.old_tick),
                 "new_tick": str(event.new_tick),
                 "observed_at": event.observed_at.isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+
+def _normalized_order_ids(
+    values: Sequence[str],
+    *,
+    name: str,
+    required: bool,
+) -> tuple[str, ...]:
+    normalized = tuple(
+        str(value or "").strip()
+        for value in values
+    )
+    if any(not value for value in normalized):
+        raise ValueError(f"{name} cannot contain empty values")
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{name} must be unique")
+    if required and not normalized:
+        raise ValueError(f"{name} must not be empty")
+    return normalized
+
+
+def _validated_replacement_orders(
+    values: Sequence[PlacedOrder],
+    *,
+    required: bool,
+) -> tuple[PlacedOrder, ...]:
+    orders = tuple(values)
+    if any(not isinstance(order, PlacedOrder) for order in orders):
+        raise TypeError(
+            "replacement_orders must contain PlacedOrder objects"
+        )
+    order_ids = [order.order_id for order in orders]
+    if len(order_ids) != len(set(order_ids)):
+        raise ValueError("replacement order ids must be unique")
+    if required and not orders:
+        raise ValueError("replacement_orders must not be empty")
+    return orders
+
+
+def _require_exact_closed_orders(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    expected: Sequence[str],
+) -> None:
+    actual = {
+        str(row.get("order_id") or "").strip()
+        for row in rows
+    }
+    if actual != set(expected):
+        raise OrderGroupRepositoryError(
+            "Cancelled order ownership no longer matches the claim"
+        )
+
+
+def _replacement_params(
+    *,
+    claim: SupervisionClaim,
+    replacement: PlacedOrder,
+    generation: int,
+    status: str,
+    parent_order_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "order_group_id": claim.order_group_id,
+        "order_id": replacement.order_id,
+        "generation": generation,
+        "status": status,
+        "effective_price": replacement.effective_price,
+        "quantity": replacement.quantity,
+        "parent_order_id": parent_order_id,
+        "metadata": json.dumps(
+            {
+                "event_id": claim.event_id,
+                "claim_revision": claim.revision,
             },
             ensure_ascii=False,
         ),

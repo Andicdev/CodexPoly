@@ -33,11 +33,23 @@ from cbr_trading.execution.prepared_executor import (
     PreparationSummary,
     PreparedExecutor,
 )
+from cbr_trading.execution.persistent_order_supervisor import (
+    OrderSupervisorError,
+    PersistentOrderSupervisor,
+)
+from cbr_trading.execution.supervision_gateway import (
+    CancellationResult,
+    ReplacementOrderRequest,
+    SupervisionOrderGateway,
+    replacement_price_for_tick,
+)
 
 __all__ = [
     "CbrWarmPreparedExecutorAdapter",
+    "CancellationResult",
     "DryRunPreparedExecutor",
     "OrderSupervisor",
+    "OrderSupervisorError",
     "OrderGroupRecord",
     "OrderGroupRepository",
     "OrderGroupRegistration",
@@ -47,13 +59,17 @@ __all__ = [
     "PreparationStatus",
     "PreparationSummary",
     "PreparedExecutor",
+    "PersistentOrderSupervisor",
+    "ReplacementOrderRequest",
     "SupervisionResult",
     "SupervisionClaim",
     "SupervisionEventStatus",
     "SupervisionStatus",
+    "SupervisionOrderGateway",
     "TickSizeChange",
     "TrackedOrderStatus",
     "UnavailablePreparedExecutor",
     "cbr_preparation_context",
     "registration_from_handle",
+    "replacement_price_for_tick",
 ]

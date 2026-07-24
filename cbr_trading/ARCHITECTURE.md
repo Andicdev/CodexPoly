@@ -77,6 +77,31 @@ alter or drop any legacy table, column, constraint, or data. The production
 runner does not apply it automatically. Migration and readiness verification
 are explicit repository operations.
 
+## Persistent supervisor lifecycle
+
+`PersistentOrderSupervisor` is the source-neutral cancel/replace service:
+
+1. It loads only active groups for the asset named by a tick-size event.
+2. The repository atomically claims each matching group and rejects duplicate
+   or competing processing by event ID and optimistic revision.
+3. The order gateway receives only the exact `live_order_ids` persisted for
+   that group and its owning account.
+4. A partial cancellation is a failure and no replacement is submitted.
+   Confirmed cancellations are still persisted so the external side effect is
+   not lost.
+5. After complete cancellation, the desired price is aligned to the target
+   tick: BUY rounds down and SELL rounds up. The gateway submits the
+   replacement using the original market, side, and sizing data.
+6. Successful completion closes the old generation as `REPLACED`, inserts the
+   new generation as `LIVE`, and completes the event in one transaction. If
+   state persistence fails after placement, known replacement orders are
+   recorded as `UNKNOWN` on the failure path for later reconciliation.
+
+This checkpoint defines and tests the supervisor and its order-gateway
+contract only. It does not yet connect a real market-channel listener, scan
+remote open orders during reconciliation, apply the migration to a real
+database, or enable supervision in the production runner.
+
 ## Invariants
 
 - Sources have no dependency on strategies or execution.
@@ -123,5 +148,6 @@ The first adapters live in `cbr_trading.sources.cbr` and
   `PreparedExecutor` contract, including monitor-only operation;
 - legacy `PipelineOutcome` is now only a compatibility DTO for the existing
   JSON and Telegram format, not the runtime orchestration path;
-- the additive supervisor migration is defined but is not yet applied or
-  consumed by the production runner.
+- the additive supervisor migration and persistent supervisor are defined but
+  are not yet applied, connected to a real order gateway, or consumed by the
+  production runner.

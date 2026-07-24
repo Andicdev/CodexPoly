@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Mapping, Protocol, Sequence
 
 from cbr_trading.domain.intents import OrderLifecyclePolicy
-from cbr_trading.domain.results import ExecutionHandle
+from cbr_trading.domain.results import ExecutionHandle, PlacedOrder
 from cbr_trading.execution.order_group_state import (
     OrderGroupRecord,
     SupervisionClaim,
@@ -12,7 +12,7 @@ from cbr_trading.execution.order_supervisor import TickSizeChange
 
 
 class OrderGroupRepository(Protocol):
-    """Persistence boundary used by the future OrderSupervisor."""
+    """Persistence boundary used by the persistent OrderSupervisor."""
 
     def ensure_ready(self) -> None: ...
 
@@ -41,6 +41,16 @@ class OrderGroupRepository(Protocol):
         claim: SupervisionClaim,
         *,
         error: str,
+        cancelled_order_ids: Sequence[str] = (),
+        replacement_orders: Sequence[PlacedOrder] = (),
+    ) -> None: ...
+
+    def complete_reprice(
+        self,
+        claim: SupervisionClaim,
+        *,
+        cancelled_order_ids: Sequence[str],
+        replacement_orders: Sequence[PlacedOrder],
     ) -> None: ...
 
     def close(self) -> None: ...
