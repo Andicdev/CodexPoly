@@ -4,6 +4,10 @@ from cbr_trading.execution.cbr_warm_adapter import (
     CbrWarmPreparedExecutorAdapter,
     cbr_preparation_context,
 )
+from cbr_trading.execution.fallback_executors import (
+    DryRunPreparedExecutor,
+    UnavailablePreparedExecutor,
+)
 from cbr_trading.execution.order_supervisor import (
     OrderSupervisor,
     SupervisionResult,
@@ -20,6 +24,7 @@ from cbr_trading.execution.prepared_executor import (
 
 __all__ = [
     "CbrWarmPreparedExecutorAdapter",
+    "DryRunPreparedExecutor",
     "OrderSupervisor",
     "PreparationContext",
     "PreparationItem",
@@ -29,5 +34,6 @@ __all__ = [
     "SupervisionResult",
     "SupervisionStatus",
     "TickSizeChange",
+    "UnavailablePreparedExecutor",
     "cbr_preparation_context",
 ]

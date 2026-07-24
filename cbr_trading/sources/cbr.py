@@ -34,9 +34,17 @@ class CbrResolutionSource:
         self._discovery_client = discovery_client
         self._previous_rate_provider = previous_rate_provider
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._last_discovery: DiscoveryResult | None = None
+
+    @property
+    def last_discovery(self) -> DiscoveryResult | None:
+        """Last source-specific result, retained for compatibility reporting."""
+
+        return self._last_discovery
 
     def poll_once(self) -> tuple[ResolutionSignal, ...]:
         discovery = self._discovery_client.run_once()
+        self._last_discovery = discovery
         if not discovery.ok or discovery.new_rate is None:
             return ()
         signal = resolution_signal_from_discovery(

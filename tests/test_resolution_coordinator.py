@@ -20,6 +20,7 @@ from cbr_trading.domain import (
     ResolutionSignal,
 )
 from cbr_trading.execution import (
+    DryRunPreparedExecutor,
     PreparationContext,
     PreparationItem,
     PreparationStatus,
@@ -104,13 +105,14 @@ class _Strategy:
     ):
         self.strategy_id = strategy_id
         self.templates = tuple(
-            templates
-            or (
+            (
                 _template(
                     template_id=f"{strategy_id}:YES",
                     strategy_id=strategy_id,
                 ),
             )
+            if templates is None
+            else templates
         )
         self.evaluator = evaluator
         self.trace = trace
@@ -332,6 +334,27 @@ class ResolutionTradingCoordinatorTests(unittest.TestCase):
         self.assertEqual(outcome.status, CoordinationStatus.COMPLETED)
         self.assertEqual(outcome.intents, ())
         self.assertEqual(executor.execute_calls[0][0], ())
+
+    def test_explicit_monitor_only_mode_allows_zero_templates(self) -> None:
+        coordinator = ResolutionTradingCoordinator(
+            source=_Source([(_signal(),)]),
+            strategies=(
+                _Strategy(templates=(), evaluator=lambda _: ()),
+            ),
+            executor=DryRunPreparedExecutor(),
+            context=_context(),
+            allow_monitor_only=True,
+        )
+
+        preparation = coordinator.prepare()
+        outcome = coordinator.poll_once()
+
+        self.assertTrue(preparation.ready)
+        self.assertTrue(preparation.monitor_only)
+        self.assertEqual(preparation.templates, ())
+        self.assertEqual(outcome.status, CoordinationStatus.COMPLETED)
+        self.assertEqual(outcome.intents, ())
+        self.assertEqual(outcome.order_results, ())
 
     def test_context_source_mismatch_fails_before_executor_prepare(self) -> None:
         executor = _Executor()

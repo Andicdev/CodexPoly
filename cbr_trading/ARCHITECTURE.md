@@ -51,6 +51,10 @@ ResolutionTradingCoordinator
    errors, execution exceptions, and malformed execution results are terminal
    and are never retried automatically.
 
+An explicit monitor-only preparation is allowed when an event has no active
+order templates. It still resolves the source event through the same
+coordinator, but cannot submit an order.
+
 ## Invariants
 
 - Sources have no dependency on strategies or execution.
@@ -85,5 +89,11 @@ The first adapters live in `cbr_trading.sources.cbr` and
 - execution returns source-neutral results and an owned `order_group` handle;
 - the real CBR source and strategy have an end-to-end coordinator contract
   test;
-- the production runner still uses the original CBR DTOs until a separate
-  integration checkpoint, and no database schema has changed.
+- the CBR production runner now composes `CbrResolutionSource`,
+  `CbrRateDecisionStrategy`, `CbrWarmPreparedExecutorAdapter`, and
+  `ResolutionTradingCoordinator`;
+- dry-run and unavailable-trading branches implement the same
+  `PreparedExecutor` contract, including monitor-only operation;
+- legacy `PipelineOutcome` is now only a compatibility DTO for the existing
+  JSON and Telegram format, not the runtime orchestration path;
+- no database schema has changed.

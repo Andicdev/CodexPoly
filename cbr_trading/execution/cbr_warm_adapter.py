@@ -73,6 +73,7 @@ class CbrWarmPreparedExecutorAdapter:
         self._reserve_claims = bool(reserve_claims)
         self._context: PreparationContext | None = None
         self._prepared: dict[str, _PreparedTemplate] = {}
+        self._legacy_preparation: LivePreparationSummary | None = None
         self._prepared_ok = False
         self._execution_started = False
         self._closed = False
@@ -123,6 +124,7 @@ class CbrWarmPreparedExecutorAdapter:
             row.template.template_id: row
             for row in prepared
         }
+        self._legacy_preparation = legacy_summary
         self._prepared_ok = True
         return PreparationSummary(
             items=tuple(
@@ -135,6 +137,14 @@ class CbrWarmPreparedExecutorAdapter:
             ),
             context=context,
         )
+
+    @property
+    def legacy_preparation_summary(
+        self,
+    ) -> LivePreparationSummary | None:
+        """CBR-only metrics retained while the production runner migrates."""
+
+        return self._legacy_preparation
 
     def execute(
         self,

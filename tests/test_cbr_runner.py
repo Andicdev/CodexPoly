@@ -4,11 +4,15 @@ import io
 import json
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.live.runner_executor import LivePreparationError
+from cbr_trading.pipeline import PipelineOutcome
+from cbr_trading.release import build_predicted_release_url
 from cbr_trading.rule_repository import RuleLoadError
 from cbr_trading.settings import CbrSettings
 import cbr_trading.runner as runner
@@ -36,11 +40,12 @@ def _live_settings() -> CbrSettings:
 
 
 def _release() -> DiscoveryResult:
+    release_url = build_predicted_release_url()
     return DiscoveryResult(
         ok=True,
         reason="published",
-        url="https://www.cbr.ru/release",
-        request_url="https://www.cbr.ru/release?_ts=1",
+        url=release_url,
+        request_url=f"{release_url}&_ts=1",
         status_code=200,
         title=(
             "Bank of Russia cuts the key rate by 25 bp "
@@ -69,6 +74,112 @@ def _rule() -> dict:
 
 
 class RunnerRulePreloadTests(unittest.TestCase):
+    def test_not_published_keeps_discovery_result_shape(self) -> None:
+        output = io.StringIO()
+        release_url = build_predicted_release_url()
+        waiting = DiscoveryResult(
+            ok=False,
+            reason="not_published_yet",
+            url=release_url,
+            request_url=f"{release_url}&_ts=1",
+            status_code=404,
+        )
+        with (
+            patch.object(runner, "_load_dotenv_if_available"),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=_settings(),
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_rule()],
+            ),
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
+        ):
+            poller_class.return_value.run_once.return_value = waiting
+            exit_code = runner.main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "not_published_yet")
+        self.assertNotIn("order_results", payload)
+
+    def test_continuous_mode_uses_existing_until_published_poller(self) -> None:
+        output = io.StringIO()
+        settings = replace(_settings(), mode="live")
+        with (
+            patch.object(runner, "_load_dotenv_if_available"),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=settings,
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_rule()],
+            ),
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            redirect_stdout(output),
+        ):
+            poller = poller_class.return_value
+            poller.run_until_published.return_value = _release()
+            exit_code = runner.main()
+
+        self.assertEqual(exit_code, 0)
+        poller.run_until_published.assert_called_once_with()
+        poller.run_once.assert_not_called()
+
+    def test_telegram_receives_compatible_pipeline_outcome(self) -> None:
+        output = io.StringIO()
+        settings = replace(
+            _settings(),
+            telegram_enabled=True,
+            telegram_bot_token="configured",
+            telegram_chat_id="configured",
+        )
+        with (
+            patch.object(runner, "_load_dotenv_if_available"),
+            patch.object(
+                runner.CbrSettings,
+                "from_env",
+                return_value=settings,
+            ),
+            patch.object(
+                runner.SqlAlchemyRuleRepository,
+                "load_active_cbr_rules",
+                return_value=[_rule()],
+            ),
+            patch.object(runner, "RequestsTransport"),
+            patch.object(runner, "CbrClient"),
+            patch.object(runner, "CbrPoller") as poller_class,
+            patch.object(runner, "TelegramNotifier") as notifier_class,
+            redirect_stdout(output),
+        ):
+            poller_class.return_value.run_once.return_value = _release()
+            notifier = notifier_class.return_value
+            notifier.notify_pipeline.return_value = SimpleNamespace(
+                message_id=7
+            )
+            exit_code = runner.main()
+
+        self.assertEqual(exit_code, 0)
+        notifier.notify_pipeline.assert_called_once()
+        outcome = notifier.notify_pipeline.call_args.args[0]
+        self.assertIsInstance(outcome, PipelineOutcome)
+        self.assertEqual(
+            notifier.notify_pipeline.call_args.kwargs,
+            {"dry_run": True},
+        )
+
     def test_database_failure_continues_without_trading(self) -> None:
         output = io.StringIO()
         with (
@@ -147,6 +258,28 @@ class RunnerRulePreloadTests(unittest.TestCase):
                     account_count=1,
                     outcome_count=2,
                     maximum_notional=20,
+                    prepared_orders=(
+                        SimpleNamespace(
+                            rule_id=1,
+                            rule_key="cbr_cut",
+                            account_name="main",
+                            condition_id="condition-1",
+                            outcome="YES",
+                            token_id="asset-yes",
+                            quantity=Decimal("100"),
+                            limit_price=Decimal("0.51"),
+                        ),
+                        SimpleNamespace(
+                            rule_id=1,
+                            rule_key="cbr_cut",
+                            account_name="main",
+                            condition_id="condition-1",
+                            outcome="NO",
+                            token_id="asset-no",
+                            quantity=Decimal("100"),
+                            limit_price=Decimal("0.51"),
+                        ),
+                    ),
                 )
 
             def execute(

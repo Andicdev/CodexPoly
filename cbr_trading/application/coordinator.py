@@ -48,16 +48,25 @@ class CoordinationPreparation:
     context: PreparationContext
     templates: tuple[OrderTemplate, ...]
     summary: PreparationSummary
+    monitor_only: bool = False
     error: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "templates", tuple(self.templates))
+        if self.monitor_only and (
+            self.templates or self.summary.items
+        ):
+            raise ValueError(
+                "monitor-only preparation cannot contain order templates"
+            )
         error = str(self.error or "").strip() or None
         object.__setattr__(self, "error", error)
 
     @property
     def ready(self) -> bool:
-        return self.error is None and self.summary.ready
+        return self.error is None and (
+            self.summary.ready or self.monitor_only
+        )
 
 
 @dataclass(frozen=True)
@@ -113,11 +122,13 @@ class ResolutionTradingCoordinator:
         strategies: Sequence[Strategy],
         executor: PreparedExecutor,
         context: PreparationContext,
+        allow_monitor_only: bool = False,
     ):
         self._source = source
         self._strategies = tuple(strategies)
         self._executor = executor
         self._context = context
+        self._allow_monitor_only = bool(allow_monitor_only)
         self._state = CoordinatorState.CREATED
         self._preparation: CoordinationPreparation | None = None
         self._templates_by_id: dict[str, OrderTemplate] = {}
@@ -157,19 +168,22 @@ class ResolutionTradingCoordinator:
                 context=self._context,
                 templates=templates,
                 summary=summary,
+                monitor_only=False,
                 error=error,
             )
             self._preparation = preparation
             self._state = CoordinatorState.FAILED
             return preparation
 
+        monitor_only = self._allow_monitor_only and not templates
         error = None
-        if not summary.ready:
+        if not summary.ready and not monitor_only:
             error = "executor_preparation_not_ready"
         preparation = CoordinationPreparation(
             context=self._context,
             templates=templates,
             summary=summary,
+            monitor_only=monitor_only,
             error=error,
         )
         self._preparation = preparation
@@ -319,7 +333,7 @@ class ResolutionTradingCoordinator:
                 strategy_template_ids.add(template.template_id)
             ids_by_strategy[strategy_id] = strategy_template_ids
 
-        if not templates:
+        if not templates and not self._allow_monitor_only:
             raise ValueError("no_order_templates_configured")
         self._templates_by_id = templates_by_id
         self._template_ids_by_strategy = ids_by_strategy
