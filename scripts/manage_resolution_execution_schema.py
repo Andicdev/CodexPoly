@@ -176,6 +176,38 @@ def _snapshot(database_url: str) -> dict[str, Any]:
                 if claims_exists
                 else None
             )
+            claims_by_status = (
+                {
+                    str(row["status"]): int(row["count"])
+                    for row in connection.execute(
+                        text(
+                            """
+                            SELECT status, count(*) AS count
+                            FROM resolution_execution_claims
+                            GROUP BY status
+                            ORDER BY status
+                            """
+                        )
+                    ).mappings()
+                }
+                if claims_exists
+                else {}
+            )
+            claims_with_cleanup = (
+                int(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT count(*)
+                            FROM resolution_execution_claims
+                            WHERE result ? 'smoke_cleanup'
+                            """
+                        )
+                    ).scalar_one()
+                )
+                if claims_exists
+                else None
+            )
     finally:
         engine.dispose()
     return {
@@ -183,6 +215,8 @@ def _snapshot(database_url: str) -> dict[str, Any]:
         "legacy_columns": legacy_columns,
         "claims_exists": claims_exists,
         "claims_rows": claims_rows,
+        "claims_by_status": claims_by_status,
+        "claims_with_cleanup": claims_with_cleanup,
     }
 
 

@@ -60,3 +60,7 @@ before/after checkpoint confirmed:
 - `SqlAlchemyResolutionExecutionLedger.ensure_ready()` passed;
 - the separately counted legacy schema remained at 58 tables and 815 columns
   before and after migration 003.
+
+After the controlled live smoke test, a read-only aggregate audit showed one
+`EXECUTED` claim and one claim containing `smoke_cleanup`; no pending or error
+claim remained.
