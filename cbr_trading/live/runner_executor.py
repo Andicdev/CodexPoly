@@ -40,11 +40,24 @@ class LivePreparationError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class LivePreparedOrderSummary:
+    rule_id: int | str | None
+    rule_key: str
+    account_name: str
+    condition_id: str
+    outcome: str
+    token_id: str
+    quantity: Decimal
+    limit_price: Decimal
+
+
+@dataclass(frozen=True)
 class LivePreparationSummary:
     rule_count: int
     account_count: int
     outcome_count: int
     maximum_notional: Decimal
+    prepared_orders: tuple[LivePreparedOrderSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -293,6 +306,19 @@ class WarmLiveOrderExecutor:
             ),
             outcome_count=len(self._prepared),
             maximum_notional=maximum_total_notional,
+            prepared_orders=tuple(
+                LivePreparedOrderSummary(
+                    rule_id=prepared.rule_id,
+                    rule_key=prepared.rule_key,
+                    account_name=prepared.account.name,
+                    condition_id=prepared.condition_id,
+                    outcome=prepared.outcome,
+                    token_id=prepared.token_id,
+                    quantity=prepared.quantity,
+                    limit_price=prepared.limit_price,
+                )
+                for prepared in self._prepared.values()
+            ),
         )
 
     def execute(

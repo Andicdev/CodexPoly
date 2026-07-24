@@ -6,6 +6,7 @@ from cbr_trading.sources.cbr import (
     CBR_KEY_RATE_TARGET_METRIC,
     CBR_SOURCE_NAME,
     CbrResolutionSource,
+    cbr_signal_id_for_url,
     resolution_signal_from_discovery,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "CBR_SOURCE_NAME",
     "CbrResolutionSource",
     "Source",
+    "cbr_signal_id_for_url",
     "resolution_signal_from_discovery",
 ]

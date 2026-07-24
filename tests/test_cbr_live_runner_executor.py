@@ -247,6 +247,11 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(summary.account_count, 1)
         self.assertEqual(summary.outcome_count, 2)
         self.assertEqual(summary.maximum_notional, Decimal("20.0"))
+        self.assertEqual(len(summary.prepared_orders), 2)
+        self.assertEqual(
+            {item.token_id for item in summary.prepared_orders},
+            {"token-yes", "token-no"},
+        )
         self.assertEqual(repository.loads, 1)
         self.assertEqual(ledger.ready_checks, 1)
         self.assertTrue(result.success)

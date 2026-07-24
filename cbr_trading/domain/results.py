@@ -12,6 +12,8 @@ class ExecutionStatus(str, Enum):
     DRY_RUN = "DRY_RUN"
     SUBMITTED = "SUBMITTED"
     PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    AMBIGUOUS = "AMBIGUOUS"
     FAILED = "FAILED"
 
 
@@ -114,6 +116,13 @@ class OrderExecutionResult:
                 )
         if self.status == ExecutionStatus.DRY_RUN and self.attempted:
             raise ValueError("dry-run result must not be attempted")
+        if self.status in {
+            ExecutionStatus.REJECTED,
+            ExecutionStatus.AMBIGUOUS,
+        } and not self.attempted:
+            raise ValueError(
+                "rejected or ambiguous result requires an execution attempt"
+            )
 
         normalized_error = str(self.error or "").strip() or None
         object.__setattr__(self, "error", normalized_error)

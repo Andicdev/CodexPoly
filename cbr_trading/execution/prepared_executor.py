@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, Sequence
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol, Sequence
 
 from cbr_trading.domain.intents import OrderIntent, OrderTemplate
 from cbr_trading.domain.results import OrderExecutionResult
@@ -13,6 +14,28 @@ class PreparationStatus(str, Enum):
     READY = "READY"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class PreparationContext:
+    """Stable scope known before publication and shared with idempotency."""
+
+    scope_id: str
+    source: str
+    source_reference: str
+    attributes: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("scope_id", "source", "source_reference"):
+            normalized = str(getattr(self, name) or "").strip()
+            if not normalized:
+                raise ValueError(f"{name} is required")
+            object.__setattr__(self, name, normalized)
+        object.__setattr__(
+            self,
+            "attributes",
+            MappingProxyType(dict(self.attributes)),
+        )
 
 
 @dataclass(frozen=True)
@@ -47,6 +70,7 @@ class PreparationItem:
 @dataclass(frozen=True)
 class PreparationSummary:
     items: tuple[PreparationItem, ...]
+    context: PreparationContext | None = None
 
     def __post_init__(self) -> None:
         items = tuple(self.items)
@@ -69,6 +93,8 @@ class PreparedExecutor(Protocol):
     def prepare(
         self,
         templates: Sequence[OrderTemplate],
+        *,
+        context: PreparationContext,
     ) -> PreparationSummary: ...
 
     def execute(

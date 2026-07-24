@@ -76,7 +76,7 @@ def resolution_signal_from_discovery(
     preview = str(discovery.raw_preview or "").strip()
 
     return ResolutionSignal(
-        signal_id=_signal_id(canonical_url),
+        signal_id=cbr_signal_id_for_url(canonical_url),
         source=CBR_SOURCE_NAME,
         subject=CBR_KEY_RATE_SUBJECT,
         metric=CBR_KEY_RATE_TARGET_METRIC,
@@ -104,8 +104,11 @@ def resolution_signal_from_discovery(
     )
 
 
-def _signal_id(canonical_url: str) -> str:
-    digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
+def cbr_signal_id_for_url(canonical_url: str) -> str:
+    normalized_url = str(canonical_url or "").strip()
+    if not normalized_url:
+        raise ValueError("canonical_url is required")
+    digest = hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
     return f"cbr:key_rate:{digest}"
 
 
