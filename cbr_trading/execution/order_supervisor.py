@@ -17,6 +17,7 @@ class TickSizeChange:
     old_tick: Decimal
     new_tick: Decimal
     observed_at: datetime
+    source: str = "unknown"
 
     def __post_init__(self) -> None:
         event_id = self.event_id.strip()
@@ -25,6 +26,9 @@ class TickSizeChange:
             raise ValueError("event_id is required")
         if not asset_id:
             raise ValueError("asset_id is required")
+        source = str(self.source or "").strip()
+        if not source:
+            raise ValueError("source is required")
 
         old_tick = Decimal(str(self.old_tick))
         new_tick = Decimal(str(self.new_tick))
@@ -37,6 +41,7 @@ class TickSizeChange:
         object.__setattr__(self, "asset_id", asset_id)
         object.__setattr__(self, "old_tick", old_tick)
         object.__setattr__(self, "new_tick", new_tick)
+        object.__setattr__(self, "source", source)
         object.__setattr__(
             self,
             "observed_at",

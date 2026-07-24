@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from decimal import Decimal
 
@@ -606,6 +607,8 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(session.commits, 1)
         self.assertIn("status = 'REPRICING'", session.calls[1][0])
+        event_payload = json.loads(session.calls[0][1]["payload"])
+        self.assertEqual(event_payload["source"], "unknown")
 
     def test_duplicate_tick_event_is_not_claimed_twice(self) -> None:
         session = _Session(

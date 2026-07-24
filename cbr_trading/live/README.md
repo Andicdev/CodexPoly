@@ -104,6 +104,22 @@ against terminal source orders. Missing IDs, overlapping live generations, or
 sizing mismatches are quarantined for manual review; transient CLOB lookup
 failures remain retryable.
 
-Do not enable this path in production yet. The market-channel listener,
-explicit database migrations, recovery scheduling, and runner composition are
-separate checkpoints.
+The public `PolymarketMarketChannel` adapter is also implemented but not
+started by this runner. It subscribes to exact watched token IDs and sends a
+configured tick transition to the same supervisor when any of these proves
+the new tick:
+
+- the explicit WebSocket `tick_size_change` event;
+- `tick_size` on a full order-book event;
+- a nonzero real book or price-change level, such as `0.999`, that is invalid
+  at `0.01` and valid at the configured `0.001`.
+
+It never concludes that the old tick remains active merely because current
+prices happen to align to the old grid. The official SDK owns WebSocket
+heartbeat, reconnect, and subscription resend. A reusable periodic-book entry
+point feeds the same deduplicating detector, although no polling scheduler is
+started in this checkpoint.
+
+Do not enable this path in production yet. Active-watch loading, explicit
+database migration application, recovery scheduling, and runner composition
+are separate checkpoints.

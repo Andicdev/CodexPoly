@@ -10,6 +10,11 @@ from cbr_trading.live.market import (
     MarketSnapshot,
     PolymarketMarketGateway,
 )
+from cbr_trading.live.market_channel import (
+    MarketChannelError,
+    PolymarketMarketChannel,
+    PolymarketTickObservationAdapter,
+)
 from cbr_trading.live.safety import (
     LiveOrderPlan,
     LiveSafetySettings,
@@ -30,8 +35,11 @@ __all__ = [
     "LiveSafetySettings",
     "MarketPreflightError",
     "MarketSnapshot",
+    "MarketChannelError",
     "OrderGroupRepositoryError",
+    "PolymarketMarketChannel",
     "PolymarketMarketGateway",
+    "PolymarketTickObservationAdapter",
     "PolymarketSupervisionGatewayError",
     "PolymarketSupervisionOrderGateway",
     "SqlAlchemyOrderGroupRepository",

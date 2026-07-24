@@ -158,9 +158,48 @@ This distinction is intentional. A process can die after an exchange accepts
 an order but before its ID reaches the database. Without a persisted ID, an
 automatic replacement could duplicate exposure, so recovery fails closed.
 
-The live adapter and reconciliation scan are not composed into the production
-runner yet. This stage also does not connect a real market-channel listener,
-apply either migration to a real database, or enable supervision.
+### Market tick observation
+
+`TickSizeChangeDetector` is the source-neutral boundary between market data
+and `OrderSupervisor`. Each configured `TickSizeWatch` names exactly one
+policy-backed transition for an asset. It does not guess arbitrary tick sizes.
+An observation is actionable only when it matches that configured transition.
+
+The detector uses one stable event ID for an `asset + old_tick + new_tick`
+transition regardless of which transport observed it. It updates its in-memory
+current tick only after the supervisor call returns successfully. Therefore a
+WebSocket event and a later order-book snapshot cannot initiate the same
+transition twice, while a transient supervisor exception remains retryable.
+The observation source is stored in the existing supervision-event JSON
+payload; no schema change is required.
+
+`PolymarketMarketChannel` subscribes only to the watched outcome token IDs
+through the official public SDK. The SDK owns socket heartbeat, reconnect, and
+subscription-state resend. Synchronous supervisor work runs outside the async
+event loop so cancellation and remote inspection cannot block those socket
+tasks. Three forms of WebSocket evidence are accepted:
+
+- an explicit `tick_size_change` event whose reported old tick, when present,
+  matches the detector's current tick;
+- the explicit `tick_size` field on a full `book` event;
+- a live `book` or `price_change` level whose price is invalid on the current
+  grid but valid on the configured finer grid.
+
+A zero-size price change is a removed level and is not evidence. Prices that
+remain valid on the old grid are also not evidence of the old tick, because a
+finer market can still contain such prices. This intentionally supports the
+case where the explicit tick event is missed but a real `0.999` bid or ask is
+observed while the configured transition is `0.01 -> 0.001`.
+
+The same adapter exposes `observation_for_book(..., source=PERIODIC_BOOK)` for
+a future periodic snapshot check. That fallback will feed the same detector
+instead of creating a second repricing path.
+
+The live adapters, market channel, and reconciliation scan are not composed
+into the production runner yet. Loading active watches from persistent order
+groups, recovery scheduling, runner lifecycle composition, applying the
+existing migrations to a real database, and enabling supervision remain
+separate checkpoints.
 
 ## Invariants
 
@@ -182,6 +221,11 @@ apply either migration to a real database, or enable supervision.
   `order_group`; legacy asset-wide ownership is never inferred.
 - A replacement is never submitted from a pre-cancel snapshot alone. A
   post-cancel terminal snapshot is mandatory for every order that was open.
+- A book price can confirm only a preconfigured finer tick. Aligned prices
+  cannot prove that the old tick is still active, and market data never
+  invents an unconfigured transition.
+- Tick observation state is committed only after supervisor dispatch returns;
+  transport-specific duplicate observations share one transition event ID.
 
 ## Compatibility checkpoint
 
@@ -214,4 +258,7 @@ The first adapters live in `cbr_trading.sources.cbr` and
   are not yet applied or consumed by the production runner;
 - the official Polymarket supervision gateway is implemented and tested with
   fake authenticated clients, but is not instantiated by the runner and has
-  made no real cancellation or placement.
+  made no real cancellation or placement;
+- the official public market-channel adapter, strict book-level inference, and
+  source-neutral tick detector are implemented and tested, but active watches
+  are not yet loaded or started by the runner.

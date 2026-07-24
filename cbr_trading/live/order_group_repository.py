@@ -1555,6 +1555,7 @@ def _event_params(
                 "old_tick": str(event.old_tick),
                 "new_tick": str(event.new_tick),
                 "observed_at": event.observed_at.isoformat(),
+                "source": event.source,
             },
             ensure_ascii=False,
         ),
