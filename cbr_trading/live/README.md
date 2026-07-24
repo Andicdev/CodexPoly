@@ -70,14 +70,18 @@ python -m cbr_trading.live `
   --action NO `
   --quantity 5 `
   --limit-price 0.10 `
-  --confirm-live-order
+  --confirm-live-order `
+  --cancel-after-test
 ```
 
 The live switch and all safety caps must be armed. Quantity, price, rule,
 action, confirmation, and a 3-64 character test id are mandatory. The test id
 is part of persistent idempotency: rerunning the same command with the same id
 fails before submission instead of placing a duplicate. Use a new id only for
-an intentionally new real test.
+an intentionally new real test. The cleanup flag is also mandatory. After an
+accepted submission, the utility inspects and, if needed, cancels only the
+exact returned order ID. Success requires a final authenticated observation of
+either `CANCELLED` or `FILLED`; a missing or unknown final state fails closed.
 
 The continuous runner prepares, signs, and persistently reserves all possible
 orders before polling. After the release it evaluates the rules and immediately

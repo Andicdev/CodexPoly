@@ -6,8 +6,9 @@ import unittest
 from contextlib import redirect_stdout
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from cbr_trading.execution import RemoteOrderState
 from cbr_trading.live.account_repository import TradingAccountRecord
 from cbr_trading.live.market import MarketSnapshot
 from cbr_trading.live.safety import LiveSafetySettings
@@ -274,6 +275,7 @@ class FullPathLiveTestCliTests(unittest.TestCase):
                     "--limit-price",
                     "0.10",
                     "--confirm-live-order",
+                    "--cancel-after-test",
                 ]
             )
 
@@ -302,6 +304,46 @@ class FullPathLiveTestCliTests(unittest.TestCase):
             close=lambda: None,
         )
         captured: dict[str, object] = {}
+        inspections = iter(
+            (
+                SimpleNamespace(
+                    snapshots=(
+                        SimpleNamespace(
+                            state=RemoteOrderState.OPEN,
+                        ),
+                    ),
+                    failed_order_ids=(),
+                ),
+                SimpleNamespace(
+                    snapshots=(
+                        SimpleNamespace(
+                            state=RemoteOrderState.CANCELLED,
+                        ),
+                    ),
+                    failed_order_ids=(),
+                ),
+            )
+        )
+
+        class FakeCleanupGateway:
+            def __init__(self, **kwargs: object):
+                captured["cleanup_database_url"] = kwargs[
+                    "database_url"
+                ]
+                captured["cleanup_safety"] = kwargs["safety"]
+
+            def inspect_orders(self, **kwargs: object) -> object:
+                captured.setdefault("inspections", []).append(kwargs)
+                return next(inspections)
+
+            def cancel_orders(self, **kwargs: object) -> object:
+                captured["cancellation"] = kwargs
+                return SimpleNamespace(
+                    cancelled_order_ids=("order-123",),
+                )
+
+            def close(self) -> None:
+                captured["cleanup_closed"] = True
 
         class FakeExecutor:
             def __init__(self, **kwargs: object):
@@ -369,6 +411,11 @@ class FullPathLiveTestCliTests(unittest.TestCase):
                 "WarmLiveOrderExecutor",
                 side_effect=FakeExecutor,
             ),
+            patch.object(
+                cli,
+                "PolymarketSupervisionOrderGateway",
+                side_effect=FakeCleanupGateway,
+            ),
             redirect_stdout(output),
         ):
             exit_code = cli.main(
@@ -385,6 +432,7 @@ class FullPathLiveTestCliTests(unittest.TestCase):
                     "--limit-price",
                     "0.10",
                     "--confirm-live-order",
+                    "--cancel-after-test",
                 ]
             )
 
@@ -393,6 +441,24 @@ class FullPathLiveTestCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["prepared_outcomes"], 2)
         self.assertEqual(payload["result"]["order_id"], "order-123")
+        self.assertTrue(payload["cleanup"]["confirmed_terminal"])
+        self.assertTrue(payload["cleanup"]["cancel_requested"])
+        self.assertTrue(payload["cleanup"]["cancel_acknowledged"])
+        self.assertEqual(
+            payload["cleanup"]["initial_state"],
+            "OPEN",
+        )
+        self.assertEqual(
+            payload["cleanup"]["final_state"],
+            "CANCELLED",
+        )
+        self.assertEqual(
+            captured["cancellation"],
+            {
+                "account_name": "KinderSman",
+                "order_ids": ("order-123",),
+            },
+        )
         self.assertEqual(
             captured["prepared_url"],
             "cbr-live-test://smoke-001",
@@ -416,6 +482,136 @@ class FullPathLiveTestCliTests(unittest.TestCase):
             "cbr-live-test://smoke-001",
         )
         self.assertTrue(captured["closed"])
+        self.assertTrue(captured["cleanup_closed"])
+
+    def test_full_path_live_test_requires_exact_cleanup_opt_in(
+        self,
+    ) -> None:
+        error = io.StringIO()
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+            ) as repository_class,
+            patch("sys.stderr", error),
+        ):
+            exit_code = cli.main(
+                [
+                    "--full-path-live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--rule-id",
+                    "102",
+                    "--action",
+                    "NO",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.10",
+                    "--confirm-live-order",
+                ]
+            )
+
+        payload = json.loads(error.getvalue())
+        self.assertEqual(exit_code, 4)
+        self.assertFalse(payload["order_submitted"])
+        self.assertIn("--cancel-after-test", payload["error"])
+        repository_class.assert_not_called()
+
+    def test_cleanup_accepts_an_immediate_full_fill(self) -> None:
+        cancel_orders = Mock()
+        gateway = SimpleNamespace(
+            inspect_orders=lambda **_kwargs: SimpleNamespace(
+                snapshots=(
+                    SimpleNamespace(
+                        state=RemoteOrderState.FILLED,
+                    ),
+                ),
+                failed_order_ids=(),
+            ),
+            cancel_orders=cancel_orders,
+            close=lambda: None,
+        )
+        with patch.object(
+            cli,
+            "PolymarketSupervisionOrderGateway",
+            return_value=gateway,
+        ):
+            cleanup = cli._cleanup_full_path_test_order(
+                database_url="postgresql://unused",
+                safety=_armed_safety(),
+                account_name="KinderSman",
+                order_id="order-filled",
+            )
+
+        self.assertTrue(cleanup["confirmed_terminal"])
+        self.assertFalse(cleanup["cancel_requested"])
+        self.assertEqual(cleanup["final_state"], "FILLED")
+        cancel_orders.assert_not_called()
+
+    def test_cleanup_fails_closed_when_final_state_is_unknown(
+        self,
+    ) -> None:
+        inspections = iter(
+            (
+                SimpleNamespace(
+                    snapshots=(),
+                    failed_order_ids=("order-unknown",),
+                ),
+                SimpleNamespace(
+                    snapshots=(
+                        SimpleNamespace(
+                            state=RemoteOrderState.UNKNOWN,
+                        ),
+                    ),
+                    failed_order_ids=(),
+                ),
+            )
+        )
+        gateway = SimpleNamespace(
+            inspect_orders=lambda **_kwargs: next(inspections),
+            cancel_orders=lambda **_kwargs: SimpleNamespace(
+                cancelled_order_ids=("order-unknown",),
+            ),
+            close=lambda: None,
+        )
+        with patch.object(
+            cli,
+            "PolymarketSupervisionOrderGateway",
+            return_value=gateway,
+        ):
+            cleanup = cli._cleanup_full_path_test_order(
+                database_url="postgresql://unused",
+                safety=_armed_safety(),
+                account_name="KinderSman",
+                order_id="order-unknown",
+            )
+
+        self.assertFalse(cleanup["confirmed_terminal"])
+        self.assertTrue(cleanup["cancel_requested"])
+        self.assertEqual(cleanup["final_state"], "UNKNOWN")
+        self.assertIn("not confirmed", cleanup["error"])
+
+
+def _armed_safety() -> LiveSafetySettings:
+    return LiveSafetySettings(
+        trading_enabled=True,
+        post_only=False,
+        allowed_account="KinderSman",
+        max_order_quantity=Decimal("10"),
+        max_notional=Decimal("10"),
+        max_total_notional=Decimal("10"),
+        accounts_master_key="present",
+    )
 
 
 if __name__ == "__main__":

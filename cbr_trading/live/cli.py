@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.db_config import resolve_database_selection
+from cbr_trading.execution import RemoteOrderState
 from cbr_trading.live.account_repository import (
     SqlAlchemyTradingAccountRepository,
     TradingAccountLoadError,
@@ -27,6 +28,9 @@ from cbr_trading.live.runner_executor import WarmLiveOrderExecutor
 from cbr_trading.live.safety import (
     LiveSafetySettings,
     build_live_order_plan,
+)
+from cbr_trading.live.supervision_gateway import (
+    PolymarketSupervisionOrderGateway,
 )
 from cbr_trading.pipeline import OrderIntent
 from cbr_trading.release import build_predicted_release_url
@@ -328,6 +332,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "immediately and that any remainder can fill later."
         ),
     )
+    parser.add_argument(
+        "--cancel-after-test",
+        action="store_true",
+        help=(
+            "Required for --full-path-live-test. Inspect and cancel only "
+            "the exact returned order ID, then require a terminal remote "
+            "state before reporting success."
+        ),
+    )
     return parser
 
 
@@ -483,8 +496,29 @@ def _run_full_path_live_test(
         return 5
 
     result = results[0]
+    cleanup = _unused_live_test_cleanup(result=result)
+    if result.order_id:
+        cleanup = _cleanup_full_path_test_order(
+            database_url=database_url,
+            safety=safety,
+            account_name=intent.account_name,
+            order_id=str(result.order_id),
+        )
+    elif result.success is True:
+        cleanup = {
+            **cleanup,
+            "confirmed_terminal": False,
+            "error": (
+                "Accepted test order has no order ID for exact cleanup"
+            ),
+        }
+
+    succeeded = (
+        result.success is True
+        and cleanup["confirmed_terminal"] is True
+    )
     payload = {
-        "ok": result.success is True,
+        "ok": succeeded,
         "mode": "full_path_live_test",
         "database_target": database_target,
         "test_run_id": test_run_id,
@@ -502,12 +536,13 @@ def _run_full_path_live_test(
             "order_id": result.order_id,
             "error": result.error,
         },
+        "cleanup": cleanup,
     }
     _print_json(
         payload,
-        stream=sys.stdout if result.success is True else sys.stderr,
+        stream=sys.stdout if succeeded else sys.stderr,
     )
-    return 0 if result.success is True else 5
+    return 0 if succeeded else 5
 
 
 def _validate_full_path_live_test_args(
@@ -516,6 +551,11 @@ def _validate_full_path_live_test_args(
     if not args.confirm_live_order:
         return (
             "--confirm-live-order is required with "
+            "--full-path-live-test"
+        )
+    if not args.cancel_after_test:
+        return (
+            "--cancel-after-test is required with "
             "--full-path-live-test"
         )
     if args.rule_id is None:
@@ -533,6 +573,138 @@ def _validate_full_path_live_test_args(
             "letters, digits, dot, underscore, or dash"
         )
     return None
+
+
+def _unused_live_test_cleanup(*, result: Any) -> dict[str, Any]:
+    no_remote_order = (
+        result.success is not True
+        and not str(result.order_id or "").strip()
+    )
+    return {
+        "required": True,
+        "attempted": False,
+        "cancel_requested": False,
+        "cancel_acknowledged": False,
+        "initial_state": None,
+        "final_state": None,
+        "confirmed_terminal": no_remote_order,
+        "error": None,
+    }
+
+
+def _cleanup_full_path_test_order(
+    *,
+    database_url: str,
+    safety: LiveSafetySettings,
+    account_name: str,
+    order_id: str,
+) -> dict[str, Any]:
+    gateway = PolymarketSupervisionOrderGateway(
+        database_url=database_url,
+        safety=safety,
+    )
+    initial_state: RemoteOrderState | None = None
+    final_state: RemoteOrderState | None = None
+    cancel_requested = False
+    cancel_acknowledged = False
+    failure_types: list[str] = []
+    terminal_states = {
+        RemoteOrderState.CANCELLED,
+        RemoteOrderState.FILLED,
+    }
+    try:
+        try:
+            initial = gateway.inspect_orders(
+                account_name=account_name,
+                order_ids=(order_id,),
+            )
+            initial_state = _single_inspection_state(initial)
+        except Exception as exc:
+            failure_types.append(
+                "initial inspection " + type(exc).__name__
+            )
+
+        final_state = initial_state
+        if initial_state not in terminal_states:
+            cancel_requested = True
+            try:
+                cancellation = gateway.cancel_orders(
+                    account_name=account_name,
+                    order_ids=(order_id,),
+                )
+                cancel_acknowledged = (
+                    order_id in cancellation.cancelled_order_ids
+                )
+                if not cancel_acknowledged:
+                    failure_types.append("cancellation not acknowledged")
+            except Exception as exc:
+                failure_types.append(
+                    "cancellation " + type(exc).__name__
+                )
+
+            try:
+                final = gateway.inspect_orders(
+                    account_name=account_name,
+                    order_ids=(order_id,),
+                )
+                final_state = _single_inspection_state(final)
+                if final_state is None:
+                    failure_types.append(
+                        "final inspection not confirmed"
+                    )
+            except Exception as exc:
+                final_state = None
+                failure_types.append(
+                    "final inspection " + type(exc).__name__
+                )
+    finally:
+        try:
+            gateway.close()
+        except Exception as exc:
+            failure_types.append("gateway close " + type(exc).__name__)
+
+    confirmed_terminal = final_state in terminal_states
+    error = None
+    if not confirmed_terminal:
+        error = redact_sensitive_text(
+            "Exact-order cleanup was not confirmed"
+            + (
+                ": " + "; ".join(dict.fromkeys(failure_types))
+                if failure_types
+                else ""
+            )
+        )
+    return {
+        "required": True,
+        "attempted": True,
+        "cancel_requested": cancel_requested,
+        "cancel_acknowledged": cancel_acknowledged,
+        "initial_state": _remote_state_value(initial_state),
+        "final_state": _remote_state_value(final_state),
+        "confirmed_terminal": confirmed_terminal,
+        "error": error,
+    }
+
+
+def _single_inspection_state(
+    inspection: Any,
+) -> RemoteOrderState | None:
+    snapshots = tuple(inspection.snapshots)
+    failed = tuple(inspection.failed_order_ids)
+    if failed or len(snapshots) != 1:
+        return None
+    state = snapshots[0].state
+    return (
+        state
+        if isinstance(state, RemoteOrderState)
+        else RemoteOrderState(str(state).upper())
+    )
+
+
+def _remote_state_value(
+    state: RemoteOrderState | None,
+) -> str | None:
+    return state.value if state is not None else None
 
 
 def _with_order_overrides(
