@@ -234,6 +234,152 @@ class SupervisionClaim:
         object.__setattr__(self, "reason", reason)
 
 
+@dataclass(frozen=True)
+class RecoveryOrderRecord:
+    order_id: str
+    generation: int
+    status: TrackedOrderStatus
+    quantity: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        order_id = str(self.order_id or "").strip()
+        if not order_id:
+            raise ValueError("order_id is required")
+        if (
+            isinstance(self.generation, bool)
+            or not isinstance(self.generation, int)
+            or self.generation < 0
+        ):
+            raise ValueError("generation cannot be negative")
+        if not isinstance(self.status, TrackedOrderStatus):
+            object.__setattr__(
+                self,
+                "status",
+                TrackedOrderStatus(str(self.status).upper()),
+            )
+        quantity = self.quantity
+        if quantity is not None:
+            quantity = Decimal(str(quantity))
+            if not quantity.is_finite() or quantity <= 0:
+                raise ValueError("quantity must be positive")
+        object.__setattr__(self, "order_id", order_id)
+        object.__setattr__(self, "quantity", quantity)
+
+
+@dataclass(frozen=True)
+class ReconciliationCandidate:
+    group: OrderGroupRecord
+    orders: tuple[RecoveryOrderRecord, ...]
+    interrupted_event_id: str | None = None
+    interrupted_event_status: SupervisionEventStatus | None = None
+    interrupted_claimed_revision: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.group, OrderGroupRecord):
+            raise TypeError("group must be an OrderGroupRecord")
+        if self.group.status not in {
+            OrderGroupStatus.FAILED,
+            OrderGroupStatus.REPRICING,
+        }:
+            raise ValueError(
+                "reconciliation candidate must be failed or repricing"
+            )
+        orders = tuple(self.orders)
+        if not orders or any(
+            not isinstance(order, RecoveryOrderRecord)
+            for order in orders
+        ):
+            raise ValueError(
+                "reconciliation candidate requires tracked orders"
+            )
+        order_ids = tuple(order.order_id for order in orders)
+        if len(order_ids) != len(set(order_ids)):
+            raise ValueError(
+                "reconciliation candidate order ids must be unique"
+            )
+        allowed_generations = {
+            self.group.reprice_count,
+            self.group.reprice_count + 1,
+        }
+        if any(
+            order.generation not in allowed_generations
+            for order in orders
+        ):
+            raise ValueError(
+                "reconciliation candidate contains an unrelated generation"
+            )
+        if not any(
+            order.generation == self.group.reprice_count
+            for order in orders
+        ):
+            raise ValueError(
+                "reconciliation candidate has no source generation"
+            )
+
+        event_id = (
+            str(self.interrupted_event_id or "").strip()
+            or None
+        )
+        event_status = self.interrupted_event_status
+        claimed_revision = self.interrupted_claimed_revision
+        if claimed_revision is not None:
+            if isinstance(claimed_revision, bool):
+                raise ValueError(
+                    "interrupted claimed revision must be positive"
+                )
+            claimed_revision = int(claimed_revision)
+            if claimed_revision < 1:
+                raise ValueError(
+                    "interrupted claimed revision must be positive"
+                )
+        if event_status is not None and not isinstance(
+            event_status,
+            SupervisionEventStatus,
+        ):
+            event_status = SupervisionEventStatus(
+                str(event_status).upper()
+            )
+        if event_id is None:
+            if event_status is not None or claimed_revision is not None:
+                raise ValueError(
+                    "interrupted event details require an event id"
+                )
+        else:
+            if event_status not in {
+                SupervisionEventStatus.CLAIMED,
+                SupervisionEventStatus.FAILED,
+            }:
+                raise ValueError(
+                    "interrupted event must be claimed or failed"
+                )
+            if (
+                event_status == SupervisionEventStatus.CLAIMED
+                and (
+                    claimed_revision is None
+                    or claimed_revision < 1
+                )
+            ):
+                raise ValueError(
+                    "claimed interrupted event requires a revision"
+                )
+        object.__setattr__(self, "orders", orders)
+        object.__setattr__(
+            self,
+            "interrupted_event_id",
+            event_id,
+        )
+        object.__setattr__(
+            self,
+            "interrupted_event_status",
+            event_status,
+        )
+        object.__setattr__(
+            self,
+            "interrupted_claimed_revision",
+            claimed_revision,
+        )
+
+
 def registration_from_handle(
     handle: ExecutionHandle,
     *,

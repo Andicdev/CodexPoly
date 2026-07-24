@@ -96,6 +96,14 @@ and after cancellation. Replacement uses only the final unfilled quantity; a
 full fill creates no replacement, and an unconfirmed post-cancel state fails
 closed.
 
-Do not enable this path in production yet. The background recovery scan,
-market-channel listener, explicit database migrations, and runner composition
-are separate checkpoints.
+The supervisor also has a bounded background recovery scan for stale
+`REPRICING` and `FAILED` groups. It only reads exact persisted order IDs and
+never cancels or submits an order during recovery. A persisted `UNKNOWN`
+replacement can be promoted only after its price and size are verified
+against terminal source orders. Missing IDs, overlapping live generations, or
+sizing mismatches are quarantined for manual review; transient CLOB lookup
+failures remain retryable.
+
+Do not enable this path in production yet. The market-channel listener,
+explicit database migrations, recovery scheduling, and runner composition are
+separate checkpoints.

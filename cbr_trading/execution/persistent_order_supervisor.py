@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Sequence
+from typing import Callable, Mapping, Sequence
 
 from cbr_trading.domain.intents import OrderLifecyclePolicy
 from cbr_trading.domain.results import ExecutionHandle, PlacedOrder
@@ -11,7 +12,10 @@ from cbr_trading.execution.order_group_repository import (
 )
 from cbr_trading.execution.order_group_state import (
     OrderGroupRecord,
+    ReconciliationCandidate,
+    RecoveryOrderRecord,
     SupervisionClaim,
+    TrackedOrderStatus,
 )
 from cbr_trading.execution.order_supervisor import (
     SupervisionResult,
@@ -40,16 +44,44 @@ class OrderSupervisorError(RuntimeError):
 
 
 class PersistentOrderSupervisor:
-    """Claim, cancel, replace, and persist one owned order group at a time."""
+    """Persist tick repricing and recover tracked interrupted order groups."""
 
     def __init__(
         self,
         *,
         repository: OrderGroupRepository,
         gateway: SupervisionOrderGateway,
+        reconciliation_stale_after: timedelta = timedelta(
+            minutes=5
+        ),
+        reconciliation_batch_size: int = 100,
+        clock: Callable[[], datetime] | None = None,
     ):
+        if (
+            not isinstance(reconciliation_stale_after, timedelta)
+            or reconciliation_stale_after <= timedelta(0)
+        ):
+            raise ValueError(
+                "reconciliation_stale_after must be positive"
+            )
+        if (
+            isinstance(reconciliation_batch_size, bool)
+            or not isinstance(reconciliation_batch_size, int)
+            or reconciliation_batch_size < 1
+            or reconciliation_batch_size > 1000
+        ):
+            raise ValueError(
+                "reconciliation_batch_size must be between 1 and 1000"
+            )
         self._repository = repository
         self._gateway = gateway
+        self._reconciliation_stale_after = (
+            reconciliation_stale_after
+        )
+        self._reconciliation_batch_size = (
+            reconciliation_batch_size
+        )
+        self._clock = clock or _utc_now
         self._lock = threading.RLock()
         self._closed = False
 
@@ -91,11 +123,33 @@ class PersistentOrderSupervisor:
             )
 
     def reconcile(self) -> tuple[SupervisionResult, ...]:
-        """Background recovery is separate; tick repricing reconciles inline."""
-
         with self._lock:
             self._require_open()
-            return ()
+            observed_at = _aware_utc(
+                self._clock(),
+                name="reconciliation clock",
+            )
+            try:
+                candidates = tuple(
+                    self._repository.load_reconciliation_candidates(
+                        stale_before=(
+                            observed_at
+                            - self._reconciliation_stale_after
+                        ),
+                        limit=self._reconciliation_batch_size,
+                    )
+                )
+            except Exception as exc:
+                raise OrderSupervisorError(
+                    redact_exception(exc)
+                ) from None
+            return tuple(
+                self._reconcile_candidate(
+                    candidate,
+                    observed_at=observed_at,
+                )
+                for candidate in candidates
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -381,6 +435,247 @@ class PersistentOrderSupervisor:
                 ),
             )
 
+    def _reconcile_candidate(
+        self,
+        candidate: ReconciliationCandidate,
+        *,
+        observed_at: datetime,
+    ) -> SupervisionResult:
+        if not isinstance(candidate, ReconciliationCandidate):
+            raise TypeError(
+                "repository returned an invalid reconciliation "
+                "candidate"
+            )
+        group = candidate.group
+        event_id = _reconciliation_event_id(candidate)
+        try:
+            claim = self._repository.claim_reconciliation(
+                candidate,
+                event_id=event_id,
+                observed_at=observed_at,
+            )
+        except Exception as exc:
+            return _reconciliation_result(
+                event_id,
+                group,
+                status=SupervisionStatus.FAILED,
+                error=redact_exception(exc),
+            )
+        if not claim.acquired:
+            return _reconciliation_result(
+                event_id,
+                group,
+                status=SupervisionStatus.IGNORED,
+                error=claim.reason,
+            )
+
+        observations: tuple[OrderObservation, ...] = ()
+        order_statuses: dict[str, TrackedOrderStatus] = {}
+        try:
+            order_ids = tuple(
+                order.order_id
+                for order in candidate.orders
+            )
+            inspection = self._gateway.inspect_orders(
+                account_name=group.registration.account_name,
+                order_ids=order_ids,
+            )
+            snapshots = _validated_inspection(
+                inspection,
+                requested_order_ids=order_ids,
+                group=group,
+            )
+            observations = tuple(
+                OrderObservation(
+                    phase=OrderObservationPhase.RECONCILE,
+                    snapshot=snapshot,
+                )
+                for snapshot in snapshots
+            )
+            order_statuses = {
+                snapshot.order_id: _tracked_status_for_snapshot(
+                    snapshot
+                )
+                for snapshot in snapshots
+            }
+            if inspection.failed_order_ids:
+                raise RuntimeError(
+                    inspection.error
+                    or "reconciliation_order_inspection_failed"
+                )
+            _require_known_states(snapshots)
+
+            snapshots_by_id = {
+                snapshot.order_id: snapshot
+                for snapshot in snapshots
+            }
+            source_orders = tuple(
+                order
+                for order in candidate.orders
+                if order.generation == group.reprice_count
+            )
+            replacement_orders = tuple(
+                order
+                for order in candidate.orders
+                if (
+                    order.generation
+                    == group.reprice_count + 1
+                )
+            )
+            if not replacement_orders:
+                return self._manual_review_result(
+                    claim,
+                    group=group,
+                    error=(
+                        "replacement_order_id_not_persisted;"
+                        "duplicate_replacement_cannot_be_excluded"
+                    ),
+                    order_statuses=order_statuses,
+                    observations=observations,
+                )
+
+            source_snapshots = tuple(
+                snapshots_by_id[order.order_id]
+                for order in source_orders
+            )
+            replacement_snapshots = tuple(
+                snapshots_by_id[order.order_id]
+                for order in replacement_orders
+            )
+            _validate_original_sizing(
+                source_snapshots,
+                group=group,
+            )
+            if any(
+                snapshot.state
+                not in {
+                    RemoteOrderState.CANCELLED,
+                    RemoteOrderState.FILLED,
+                }
+                for snapshot in source_snapshots
+            ):
+                return self._manual_review_result(
+                    claim,
+                    group=group,
+                    error=(
+                        "source_and_replacement_orders_are_not_"
+                        "safely_separated"
+                    ),
+                    order_statuses=order_statuses,
+                    observations=observations,
+                )
+
+            try:
+                _validate_recovered_replacement(
+                    group,
+                    source_orders=source_orders,
+                    source_snapshots=source_snapshots,
+                    replacement_orders=replacement_orders,
+                    replacement_snapshots=replacement_snapshots,
+                )
+            except (ArithmeticError, ValueError) as exc:
+                return self._manual_review_result(
+                    claim,
+                    group=group,
+                    error=redact_exception(exc),
+                    order_statuses=order_statuses,
+                    observations=observations,
+                )
+            for snapshot in source_snapshots:
+                order_statuses[snapshot.order_id] = (
+                    TrackedOrderStatus.FILLED
+                    if snapshot.state == RemoteOrderState.FILLED
+                    else TrackedOrderStatus.REPLACED
+                )
+
+            live_replacement_ids = tuple(
+                snapshot.order_id
+                for snapshot in replacement_snapshots
+                if snapshot.state == RemoteOrderState.OPEN
+            )
+            keep_active = (
+                bool(live_replacement_ids)
+                and group.reprice_count + 1
+                < group.registration.max_reprices
+            )
+            self._repository.complete_reconciliation(
+                claim,
+                order_statuses=order_statuses,
+                recovered_reprice=True,
+                keep_active=keep_active,
+                observations=observations,
+            )
+            cancelled_source_ids = tuple(
+                snapshot.order_id
+                for snapshot in source_snapshots
+                if snapshot.state == RemoteOrderState.CANCELLED
+            )
+            replacement_ids = tuple(
+                order.order_id
+                for order in replacement_orders
+            )
+            return _reconciliation_result(
+                event_id,
+                group,
+                status=(
+                    SupervisionStatus.REPLACED
+                    if live_replacement_ids
+                    else SupervisionStatus.COMPLETED
+                ),
+                cancelled_order_ids=cancelled_source_ids,
+                replacement_order_ids=replacement_ids,
+            )
+        except Exception as exc:
+            error = redact_exception(exc)
+            persistence_error = _fail_reconciliation_safely(
+                self._repository,
+                claim,
+                error=error,
+                order_statuses=order_statuses,
+                observations=observations,
+                manual_review=False,
+            )
+            if persistence_error is not None:
+                error = redact_sensitive_text(
+                    f"{error}; persistence={persistence_error}",
+                    max_length=500,
+                )
+            return _reconciliation_result(
+                event_id,
+                group,
+                status=SupervisionStatus.FAILED,
+                error=error,
+            )
+
+    def _manual_review_result(
+        self,
+        claim: SupervisionClaim,
+        *,
+        group: OrderGroupRecord,
+        error: str,
+        order_statuses: Mapping[str, TrackedOrderStatus],
+        observations: Sequence[OrderObservation],
+    ) -> SupervisionResult:
+        persistence_error = _fail_reconciliation_safely(
+            self._repository,
+            claim,
+            error=error,
+            order_statuses=order_statuses,
+            observations=observations,
+            manual_review=True,
+        )
+        if persistence_error is not None:
+            error = redact_sensitive_text(
+                f"{error}; persistence={persistence_error}",
+                max_length=500,
+            )
+        return _reconciliation_result(
+            claim.event_id,
+            group,
+            status=SupervisionStatus.FAILED,
+            error=error,
+        )
+
     def _require_open(self) -> None:
         if self._closed:
             raise OrderSupervisorError("order supervisor is closed")
@@ -492,6 +787,28 @@ def _fail_claim_safely(
         return redact_exception(exc)
 
 
+def _fail_reconciliation_safely(
+    repository: OrderGroupRepository,
+    claim: SupervisionClaim,
+    *,
+    error: str,
+    order_statuses: Mapping[str, TrackedOrderStatus],
+    observations: Sequence[OrderObservation],
+    manual_review: bool,
+) -> str | None:
+    try:
+        repository.fail_reconciliation(
+            claim,
+            error=error,
+            order_statuses=order_statuses,
+            observations=observations,
+            manual_review=manual_review,
+        )
+        return None
+    except Exception as exc:
+        return redact_exception(exc)
+
+
 def _failed_result(
     event: TickSizeChange,
     group: OrderGroupRecord,
@@ -507,6 +824,29 @@ def _failed_result(
         cancelled_order_ids=tuple(cancelled_order_ids),
         replacement_order_ids=tuple(replacement_order_ids),
         error=redact_sensitive_text(error, max_length=500),
+    )
+
+
+def _reconciliation_result(
+    event_id: str,
+    group: OrderGroupRecord,
+    *,
+    status: SupervisionStatus,
+    cancelled_order_ids: Sequence[str] = (),
+    replacement_order_ids: Sequence[str] = (),
+    error: str | None = None,
+) -> SupervisionResult:
+    return SupervisionResult(
+        event_id=event_id,
+        order_group_id=group.registration.order_group_id,
+        status=status,
+        cancelled_order_ids=tuple(cancelled_order_ids),
+        replacement_order_ids=tuple(replacement_order_ids),
+        error=(
+            redact_sensitive_text(error, max_length=500)
+            if error
+            else None
+        ),
     )
 
 
@@ -643,3 +983,130 @@ def _remaining_sizing(
     if remaining_notional == 0:
         return None, None
     return None, remaining_notional
+
+
+def _validate_recovered_replacement(
+    group: OrderGroupRecord,
+    *,
+    source_orders: Sequence[RecoveryOrderRecord],
+    source_snapshots: Sequence[RemoteOrderSnapshot],
+    replacement_orders: Sequence[RecoveryOrderRecord],
+    replacement_snapshots: Sequence[RemoteOrderSnapshot],
+) -> None:
+    if not source_orders or not replacement_orders:
+        raise ValueError(
+            "recovered reprice requires source and replacement orders"
+        )
+    registration = group.registration
+    if (
+        registration.side is None
+        or registration.desired_price is None
+        or registration.trigger_new_tick is None
+    ):
+        raise ValueError(
+            "order group lacks replacement order parameters"
+        )
+    target_price = replacement_price_for_tick(
+        registration.desired_price,
+        tick_size=registration.trigger_new_tick,
+        side=registration.side,
+    )
+    if any(
+        snapshot.limit_price != target_price
+        for snapshot in replacement_snapshots
+    ):
+        raise ValueError(
+            "recovered replacement price does not match target price"
+        )
+    tracked_by_id = {
+        order.order_id: order
+        for order in replacement_orders
+    }
+    for snapshot in replacement_snapshots:
+        tracked_quantity = tracked_by_id[
+            snapshot.order_id
+        ].quantity
+        if (
+            tracked_quantity is None
+            or tracked_quantity
+            != snapshot.original_quantity
+        ):
+            raise ValueError(
+                "recovered replacement quantity does not match "
+                "persisted order"
+            )
+
+    source_remaining_quantity = sum(
+        (
+            snapshot.remaining_quantity
+            for snapshot in source_snapshots
+            if snapshot.state == RemoteOrderState.CANCELLED
+        ),
+        Decimal("0"),
+    )
+    if registration.quantity is not None:
+        expected_quantity = source_remaining_quantity
+    elif registration.notional is not None:
+        remaining_notional = sum(
+            (
+                snapshot.remaining_quantity
+                * snapshot.limit_price
+                for snapshot in source_snapshots
+                if snapshot.state
+                == RemoteOrderState.CANCELLED
+            ),
+            Decimal("0"),
+        )
+        expected_quantity = remaining_notional / target_price
+    else:
+        raise ValueError("order group sizing is missing")
+    actual_quantity = sum(
+        (
+            snapshot.original_quantity
+            for snapshot in replacement_snapshots
+        ),
+        Decimal("0"),
+    )
+    if expected_quantity <= 0 or actual_quantity != expected_quantity:
+        raise ValueError(
+            "recovered replacement does not match final source "
+            "remainder"
+        )
+
+
+def _tracked_status_for_snapshot(
+    snapshot: RemoteOrderSnapshot,
+) -> TrackedOrderStatus:
+    return {
+        RemoteOrderState.OPEN: TrackedOrderStatus.LIVE,
+        RemoteOrderState.CANCELLED: (
+            TrackedOrderStatus.CANCELLED
+        ),
+        RemoteOrderState.FILLED: TrackedOrderStatus.FILLED,
+        RemoteOrderState.UNKNOWN: TrackedOrderStatus.UNKNOWN,
+    }[snapshot.state]
+
+
+def _reconciliation_event_id(
+    candidate: ReconciliationCandidate,
+) -> str:
+    group = candidate.group
+    return (
+        "reconcile:"
+        f"{group.registration.order_group_id}:"
+        f"{group.revision}"
+    )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware_utc(value: datetime, *, name: str) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(timezone.utc)

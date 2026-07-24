@@ -11,13 +11,18 @@ from cbr_trading.domain import (
     RepriceOnTickChange,
 )
 from cbr_trading.execution import (
+    OrderGroupRecord,
     OrderObservation,
     OrderObservationPhase,
     OrderGroupStatus,
+    ReconciliationCandidate,
+    RecoveryOrderRecord,
     RemoteOrderSnapshot,
     RemoteOrderState,
     SupervisionClaim,
+    SupervisionEventStatus,
     TickSizeChange,
+    TrackedOrderStatus,
     registration_from_handle,
 )
 from cbr_trading.live.order_group_repository import (
@@ -134,6 +139,78 @@ def _group_row(**overrides):
     }
     row.update(overrides)
     return row
+
+
+def _reconciliation_candidate(
+    *,
+    status: OrderGroupStatus = OrderGroupStatus.FAILED,
+    interrupted_status: SupervisionEventStatus = (
+        SupervisionEventStatus.FAILED
+    ),
+) -> ReconciliationCandidate:
+    return ReconciliationCandidate(
+        group=OrderGroupRecord(
+            registration=registration_from_handle(
+                _handle(),
+                policy=_policy(),
+            ),
+            status=status,
+            revision=2,
+            reprice_count=0,
+            live_order_ids=(),
+        ),
+        orders=(
+            RecoveryOrderRecord(
+                order_id="order-1",
+                generation=0,
+                status=TrackedOrderStatus.CANCELLED,
+                quantity=Decimal("25"),
+            ),
+            RecoveryOrderRecord(
+                order_id="order-2",
+                generation=1,
+                status=TrackedOrderStatus.UNKNOWN,
+                quantity=Decimal("20"),
+            ),
+        ),
+        interrupted_event_id="tick-event-1",
+        interrupted_event_status=interrupted_status,
+        interrupted_claimed_revision=1,
+    )
+
+
+def _reconciliation_rows():
+    common = _group_row(
+        status="FAILED",
+        revision=2,
+        live_order_ids=[],
+        updated_at=datetime(
+            2026,
+            7,
+            24,
+            13,
+            40,
+            tzinfo=timezone.utc,
+        ),
+        interrupted_event_id="tick-event-1",
+        interrupted_event_status="FAILED",
+        interrupted_claimed_revision=1,
+    )
+    source = {
+        **common,
+        "tracked_order_id": "order-1",
+        "tracked_generation": 0,
+        "tracked_status": "CANCELLED",
+        "tracked_quantity": Decimal("25"),
+    }
+    replacement = {
+        **common,
+        "tracked_order_id": "order-2",
+        "tracked_generation": 1,
+        "tracked_status": "UNKNOWN",
+        "tracked_quantity": Decimal("20"),
+    }
+    return [source, replacement]
 
 
 class _Result:
@@ -364,6 +441,142 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         )
         self.assertIn("groups.status = 'ACTIVE'", session.calls[0][0])
 
+    def test_load_reconciliation_candidates_is_stale_and_quarantine_scoped(
+        self,
+    ) -> None:
+        session = _Session(
+            [_Result(all_rows=_reconciliation_rows())]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        stale_before = datetime(
+            2026,
+            7,
+            24,
+            13,
+            55,
+            tzinfo=timezone.utc,
+        )
+
+        candidates = repository.load_reconciliation_candidates(
+            stale_before=stale_before,
+            limit=25,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(
+            tuple(
+                order.order_id
+                for order in candidates[0].orders
+            ),
+            ("order-1", "order-2"),
+        )
+        self.assertEqual(
+            candidates[0].interrupted_event_status,
+            SupervisionEventStatus.FAILED,
+        )
+        statement, params = session.calls[0]
+        self.assertIn(
+            "status IN ('FAILED', 'REPRICING')",
+            statement,
+        )
+        self.assertIn(
+            "reconciliation_manual_review",
+            statement,
+        )
+        self.assertEqual(
+            params,
+            {"stale_before": stale_before, "limit": 25},
+        )
+
+    def test_claim_reconciliation_is_revisioned(self) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"status": "RECEIVED"}),
+                _Result(one_or_none={"revision": 3}),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        observed_at = datetime(
+            2026,
+            7,
+            24,
+            14,
+            0,
+            tzinfo=timezone.utc,
+        )
+
+        claim = repository.claim_reconciliation(
+            _reconciliation_candidate(),
+            event_id="reconcile:group-1:2",
+            observed_at=observed_at,
+        )
+
+        self.assertEqual(
+            claim,
+            SupervisionClaim(
+                event_id="reconcile:group-1:2",
+                order_group_id="group-1",
+                acquired=True,
+                revision=3,
+            ),
+        )
+        self.assertIn(
+            "'order_reconciliation'",
+            session.calls[0][0],
+        )
+        self.assertIn(
+            "status = 'REPRICING'",
+            session.calls[1][0],
+        )
+        self.assertEqual(session.commits, 1)
+
+    def test_claim_reconciliation_supersedes_stale_claim(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"status": "RECEIVED"}),
+                _Result(one_or_none={"revision": 3}),
+                _Result(rowcount=1),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        repository.claim_reconciliation(
+            _reconciliation_candidate(
+                status=OrderGroupStatus.REPRICING,
+                interrupted_status=(
+                    SupervisionEventStatus.CLAIMED
+                ),
+            ),
+            event_id="reconcile:group-1:2",
+            observed_at=datetime(
+                2026,
+                7,
+                24,
+                14,
+                0,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertIn(
+            "superseded_by_reconciliation",
+            session.calls[2][0],
+        )
+        self.assertEqual(session.commits, 1)
+
     def test_tick_event_claim_is_atomic_and_revisioned(self) -> None:
         session = _Session(
             [
@@ -593,6 +806,97 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         self.assertEqual(session.commits, 1)
         self.assertEqual(session.calls[1][1]["status"], "CANCELLED")
         self.assertEqual(session.calls[2][1]["status"], "UNKNOWN")
+
+    def test_complete_reconciliation_promotes_known_replacement(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"revision": 4}),
+                _Result(one_or_none={"order_id": "order-1"}),
+                _Result(one_or_none={"order_id": "order-2"}),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="reconcile:group-1:2",
+            order_group_id="group-1",
+            acquired=True,
+            revision=3,
+        )
+
+        repository.complete_reconciliation(
+            claim,
+            order_statuses={
+                "order-1": TrackedOrderStatus.REPLACED,
+                "order-2": TrackedOrderStatus.LIVE,
+            },
+            recovered_reprice=True,
+            keep_active=False,
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertEqual(
+            session.calls[0][1]["reprice_increment"],
+            1,
+        )
+        self.assertEqual(
+            session.calls[0][1]["next_status"],
+            "COMPLETED",
+        )
+        self.assertEqual(
+            session.calls[1][1]["status"],
+            "REPLACED",
+        )
+        self.assertEqual(
+            session.calls[2][1]["status"],
+            "LIVE",
+        )
+
+    def test_fail_reconciliation_quarantines_manual_review(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"revision": 4}),
+                _Result(one_or_none={"order_id": "order-1"}),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="reconcile:group-1:2",
+            order_group_id="group-1",
+            acquired=True,
+            revision=3,
+        )
+
+        repository.fail_reconciliation(
+            claim,
+            error="replacement id missing",
+            order_statuses={
+                "order-1": TrackedOrderStatus.CANCELLED,
+            },
+            manual_review=True,
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertTrue(session.calls[0][1]["manual_review"])
+        self.assertIn(
+            "reconciliation_manual_review",
+            session.calls[0][1]["review_metadata"],
+        )
+        self.assertEqual(
+            session.calls[1][1]["status"],
+            "CANCELLED",
+        )
 
     def test_complete_filled_group_persists_remote_observation(
         self,

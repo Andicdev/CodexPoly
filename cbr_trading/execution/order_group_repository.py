@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Mapping, Protocol, Sequence
 
 from cbr_trading.domain.intents import OrderLifecyclePolicy
 from cbr_trading.domain.results import ExecutionHandle, PlacedOrder
 from cbr_trading.execution.order_group_state import (
     OrderGroupRecord,
+    ReconciliationCandidate,
     SupervisionClaim,
+    TrackedOrderStatus,
 )
 from cbr_trading.execution.order_supervisor import TickSizeChange
 from cbr_trading.execution.supervision_gateway import (
@@ -39,6 +42,21 @@ class OrderGroupRepository(Protocol):
         event: TickSizeChange,
     ) -> SupervisionClaim: ...
 
+    def load_reconciliation_candidates(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int = 100,
+    ) -> Sequence[ReconciliationCandidate]: ...
+
+    def claim_reconciliation(
+        self,
+        candidate: ReconciliationCandidate,
+        *,
+        event_id: str,
+        observed_at: datetime,
+    ) -> SupervisionClaim: ...
+
     def fail_claim(
         self,
         claim: SupervisionClaim,
@@ -67,6 +85,26 @@ class OrderGroupRepository(Protocol):
         filled_order_ids: Sequence[str],
         cancelled_order_ids: Sequence[str] = (),
         observations: Sequence[OrderObservation] = (),
+    ) -> None: ...
+
+    def complete_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        order_statuses: Mapping[str, TrackedOrderStatus],
+        recovered_reprice: bool,
+        keep_active: bool,
+        observations: Sequence[OrderObservation] = (),
+    ) -> None: ...
+
+    def fail_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        error: str,
+        order_statuses: Mapping[str, TrackedOrderStatus] | None = None,
+        observations: Sequence[OrderObservation] = (),
+        manual_review: bool = False,
     ) -> None: ...
 
     def close(self) -> None: ...

@@ -130,11 +130,37 @@ of that contract. It uses the official `SecureClient` and:
 - supports either persisted share quantity or currency notional sizing and
   normalizes accepted and rejected SDK responses without exposing secrets.
 
-The live adapter is not composed into the production runner yet. Synchronous
-pre/post-cancel reconciliation is implemented, but the explicit background
-`reconcile()` recovery scan remains a later checkpoint. This stage also does
-not connect a real market-channel listener, apply either migration to a real
-database, or enable supervision.
+### Background reconciliation
+
+`PersistentOrderSupervisor.reconcile()` now performs a bounded recovery scan
+without submitting or cancelling any order:
+
+1. It loads `FAILED` and stale `REPRICING` groups older than the configured
+   recovery delay. Groups already marked for manual review are excluded.
+2. A new `order_reconciliation` event claims the exact group revision. When
+   the candidate was a stale `REPRICING` operation, its old `CLAIMED` event is
+   atomically marked `FAILED` as superseded.
+3. The gateway reads only order IDs already owned by the group. The resulting
+   `RECONCILE` observations and local order states are persisted
+   transactionally.
+4. Automatic recovery is allowed only when a replacement order ID was already
+   persisted, every source order is terminal, and the replacement price and
+   original quantity exactly match the final source remainder. The known
+   replacement is then promoted from `UNKNOWN` to `LIVE`, `FILLED`, or
+   `CANCELLED`, and the interrupted reprice count is completed.
+5. A missing replacement ID, simultaneous open source and replacement orders,
+   or a sizing mismatch is quarantined with
+   `metadata.reconciliation_manual_review = true`. The scanner will not touch
+   that group again automatically. Transient lookup or unknown remote states
+   remain retryable after the recovery delay.
+
+This distinction is intentional. A process can die after an exchange accepts
+an order but before its ID reaches the database. Without a persisted ID, an
+automatic replacement could duplicate exposure, so recovery fails closed.
+
+The live adapter and reconciliation scan are not composed into the production
+runner yet. This stage also does not connect a real market-channel listener,
+apply either migration to a real database, or enable supervision.
 
 ## Invariants
 

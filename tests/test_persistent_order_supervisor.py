@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from cbr_trading.domain import (
@@ -19,11 +19,15 @@ from cbr_trading.execution import (
     OrderObservationPhase,
     OrderSupervisorError,
     PersistentOrderSupervisor,
+    ReconciliationCandidate,
+    RecoveryOrderRecord,
     RemoteOrderSnapshot,
     RemoteOrderState,
     SupervisionClaim,
+    SupervisionEventStatus,
     SupervisionStatus,
     TickSizeChange,
+    TrackedOrderStatus,
     registration_from_handle,
     replacement_price_for_tick,
 )
@@ -61,15 +65,22 @@ def _policy() -> RepriceOnTickChange:
 def _record(
     *,
     live_order_ids: tuple[str, ...] = ("order-1",),
+    status: OrderGroupStatus = OrderGroupStatus.ACTIVE,
+    revision: int = 0,
+    reprice_count: int = 0,
 ) -> OrderGroupRecord:
     return OrderGroupRecord(
         registration=registration_from_handle(
-            _handle(live_order_ids=live_order_ids),
+            _handle(
+                live_order_ids=(
+                    live_order_ids or ("order-1",)
+                )
+            ),
             policy=_policy(),
         ),
-        status=OrderGroupStatus.ACTIVE,
-        revision=0,
-        reprice_count=0,
+        status=status,
+        revision=revision,
+        reprice_count=reprice_count,
         live_order_ids=live_order_ids,
     )
 
@@ -184,12 +195,60 @@ def _inspection(
     )
 
 
+def _reconciliation_candidate(
+    *,
+    source_status: TrackedOrderStatus = (
+        TrackedOrderStatus.CANCELLED
+    ),
+    include_replacement: bool = True,
+    replacement_status: TrackedOrderStatus = (
+        TrackedOrderStatus.UNKNOWN
+    ),
+) -> ReconciliationCandidate:
+    orders = [
+        RecoveryOrderRecord(
+            order_id="order-1",
+            generation=0,
+            status=source_status,
+            quantity=Decimal("25"),
+        )
+    ]
+    if include_replacement:
+        orders.append(
+            RecoveryOrderRecord(
+                order_id="order-2",
+                generation=1,
+                status=replacement_status,
+                quantity=Decimal("20"),
+            )
+        )
+    return ReconciliationCandidate(
+        group=_record(
+            live_order_ids=(
+                ("order-1",)
+                if source_status == TrackedOrderStatus.LIVE
+                else ()
+            ),
+            status=OrderGroupStatus.FAILED,
+            revision=2,
+        ),
+        orders=tuple(orders),
+        interrupted_event_id="tick-event-1",
+        interrupted_event_status=(
+            SupervisionEventStatus.FAILED
+        ),
+        interrupted_claimed_revision=1,
+    )
+
+
 class _Repository:
     def __init__(
         self,
         *,
         groups=(),
         claim: SupervisionClaim | None = None,
+        reconciliation_candidates=(),
+        reconciliation_claim: SupervisionClaim | None = None,
     ):
         self.groups = tuple(groups)
         self.claim = claim or SupervisionClaim(
@@ -198,14 +257,31 @@ class _Repository:
             acquired=True,
             revision=1,
         )
+        self.reconciliation_candidates = tuple(
+            reconciliation_candidates
+        )
+        self.reconciliation_claim = (
+            reconciliation_claim
+            or SupervisionClaim(
+                event_id="reconcile:group-1:2",
+                order_group_id="group-1",
+                acquired=True,
+                revision=3,
+            )
+        )
         self.register_calls = []
         self.load_calls = []
         self.claim_calls = []
         self.complete_calls = []
         self.complete_without_calls = []
         self.fail_calls = []
+        self.load_reconciliation_calls = []
+        self.claim_reconciliation_calls = []
+        self.complete_reconciliation_calls = []
+        self.fail_reconciliation_calls = []
         self.close_calls = 0
         self.complete_error: Exception | None = None
+        self.load_reconciliation_error: Exception | None = None
 
     def register(self, handle, *, policy, metadata=None):
         self.register_calls.append((handle, policy, metadata))
@@ -218,6 +294,31 @@ class _Repository:
     def claim_tick_size_change(self, *, order_group_id, event):
         self.claim_calls.append((order_group_id, event))
         return self.claim
+
+    def load_reconciliation_candidates(
+        self,
+        *,
+        stale_before,
+        limit=100,
+    ):
+        self.load_reconciliation_calls.append(
+            (stale_before, limit)
+        )
+        if self.load_reconciliation_error is not None:
+            raise self.load_reconciliation_error
+        return self.reconciliation_candidates
+
+    def claim_reconciliation(
+        self,
+        candidate,
+        *,
+        event_id,
+        observed_at,
+    ):
+        self.claim_reconciliation_calls.append(
+            (candidate, event_id, observed_at)
+        )
+        return self.reconciliation_claim
 
     def complete_reprice(
         self,
@@ -279,6 +380,46 @@ class _Repository:
         )
         if self.complete_error is not None:
             raise self.complete_error
+
+    def complete_reconciliation(
+        self,
+        claim,
+        *,
+        order_statuses,
+        recovered_reprice,
+        keep_active,
+        observations=(),
+    ):
+        self.complete_reconciliation_calls.append(
+            (
+                claim,
+                dict(order_statuses),
+                recovered_reprice,
+                keep_active,
+                tuple(observations),
+            )
+        )
+        if self.complete_error is not None:
+            raise self.complete_error
+
+    def fail_reconciliation(
+        self,
+        claim,
+        *,
+        error,
+        order_statuses=None,
+        observations=(),
+        manual_review=False,
+    ):
+        self.fail_reconciliation_calls.append(
+            (
+                claim,
+                error,
+                dict(order_statuses or {}),
+                tuple(observations),
+                manual_review,
+            )
+        )
 
     def close(self):
         self.close_calls += 1
@@ -807,6 +948,424 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         self.assertIn("quantity does not match", results[0].error)
         self.assertEqual(gateway.cancel_calls, [])
         self.assertEqual(gateway.place_calls, [])
+
+    def test_reconcile_recovers_persisted_unknown_replacement(
+        self,
+    ) -> None:
+        candidate = _reconciliation_candidate()
+        repository = _Repository(
+            reconciliation_candidates=(candidate,)
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.OPEN,
+                            original=Decimal("20"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        now = datetime(
+            2026,
+            7,
+            24,
+            14,
+            0,
+            tzinfo=timezone.utc,
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+            clock=lambda: now,
+            reconciliation_stale_after=timedelta(minutes=5),
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.REPLACED,
+        )
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(
+            repository.load_reconciliation_calls,
+            [(now - timedelta(minutes=5), 100)],
+        )
+        completed = repository.complete_reconciliation_calls[0]
+        self.assertEqual(
+            completed[1],
+            {
+                "order-1": TrackedOrderStatus.REPLACED,
+                "order-2": TrackedOrderStatus.LIVE,
+            },
+        )
+        self.assertTrue(completed[2])
+        self.assertFalse(completed[3])
+        self.assertTrue(
+            all(
+                observation.phase
+                == OrderObservationPhase.RECONCILE
+                for observation in completed[4]
+            )
+        )
+
+    def test_reconcile_completes_filled_unknown_replacement(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.FILLED,
+                            original=Decimal("20"),
+                            matched=Decimal("20"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.COMPLETED,
+        )
+        self.assertEqual(
+            repository.complete_reconciliation_calls[0][1][
+                "order-2"
+            ],
+            TrackedOrderStatus.FILLED,
+        )
+
+    def test_reconcile_validates_notional_replacement_remainder(
+        self,
+    ) -> None:
+        base_group = _notional_record()
+        group = OrderGroupRecord(
+            registration=base_group.registration,
+            status=OrderGroupStatus.FAILED,
+            revision=2,
+            reprice_count=0,
+            live_order_ids=(),
+        )
+        replacement_quantity = (
+            Decimal("4") / Decimal("0.999")
+        )
+        candidate = ReconciliationCandidate(
+            group=group,
+            orders=(
+                RecoveryOrderRecord(
+                    order_id="order-1",
+                    generation=0,
+                    status=TrackedOrderStatus.CANCELLED,
+                    quantity=None,
+                ),
+                RecoveryOrderRecord(
+                    order_id="order-2",
+                    generation=1,
+                    status=TrackedOrderStatus.UNKNOWN,
+                    quantity=replacement_quantity,
+                ),
+            ),
+            interrupted_event_id="tick-event-1",
+            interrupted_event_status=(
+                SupervisionEventStatus.FAILED
+            ),
+            interrupted_claimed_revision=1,
+        )
+        repository = _Repository(
+            reconciliation_candidates=(candidate,)
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("10"),
+                            matched=Decimal("2"),
+                            limit_price=Decimal("0.5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.OPEN,
+                            original=replacement_quantity,
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.REPLACED,
+        )
+        self.assertEqual(
+            repository.complete_reconciliation_calls[0][1][
+                "order-2"
+            ],
+            TrackedOrderStatus.LIVE,
+        )
+
+    def test_reconcile_quarantines_missing_replacement_id(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(
+                    include_replacement=False
+                ),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=("order-1",),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.FAILED,
+        )
+        self.assertIn(
+            "duplicate_replacement_cannot_be_excluded",
+            results[0].error,
+        )
+        self.assertTrue(
+            repository.fail_reconciliation_calls[0][4]
+        )
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertEqual(gateway.place_calls, [])
+
+    def test_reconcile_quarantines_overlapping_source_and_replacement(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(
+                    source_status=TrackedOrderStatus.LIVE
+                ),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.OPEN,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.OPEN,
+                            original=Decimal("20"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.FAILED,
+        )
+        self.assertTrue(
+            repository.fail_reconciliation_calls[0][4]
+        )
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertEqual(gateway.place_calls, [])
+
+    def test_reconcile_retries_unknown_remote_state_without_quarantine(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.UNKNOWN,
+                            original=Decimal("20"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.FAILED,
+        )
+        self.assertFalse(
+            repository.fail_reconciliation_calls[0][4]
+        )
+
+    def test_reconcile_quarantines_replacement_size_mismatch(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=(
+                        "order-1",
+                        "order-2",
+                    ),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.CANCELLED,
+                            original=Decimal("25"),
+                            matched=Decimal("5"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.OPEN,
+                            original=Decimal("19"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.FAILED,
+        )
+        self.assertIn("quantity", results[0].error)
+        self.assertTrue(
+            repository.fail_reconciliation_calls[0][4]
+        )
+        self.assertEqual(gateway.place_calls, [])
+
+    def test_reconcile_load_failure_is_sanitized(self) -> None:
+        repository = _Repository()
+        repository.load_reconciliation_error = RuntimeError(
+            "database unavailable"
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=_Gateway(),
+        )
+
+        with self.assertRaisesRegex(
+            OrderSupervisorError,
+            "database unavailable",
+        ):
+            supervisor.reconcile()
 
     def test_close_is_idempotent_and_disables_supervisor(self) -> None:
         repository = _Repository()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -12,7 +12,11 @@ from cbr_trading.execution.order_group_state import (
     OrderGroupRecord,
     OrderGroupRegistration,
     OrderGroupStatus,
+    ReconciliationCandidate,
+    RecoveryOrderRecord,
     SupervisionClaim,
+    SupervisionEventStatus,
+    TrackedOrderStatus,
     registration_from_handle,
 )
 from cbr_trading.execution.order_supervisor import TickSizeChange
@@ -212,6 +216,48 @@ _SELECT_ACTIVE_FOR_ASSET_SQL = (
     )
 )
 
+_SELECT_RECONCILIATION_CANDIDATES_SQL = """
+WITH candidate_groups AS (
+    SELECT order_group_id
+    FROM resolution_order_groups
+    WHERE status IN ('FAILED', 'REPRICING')
+      AND policy_kind = 'reprice_on_tick_change'
+      AND updated_at <= :stale_before
+      AND (
+          metadata ->> 'reconciliation_manual_review'
+      ) IS DISTINCT FROM 'true'
+    ORDER BY updated_at, order_group_id
+    LIMIT :limit
+)
+SELECT
+    groups.*,
+    orders.order_id AS tracked_order_id,
+    orders.generation AS tracked_generation,
+    orders.status AS tracked_status,
+    orders.quantity AS tracked_quantity,
+    interrupted.event_id AS interrupted_event_id,
+    interrupted.status AS interrupted_event_status,
+    interrupted.claimed_revision
+        AS interrupted_claimed_revision
+FROM candidate_groups
+JOIN resolution_order_groups AS groups
+  ON groups.order_group_id = candidate_groups.order_group_id
+JOIN resolution_order_group_orders AS orders
+  ON orders.order_group_id = groups.order_group_id
+LEFT JOIN LATERAL (
+    SELECT
+        events.event_id,
+        events.status,
+        events.claimed_revision
+    FROM resolution_supervision_events AS events
+    WHERE events.order_group_id = groups.order_group_id
+      AND events.status IN ('CLAIMED', 'FAILED')
+    ORDER BY events.updated_at DESC, events.event_id DESC
+    LIMIT 1
+) AS interrupted ON TRUE
+ORDER BY groups.updated_at, groups.order_group_id, orders.id
+""".strip()
+
 _INSERT_EVENT_SQL = """
 INSERT INTO resolution_supervision_events (
     event_id,
@@ -232,6 +278,29 @@ VALUES (
     :asset_id,
     :old_tick,
     :new_tick,
+    :observed_at,
+    CAST(:payload AS jsonb)
+)
+ON CONFLICT (event_id, order_group_id) DO NOTHING
+RETURNING status
+""".strip()
+
+_INSERT_RECONCILIATION_EVENT_SQL = """
+INSERT INTO resolution_supervision_events (
+    event_id,
+    order_group_id,
+    event_type,
+    status,
+    asset_id,
+    observed_at,
+    payload
+)
+VALUES (
+    :event_id,
+    :order_group_id,
+    'order_reconciliation',
+    'RECEIVED',
+    :asset_id,
     :observed_at,
     CAST(:payload AS jsonb)
 )
@@ -261,6 +330,31 @@ WHERE order_group_id = :order_group_id
   AND trigger_new_tick = :new_tick
   AND reprice_count < max_reprices
 RETURNING revision
+""".strip()
+
+_CLAIM_RECONCILIATION_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    status = 'REPRICING',
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = :expected_status
+  AND revision = :expected_revision
+RETURNING revision
+""".strip()
+
+_SUPERSEDE_INTERRUPTED_EVENT_SQL = """
+UPDATE resolution_supervision_events
+SET
+    status = 'FAILED',
+    error = 'superseded_by_reconciliation',
+    updated_at = now()
+WHERE event_id = :interrupted_event_id
+  AND order_group_id = :order_group_id
+  AND status = 'CLAIMED'
+  AND claimed_revision = :interrupted_claimed_revision
 """.strip()
 
 _MARK_EVENT_CLAIMED_SQL = """
@@ -315,6 +409,25 @@ WHERE order_group_id = :order_group_id
 RETURNING revision
 """.strip()
 
+_COMPLETE_RECONCILIATION_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    reprice_count = reprice_count + :reprice_increment,
+    status = :next_status,
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+  AND reprice_count + :reprice_increment <= max_reprices
+  AND (
+      :next_status <> 'ACTIVE'
+      OR reprice_count + :reprice_increment < max_reprices
+  )
+RETURNING revision
+""".strip()
+
 _CLOSE_OWNED_ORDERS_SQL = """
 UPDATE resolution_order_group_orders
 SET
@@ -324,6 +437,21 @@ SET
 WHERE order_group_id = :order_group_id
   AND status = 'LIVE'
   AND order_id = ANY(:order_ids)
+RETURNING order_id
+""".strip()
+
+_SET_OWNED_ORDER_STATUS_SQL = """
+UPDATE resolution_order_group_orders
+SET
+    status = :status,
+    closed_at = CASE
+        WHEN :status = 'LIVE' THEN NULL
+        ELSE COALESCE(closed_at, now())
+    END,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND order_id = :order_id
+  AND status <> 'REJECTED'
 RETURNING order_id
 """.strip()
 
@@ -414,6 +542,24 @@ WHERE order_group_id = :order_group_id
   AND status = 'REPRICING'
   AND revision = :revision
 RETURNING reprice_count + 1 AS failed_generation
+""".strip()
+
+_FAIL_RECONCILIATION_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    status = 'FAILED',
+    revision = revision + 1,
+    last_error = :error,
+    metadata = CASE
+        WHEN :manual_review
+            THEN metadata || CAST(:review_metadata AS jsonb)
+        ELSE metadata
+    END,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+RETURNING revision
 """.strip()
 
 _FAIL_EVENT_SQL = """
@@ -574,6 +720,39 @@ class SqlAlchemyOrderGroupRepository:
                 f"{type(exc).__name__}"
             ) from exc
 
+    def load_reconciliation_candidates(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int = 100,
+    ) -> tuple[ReconciliationCandidate, ...]:
+        normalized_stale_before = _utc_datetime(
+            stale_before,
+            name="stale_before",
+        )
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("limit must be an integer")
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                rows = session.execute(
+                    text_factory(
+                        _SELECT_RECONCILIATION_CANDIDATES_SQL
+                    ),
+                    {
+                        "stale_before": normalized_stale_before,
+                        "limit": limit,
+                    },
+                ).mappings().all()
+            return _reconciliation_candidates_from_rows(rows)
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to load reconciliation candidates: "
+                f"{type(exc).__name__}"
+            ) from exc
+
     def claim_tick_size_change(
         self,
         *,
@@ -652,6 +831,145 @@ class SqlAlchemyOrderGroupRepository:
         except Exception as exc:
             raise OrderGroupRepositoryError(
                 "Failed to claim tick-size event: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def claim_reconciliation(
+        self,
+        candidate: ReconciliationCandidate,
+        *,
+        event_id: str,
+        observed_at: datetime,
+    ) -> SupervisionClaim:
+        if not isinstance(candidate, ReconciliationCandidate):
+            raise TypeError(
+                "candidate must be a ReconciliationCandidate"
+            )
+        normalized_event_id = str(event_id or "").strip()
+        if not normalized_event_id:
+            raise ValueError("event_id is required")
+        normalized_observed_at = _utc_datetime(
+            observed_at,
+            name="observed_at",
+        )
+        group = candidate.group
+        params = {
+            "event_id": normalized_event_id,
+            "order_group_id": group.registration.order_group_id,
+            "asset_id": group.registration.asset_id,
+            "observed_at": normalized_observed_at,
+            "expected_status": group.status.value,
+            "expected_revision": group.revision,
+            "interrupted_event_id": (
+                candidate.interrupted_event_id
+            ),
+            "interrupted_claimed_revision": (
+                candidate.interrupted_claimed_revision
+            ),
+            "payload": json.dumps(
+                {
+                    "interrupted_event_id": (
+                        candidate.interrupted_event_id
+                    ),
+                    "interrupted_event_status": (
+                        candidate.interrupted_event_status.value
+                        if candidate.interrupted_event_status
+                        is not None
+                        else None
+                    ),
+                    "candidate_status": group.status.value,
+                    "candidate_revision": group.revision,
+                },
+                ensure_ascii=False,
+            ),
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                inserted = session.execute(
+                    text_factory(
+                        _INSERT_RECONCILIATION_EVENT_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if inserted is None:
+                    session.rollback()
+                    return SupervisionClaim(
+                        event_id=normalized_event_id,
+                        order_group_id=(
+                            group.registration.order_group_id
+                        ),
+                        acquired=False,
+                        reason="duplicate_reconciliation_event",
+                    )
+
+                claimed = session.execute(
+                    text_factory(
+                        _CLAIM_RECONCILIATION_GROUP_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if claimed is None:
+                    session.execute(
+                        text_factory(_MARK_EVENT_IGNORED_SQL),
+                        {
+                            **params,
+                            "reason": (
+                                "reconciliation_candidate_changed"
+                            ),
+                        },
+                    )
+                    session.commit()
+                    return SupervisionClaim(
+                        event_id=normalized_event_id,
+                        order_group_id=(
+                            group.registration.order_group_id
+                        ),
+                        acquired=False,
+                        reason="reconciliation_candidate_changed",
+                    )
+
+                revision = int(claimed["revision"])
+                if (
+                    candidate.interrupted_event_status
+                    == SupervisionEventStatus.CLAIMED
+                ):
+                    superseded = session.execute(
+                        text_factory(
+                            _SUPERSEDE_INTERRUPTED_EVENT_SQL
+                        ),
+                        params,
+                    )
+                    if int(superseded.rowcount or 0) != 1:
+                        session.rollback()
+                        raise OrderGroupRepositoryError(
+                            "Interrupted supervision claim changed "
+                            "during reconciliation"
+                        )
+
+                marked = session.execute(
+                    text_factory(_MARK_EVENT_CLAIMED_SQL),
+                    {**params, "revision": revision},
+                )
+                if int(marked.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation event claim was not persisted"
+                    )
+                session.commit()
+                return SupervisionClaim(
+                    event_id=normalized_event_id,
+                    order_group_id=(
+                        group.registration.order_group_id
+                    ),
+                    acquired=True,
+                    revision=revision,
+                )
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to claim reconciliation candidate: "
                 f"{type(exc).__name__}"
             ) from exc
 
@@ -962,6 +1280,168 @@ class SqlAlchemyOrderGroupRepository:
                 f"{type(exc).__name__}"
             ) from exc
 
+    def complete_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        order_statuses: Mapping[str, TrackedOrderStatus],
+        recovered_reprice: bool,
+        keep_active: bool,
+        observations: Sequence[OrderObservation] = (),
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired reconciliation claim can complete"
+            )
+        statuses = _validated_order_statuses(
+            order_statuses,
+            required=True,
+        )
+        if keep_active and not recovered_reprice:
+            raise ValueError(
+                "only a recovered reprice may keep a group active"
+            )
+        inspected = _validated_observations(observations)
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+            "reprice_increment": (
+                1 if recovered_reprice else 0
+            ),
+            "next_status": (
+                OrderGroupStatus.ACTIVE.value
+                if keep_active
+                else OrderGroupStatus.COMPLETED.value
+            ),
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                completed = session.execute(
+                    text_factory(
+                        _COMPLETE_RECONCILIATION_GROUP_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if completed is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation claim is no longer current"
+                    )
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                _set_owned_order_statuses(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    statuses=statuses,
+                )
+                completed_event = session.execute(
+                    text_factory(_COMPLETE_EVENT_SQL),
+                    params,
+                )
+                if int(completed_event.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation event completion was not "
+                        "persisted"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to complete order reconciliation: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def fail_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        error: str,
+        order_statuses: Mapping[
+            str,
+            TrackedOrderStatus,
+        ] | None = None,
+        observations: Sequence[OrderObservation] = (),
+        manual_review: bool = False,
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired reconciliation claim can fail"
+            )
+        safe_error = redact_sensitive_text(error, max_length=500)
+        if not safe_error:
+            safe_error = "order_reconciliation_failed"
+        statuses = _validated_order_statuses(
+            order_statuses or {},
+            required=False,
+        )
+        inspected = _validated_observations(observations)
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+            "error": safe_error,
+            "manual_review": bool(manual_review),
+            "review_metadata": json.dumps(
+                {
+                    "reconciliation_manual_review": True,
+                    "reconciliation_event_id": claim.event_id,
+                },
+                ensure_ascii=False,
+            ),
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                failed = session.execute(
+                    text_factory(
+                        _FAIL_RECONCILIATION_GROUP_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if failed is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation claim is no longer current"
+                    )
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                _set_owned_order_statuses(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    statuses=statuses,
+                )
+                failed_event = session.execute(
+                    text_factory(_FAIL_EVENT_SQL),
+                    params,
+                )
+                if int(failed_event.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation event failure was not persisted"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to persist order reconciliation failure: "
+                f"{type(exc).__name__}"
+            ) from exc
+
     def _resolve_dependencies(
         self,
     ) -> tuple[Callable[[], Any], Callable[[str], Any]]:
@@ -1143,6 +1623,35 @@ def _validated_observations(
     return observations
 
 
+def _validated_order_statuses(
+    values: Mapping[str, TrackedOrderStatus],
+    *,
+    required: bool,
+) -> dict[str, TrackedOrderStatus]:
+    if not isinstance(values, Mapping):
+        raise TypeError("order_statuses must be a mapping")
+    statuses: dict[str, TrackedOrderStatus] = {}
+    for raw_order_id, raw_status in values.items():
+        order_id = str(raw_order_id or "").strip()
+        if not order_id:
+            raise ValueError(
+                "order_statuses cannot contain an empty order id"
+            )
+        if order_id in statuses:
+            raise ValueError(
+                "order_statuses contains duplicate normalized ids"
+            )
+        status = (
+            raw_status
+            if isinstance(raw_status, TrackedOrderStatus)
+            else TrackedOrderStatus(str(raw_status).upper())
+        )
+        statuses[order_id] = status
+    if required and not statuses:
+        raise ValueError("order_statuses must not be empty")
+    return statuses
+
+
 def _require_disjoint_order_ids(
     first: Sequence[str],
     second: Sequence[str],
@@ -1177,6 +1686,29 @@ def _close_owned_orders(
     except OrderGroupRepositoryError:
         session.rollback()
         raise
+
+
+def _set_owned_order_statuses(
+    session: Any,
+    *,
+    text_factory: Callable[[str], Any],
+    claim: SupervisionClaim,
+    statuses: Mapping[str, TrackedOrderStatus],
+) -> None:
+    for order_id, status in statuses.items():
+        updated = session.execute(
+            text_factory(_SET_OWNED_ORDER_STATUS_SQL),
+            {
+                "order_group_id": claim.order_group_id,
+                "order_id": order_id,
+                "status": status.value,
+            },
+        ).mappings().one_or_none()
+        if updated is None:
+            session.rollback()
+            raise OrderGroupRepositoryError(
+                "Reconciled order ownership no longer matches the claim"
+            )
 
 
 def _persist_observations(
@@ -1292,6 +1824,93 @@ def _record_from_row(row: Mapping[str, Any]) -> OrderGroupRecord:
     )
 
 
+def _reconciliation_candidates_from_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[ReconciliationCandidate, ...]:
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        order_group_id = str(
+            row.get("order_group_id") or ""
+        ).strip()
+        if not order_group_id:
+            raise ValueError(
+                "reconciliation row has no order_group_id"
+            )
+        grouped.setdefault(order_group_id, []).append(row)
+
+    candidates: list[ReconciliationCandidate] = []
+    for group_rows in grouped.values():
+        first = group_rows[0]
+        initial_order_ids = tuple(
+            str(row.get("tracked_order_id") or "").strip()
+            for row in group_rows
+            if int(row.get("tracked_generation") or 0) == 0
+        )
+        live_order_ids = tuple(
+            str(row.get("tracked_order_id") or "").strip()
+            for row in group_rows
+            if str(row.get("tracked_status") or "").upper()
+            == TrackedOrderStatus.LIVE.value
+        )
+        record_row = dict(first)
+        record_row["initial_order_ids"] = initial_order_ids
+        record_row["live_order_ids"] = live_order_ids
+        group = _record_from_row(record_row)
+        allowed_generations = {
+            group.reprice_count,
+            group.reprice_count + 1,
+        }
+        orders = tuple(
+            RecoveryOrderRecord(
+                order_id=row.get("tracked_order_id"),
+                generation=int(
+                    row.get("tracked_generation") or 0
+                ),
+                status=row.get("tracked_status"),
+                quantity=_decimal_or_none(
+                    row.get("tracked_quantity")
+                ),
+            )
+            for row in group_rows
+            if (
+                int(row.get("tracked_generation") or 0)
+                in allowed_generations
+                and str(
+                    row.get("tracked_status") or ""
+                ).upper()
+                != TrackedOrderStatus.REJECTED.value
+            )
+        )
+        interrupted_status_raw = first.get(
+            "interrupted_event_status"
+        )
+        interrupted_revision_raw = first.get(
+            "interrupted_claimed_revision"
+        )
+        candidates.append(
+            ReconciliationCandidate(
+                group=group,
+                orders=orders,
+                interrupted_event_id=first.get(
+                    "interrupted_event_id"
+                ),
+                interrupted_event_status=(
+                    SupervisionEventStatus(
+                        str(interrupted_status_raw).upper()
+                    )
+                    if interrupted_status_raw is not None
+                    else None
+                ),
+                interrupted_claimed_revision=(
+                    int(interrupted_revision_raw)
+                    if interrupted_revision_raw is not None
+                    else None
+                ),
+            )
+        )
+    return tuple(candidates)
+
+
 def _decimal_or_none(value: object) -> Decimal | None:
     if value is None:
         return None
@@ -1300,6 +1919,16 @@ def _decimal_or_none(value: object) -> Decimal | None:
 
 def _datetime_or_none(value: object) -> datetime | None:
     return value if isinstance(value, datetime) else None
+
+
+def _utc_datetime(value: datetime, *, name: str) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(timezone.utc)
 
 
 def _normalize_database_url(value: str) -> str:
