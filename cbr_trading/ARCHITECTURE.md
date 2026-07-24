@@ -64,18 +64,22 @@ The supervisor persistence boundary is additive and source-neutral:
 - `resolution_order_group_orders` stores every initial and replacement order
   owned by a group, including its generation and lifecycle state;
 - `resolution_supervision_events` provides per-group event idempotency and
-  records atomic tick-change claims.
+  records atomic tick-change claims;
+- `resolution_order_observations` stores immutable `PRE_CANCEL` and
+  `POST_CANCEL` remote snapshots, including price, original, matched, and
+  remaining quantity.
 
 An `ExecutionHandle` carries the optional signal/template/strategy and order
 parameters needed to persist a replaceable order without re-reading a
 source-specific rule. Repricing registration requires side, desired price,
 and exactly one sizing mode.
 
-The first migration is intentionally forward-only and additive. It uses only
-`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`; it does not
-alter or drop any legacy table, column, constraint, or data. The production
-runner does not apply it automatically. Migration and readiness verification
-are explicit repository operations.
+The migrations are intentionally forward-only and additive. They use only
+`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`; they do not
+alter or drop any legacy table, column, constraint, or data. Migration 002
+only adds the observation table and leaves migration 001 unchanged. The
+production runner does not apply migrations automatically. Migration and
+readiness verification are explicit repository operations.
 
 ## Persistent supervisor lifecycle
 
@@ -84,18 +88,26 @@ are explicit repository operations.
 1. It loads only active groups for the asset named by a tick-size event.
 2. The repository atomically claims each matching group and rejects duplicate
    or competing processing by event ID and optimistic revision.
-3. The order gateway receives only the exact `live_order_ids` persisted for
-   that group and its owning account.
-4. A partial cancellation is a failure and no replacement is submitted.
-   Confirmed cancellations are still persisted so the external side effect is
-   not lost.
-5. After complete cancellation, the desired price is aligned to the target
-   tick: BUY rounds down and SELL rounds up. The gateway submits the
-   replacement using the original market, side, and sizing data.
-6. Successful completion closes the old generation as `REPLACED`, inserts the
-   new generation as `LIVE`, and completes the event in one transaction. If
-   state persistence fails after placement, known replacement orders are
-   recorded as `UNKNOWN` on the failure path for later reconciliation.
+3. Before cancellation, the gateway reads every exact `live_order_id`.
+   The supervisor verifies account-scoped market ownership, side, and original
+   sizing against the persisted group.
+4. Orders already `FILLED` need no cancellation. Only remotely `OPEN` IDs are
+   sent to exact batch cancellation; remotely `CANCELLED` IDs remain inside
+   the same owned group. A partial cancellation is a failure and no
+   replacement is submitted.
+5. After successful cancellation, every formerly open order is read again.
+   Replacement is forbidden unless the final state is `CANCELLED` or
+   `FILLED`. This second snapshot closes the race where another fill arrives
+   while cancellation is in flight.
+6. The remaining replacement size comes from the final remote state. Quantity
+   sizing preserves unfilled shares. Notional sizing preserves only the
+   unfilled old-order notional. A full fill completes the group without a new
+   order.
+7. The desired price is aligned to the target tick: BUY rounds down and SELL
+   rounds up. Successful completion stores both snapshots, closes filled and
+   replaced orders, inserts the new generation as `LIVE`, and completes the
+   event in one transaction. If state persistence fails after placement,
+   known replacement orders are recorded as `UNKNOWN`.
 
 This checkpoint defines and tests the supervisor and its order-gateway
 contract. `PolymarketSupervisionOrderGateway` is the first live implementation
@@ -107,6 +119,9 @@ of that contract. It uses the official `SecureClient` and:
   account master key;
 - calls only `cancel_orders(order_ids=...)` with the exact group-owned IDs;
   it never calls account-wide or market-wide cancellation;
+- calls `get_order(order_id=...)` separately for each exact owned order and
+  normalizes SDK `original_size`, `size_matched`, price, and status into a
+  source-neutral snapshot;
 - preserves partial cancellation results so confirmed external effects can be
   persisted before the group fails;
 - refreshes the order book and verifies condition, asset, target tick,
@@ -115,12 +130,11 @@ of that contract. It uses the official `SecureClient` and:
 - supports either persisted share quantity or currency notional sizing and
   normalizes accepted and rejected SDK responses without exposing secrets.
 
-The live adapter is not composed into the production runner yet. This stage
-also does not connect a real market-channel listener, inspect remote fills or
-remaining quantity during reconciliation, apply the migration to a real
-database, or enable supervision. Until remote order-state reconciliation is
-implemented, replacement sizing comes from the persisted execution handle;
-therefore this adapter must remain disabled in production.
+The live adapter is not composed into the production runner yet. Synchronous
+pre/post-cancel reconciliation is implemented, but the explicit background
+`reconcile()` recovery scan remains a later checkpoint. This stage also does
+not connect a real market-channel listener, apply either migration to a real
+database, or enable supervision.
 
 ## Invariants
 
@@ -140,6 +154,8 @@ therefore this adapter must remain disabled in production.
   the same group.
 - Persistent cancellation scope is the exact order IDs recorded for one
   `order_group`; legacy asset-wide ownership is never inferred.
+- A replacement is never submitted from a pre-cancel snapshot alone. A
+  post-cancel terminal snapshot is mandatory for every order that was open.
 
 ## Compatibility checkpoint
 

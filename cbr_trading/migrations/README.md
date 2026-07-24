@@ -9,8 +9,13 @@ by the CBR production runner.
 - `resolution_order_group_orders`;
 - `resolution_supervision_events`.
 
-It does not alter or drop legacy tables, columns, constraints, or data.
-`SqlAlchemyOrderGroupRepository.migrate()` applies the file in one
+`002_add_order_observations.sql` creates only
+`resolution_order_observations`, an append-only audit of exact remote order
+state observed before and after cancellation. It does not alter migration 001
+or any legacy object.
+
+They do not alter or drop legacy tables, columns, constraints, or data.
+`SqlAlchemyOrderGroupRepository.migrate()` applies both files in one
 transaction. `ensure_ready()` independently verifies all required new tables
 and columns before an `OrderSupervisor` is allowed to use them.
 

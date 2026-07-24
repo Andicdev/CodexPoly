@@ -91,8 +91,11 @@ The source-neutral persistent supervisor and
 `PolymarketSupervisionOrderGateway` are implemented but are not connected to
 this runner. The gateway uses only exact order-ID batch cancellation and
 rechecks the authenticated account, order book, target tick, minimum size, and
-live safety caps before a replacement.
+live safety caps before a replacement. It reads each exact order both before
+and after cancellation. Replacement uses only the final unfilled quantity; a
+full fill creates no replacement, and an unconfirmed post-cancel state fails
+closed.
 
-Do not enable this path in production yet. Remote fill and remaining-quantity
-reconciliation, the market-channel listener, explicit database migration, and
-runner composition are separate checkpoints.
+Do not enable this path in production yet. The background recovery scan,
+market-channel listener, explicit database migrations, and runner composition
+are separate checkpoints.

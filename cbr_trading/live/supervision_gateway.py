@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
 
 from cbr_trading.domain.results import PlacedOrder
 from cbr_trading.execution.supervision_gateway import (
     CancellationResult,
+    OrderInspectionResult,
+    RemoteOrderSnapshot,
+    RemoteOrderState,
     ReplacementOrderRequest,
 )
 from cbr_trading.live.account_repository import (
@@ -46,6 +50,47 @@ class PolymarketSupervisionOrderGateway:
         self._decryptor = decryptor or decrypt_private_key
         self._clients: dict[str, Any] = {}
         self._closed = False
+
+    def inspect_orders(
+        self,
+        *,
+        account_name: str,
+        order_ids: Sequence[str],
+    ) -> OrderInspectionResult:
+        self._require_open()
+        requested = _normalized_order_ids(order_ids)
+        client = self._client_for(account_name)
+        observed_at = datetime.now(timezone.utc)
+        snapshots: list[RemoteOrderSnapshot] = []
+        failed: list[str] = []
+        failure_types: list[str] = []
+        for order_id in requested:
+            try:
+                remote_order = client.get_order(
+                    order_id=order_id
+                )
+                snapshots.append(
+                    _remote_order_snapshot(
+                        remote_order,
+                        expected_order_id=order_id,
+                        observed_at=observed_at,
+                    )
+                )
+            except Exception as exc:
+                failed.append(order_id)
+                failure_types.append(type(exc).__name__)
+        error = None
+        if failed:
+            error = (
+                "Polymarket order inspection failed: "
+                + ",".join(dict.fromkeys(failure_types))
+            )
+        return OrderInspectionResult(
+            requested_order_ids=requested,
+            snapshots=tuple(snapshots),
+            failed_order_ids=tuple(failed),
+            error=error,
+        )
 
     def cancel_orders(
         self,
@@ -433,6 +478,83 @@ def _replacement_quantity(
     if not quantity.is_finite() or quantity <= 0:
         raise ValueError("replacement quantity must be positive")
     return quantity
+
+
+def _remote_order_snapshot(
+    remote_order: object,
+    *,
+    expected_order_id: str,
+    observed_at: datetime,
+) -> RemoteOrderSnapshot:
+    order_id = str(
+        getattr(remote_order, "id", "") or ""
+    ).strip()
+    if order_id != expected_order_id:
+        raise ValueError("remote order ID mismatch")
+    condition_id = str(
+        getattr(remote_order, "condition_id", "") or ""
+    ).strip()
+    asset_id = str(
+        getattr(remote_order, "token_id", "") or ""
+    ).strip()
+    side = str(
+        getattr(remote_order, "side", "") or ""
+    ).strip().upper()
+    raw_remote_status = str(
+        getattr(remote_order, "status", "") or ""
+    ).strip().upper()
+    remote_status = _normalized_remote_status(raw_remote_status)
+    try:
+        limit_price = Decimal(
+            str(getattr(remote_order, "price", None))
+        )
+        original = Decimal(
+            str(getattr(remote_order, "original_size", None))
+        )
+        matched = Decimal(
+            str(getattr(remote_order, "size_matched", None))
+        )
+    except (ArithmeticError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("remote order quantities are invalid") from exc
+    remaining = original - matched
+    if remaining == 0:
+        state = RemoteOrderState.FILLED
+    elif remote_status in {
+        "ACTIVE",
+        "DELAYED",
+        "LIVE",
+        "OPEN",
+        "PARTIALLY_FILLED",
+    }:
+        state = RemoteOrderState.OPEN
+    elif remote_status in {
+        "CANCELED",
+        "CANCELLED",
+        "CLOSED",
+        "EXPIRED",
+    }:
+        state = RemoteOrderState.CANCELLED
+    else:
+        state = RemoteOrderState.UNKNOWN
+    return RemoteOrderSnapshot(
+        order_id=order_id,
+        condition_id=condition_id,
+        asset_id=asset_id,
+        side=side,
+        limit_price=limit_price,
+        original_quantity=original,
+        matched_quantity=matched,
+        state=state,
+        remote_status=raw_remote_status,
+        observed_at=observed_at,
+    )
+
+
+def _normalized_remote_status(value: str) -> str:
+    prefix = "ORDER_STATUS_"
+    if value.startswith(prefix):
+        return value[len(prefix):]
+    return value
 
 
 def _validate_replacement_market(

@@ -9,6 +9,9 @@ from cbr_trading.execution.order_group_state import (
     SupervisionClaim,
 )
 from cbr_trading.execution.order_supervisor import TickSizeChange
+from cbr_trading.execution.supervision_gateway import (
+    OrderObservation,
+)
 
 
 class OrderGroupRepository(Protocol):
@@ -42,7 +45,9 @@ class OrderGroupRepository(Protocol):
         *,
         error: str,
         cancelled_order_ids: Sequence[str] = (),
+        filled_order_ids: Sequence[str] = (),
         replacement_orders: Sequence[PlacedOrder] = (),
+        observations: Sequence[OrderObservation] = (),
     ) -> None: ...
 
     def complete_reprice(
@@ -51,6 +56,17 @@ class OrderGroupRepository(Protocol):
         *,
         cancelled_order_ids: Sequence[str],
         replacement_orders: Sequence[PlacedOrder],
+        filled_order_ids: Sequence[str] = (),
+        observations: Sequence[OrderObservation] = (),
+    ) -> None: ...
+
+    def complete_without_replacement(
+        self,
+        claim: SupervisionClaim,
+        *,
+        filled_order_ids: Sequence[str],
+        cancelled_order_ids: Sequence[str] = (),
+        observations: Sequence[OrderObservation] = (),
     ) -> None: ...
 
     def close(self) -> None: ...

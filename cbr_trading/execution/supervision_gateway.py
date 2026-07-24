@@ -1,11 +1,177 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from enum import Enum
 from typing import Protocol, Sequence
 
 from cbr_trading.domain.intents import OrderSide, Outcome
 from cbr_trading.domain.results import PlacedOrder
+
+
+class RemoteOrderState(str, Enum):
+    OPEN = "OPEN"
+    CANCELLED = "CANCELLED"
+    FILLED = "FILLED"
+    UNKNOWN = "UNKNOWN"
+
+
+class OrderObservationPhase(str, Enum):
+    PRE_CANCEL = "PRE_CANCEL"
+    POST_CANCEL = "POST_CANCEL"
+    RECONCILE = "RECONCILE"
+
+
+@dataclass(frozen=True)
+class RemoteOrderSnapshot:
+    order_id: str
+    condition_id: str
+    asset_id: str
+    side: OrderSide
+    limit_price: Decimal
+    original_quantity: Decimal
+    matched_quantity: Decimal
+    state: RemoteOrderState
+    remote_status: str
+    observed_at: datetime
+
+    def __post_init__(self) -> None:
+        for name in (
+            "order_id",
+            "condition_id",
+            "asset_id",
+            "remote_status",
+        ):
+            value = str(getattr(self, name) or "").strip()
+            if not value:
+                raise ValueError(f"{name} is required")
+            object.__setattr__(self, name, value)
+        if not isinstance(self.side, OrderSide):
+            object.__setattr__(
+                self,
+                "side",
+                OrderSide(str(self.side).upper()),
+            )
+        if not isinstance(self.state, RemoteOrderState):
+            object.__setattr__(
+                self,
+                "state",
+                RemoteOrderState(str(self.state).upper()),
+            )
+
+        price = Decimal(str(self.limit_price))
+        original = Decimal(str(self.original_quantity))
+        matched = Decimal(str(self.matched_quantity))
+        if (
+            not price.is_finite()
+            or price <= 0
+            or price >= 1
+            or not original.is_finite()
+            or original <= 0
+            or not matched.is_finite()
+            or matched < 0
+            or matched > original
+        ):
+            raise ValueError("invalid remote order quantities")
+        remaining = original - matched
+        if self.state == RemoteOrderState.FILLED and remaining != 0:
+            raise ValueError(
+                "filled remote order must have no remaining quantity"
+            )
+        if self.state in {
+            RemoteOrderState.OPEN,
+            RemoteOrderState.CANCELLED,
+        } and remaining <= 0:
+            raise ValueError(
+                "open or cancelled remote order must have remaining quantity"
+            )
+        if (
+            self.observed_at.tzinfo is None
+            or self.observed_at.utcoffset() is None
+        ):
+            raise ValueError("observed_at must be timezone-aware")
+        object.__setattr__(self, "original_quantity", original)
+        object.__setattr__(self, "matched_quantity", matched)
+        object.__setattr__(self, "limit_price", price)
+        object.__setattr__(
+            self,
+            "observed_at",
+            self.observed_at.astimezone(timezone.utc),
+        )
+
+    @property
+    def remaining_quantity(self) -> Decimal:
+        return self.original_quantity - self.matched_quantity
+
+
+@dataclass(frozen=True)
+class OrderInspectionResult:
+    requested_order_ids: tuple[str, ...]
+    snapshots: tuple[RemoteOrderSnapshot, ...]
+    failed_order_ids: tuple[str, ...] = ()
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        requested = _normalized_ids(
+            self.requested_order_ids,
+            name="requested_order_ids",
+            required=True,
+        )
+        snapshots = tuple(self.snapshots)
+        if any(
+            not isinstance(snapshot, RemoteOrderSnapshot)
+            for snapshot in snapshots
+        ):
+            raise TypeError(
+                "snapshots must contain RemoteOrderSnapshot objects"
+            )
+        snapshot_ids = tuple(
+            snapshot.order_id
+            for snapshot in snapshots
+        )
+        if len(snapshot_ids) != len(set(snapshot_ids)):
+            raise ValueError("snapshot order ids must be unique")
+        failed = _normalized_ids(
+            self.failed_order_ids,
+            name="failed_order_ids",
+            required=False,
+        )
+        if set(snapshot_ids) & set(failed):
+            raise ValueError(
+                "inspected and failed order ids must be disjoint"
+            )
+        if set(snapshot_ids) | set(failed) != set(requested):
+            raise ValueError(
+                "inspection result must account for every requested order"
+            )
+        error = str(self.error or "").strip() or None
+        if failed and error is None:
+            raise ValueError(
+                "failed inspection result requires an error"
+            )
+        object.__setattr__(self, "requested_order_ids", requested)
+        object.__setattr__(self, "snapshots", snapshots)
+        object.__setattr__(self, "failed_order_ids", failed)
+        object.__setattr__(self, "error", error)
+
+
+@dataclass(frozen=True)
+class OrderObservation:
+    phase: OrderObservationPhase
+    snapshot: RemoteOrderSnapshot
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.phase, OrderObservationPhase):
+            object.__setattr__(
+                self,
+                "phase",
+                OrderObservationPhase(str(self.phase).upper()),
+            )
+        if not isinstance(self.snapshot, RemoteOrderSnapshot):
+            raise TypeError(
+                "snapshot must be a RemoteOrderSnapshot"
+            )
 
 
 @dataclass(frozen=True)
@@ -136,6 +302,13 @@ class ReplacementOrderRequest:
 class SupervisionOrderGateway(Protocol):
     """Exact-order cancellation and replacement boundary."""
 
+    def inspect_orders(
+        self,
+        *,
+        account_name: str,
+        order_ids: Sequence[str],
+    ) -> OrderInspectionResult: ...
+
     def cancel_orders(
         self,
         *,
@@ -180,3 +353,24 @@ def replacement_price_for_tick(
             "desired price cannot be represented by the target tick"
         )
     return effective
+
+
+def _normalized_ids(
+    values: Sequence[str],
+    *,
+    name: str,
+    required: bool,
+) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{name} must be a sequence, not a string")
+    normalized = tuple(
+        str(value or "").strip()
+        for value in values
+    )
+    if any(not value for value in normalized):
+        raise ValueError(f"{name} cannot contain empty values")
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{name} must be unique")
+    if required and not normalized:
+        raise ValueError(f"{name} must not be empty")
+    return normalized

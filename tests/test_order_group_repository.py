@@ -11,7 +11,11 @@ from cbr_trading.domain import (
     RepriceOnTickChange,
 )
 from cbr_trading.execution import (
+    OrderObservation,
+    OrderObservationPhase,
     OrderGroupStatus,
+    RemoteOrderSnapshot,
+    RemoteOrderState,
     SupervisionClaim,
     TickSizeChange,
     registration_from_handle,
@@ -63,6 +67,38 @@ def _event() -> TickSizeChange:
             13,
             30,
             tzinfo=timezone.utc,
+        ),
+    )
+
+
+def _observation(
+    *,
+    phase: OrderObservationPhase = (
+        OrderObservationPhase.PRE_CANCEL
+    ),
+    state: RemoteOrderState = RemoteOrderState.FILLED,
+    matched: Decimal = Decimal("25"),
+) -> OrderObservation:
+    return OrderObservation(
+        phase=phase,
+        snapshot=RemoteOrderSnapshot(
+            order_id="order-1",
+            condition_id="condition-1",
+            asset_id="asset-yes",
+            side=OrderSide.BUY,
+            limit_price=Decimal("0.99"),
+            original_quantity=Decimal("25"),
+            matched_quantity=matched,
+            state=state,
+            remote_status=state.value,
+            observed_at=datetime(
+                2026,
+                7,
+                24,
+                13,
+                31,
+                tzinfo=timezone.utc,
+            ),
         ),
     )
 
@@ -190,7 +226,7 @@ class AdditiveMigrationTests(unittest.TestCase):
     def test_migration_only_creates_new_objects(self) -> None:
         sql = order_supervision_migration_sql().upper()
 
-        self.assertEqual(sql.count("CREATE TABLE IF NOT EXISTS"), 3)
+        self.assertEqual(sql.count("CREATE TABLE IF NOT EXISTS"), 4)
         self.assertNotIn("ALTER TABLE", sql)
         self.assertNotIn("DROP TABLE", sql)
         self.assertNotIn("DROP COLUMN", sql)
@@ -199,9 +235,10 @@ class AdditiveMigrationTests(unittest.TestCase):
         self.assertIn("RESOLUTION_ORDER_GROUPS", sql)
         self.assertIn("RESOLUTION_ORDER_GROUP_ORDERS", sql)
         self.assertIn("RESOLUTION_SUPERVISION_EVENTS", sql)
+        self.assertIn("RESOLUTION_ORDER_OBSERVATIONS", sql)
 
     def test_migrate_executes_additive_script_in_one_transaction(self) -> None:
-        session = _Session([_Result()])
+        session = _Session([_Result(), _Result()])
         repository = SqlAlchemyOrderGroupRepository(
             session_factory=lambda: session,
             text_factory=lambda value: value,
@@ -210,13 +247,17 @@ class AdditiveMigrationTests(unittest.TestCase):
         repository.migrate()
 
         self.assertEqual(session.commits, 1)
-        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(len(session.calls), 2)
         self.assertIn(
             "CREATE TABLE IF NOT EXISTS resolution_order_groups",
             session.calls[0][0],
         )
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS resolution_order_observations",
+            session.calls[1][0],
+        )
 
-    def test_ready_check_requires_all_three_new_tables(self) -> None:
+    def test_ready_check_requires_all_four_new_tables(self) -> None:
         session = _Session(
             [
                 _Result(
@@ -227,6 +268,8 @@ class AdditiveMigrationTests(unittest.TestCase):
                         "orders_columns": True,
                         "events_table": True,
                         "events_columns": True,
+                        "observations_table": True,
+                        "observations_columns": True,
                     }
                 )
             ]
@@ -550,6 +593,45 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         self.assertEqual(session.commits, 1)
         self.assertEqual(session.calls[1][1]["status"], "CANCELLED")
         self.assertEqual(session.calls[2][1]["status"], "UNKNOWN")
+
+    def test_complete_filled_group_persists_remote_observation(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"revision": 2}),
+                _Result(rowcount=1),
+                _Result(all_rows=[{"order_id": "order-1"}]),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="tick-event-1",
+            order_group_id="group-1",
+            acquired=True,
+            revision=1,
+        )
+
+        repository.complete_without_replacement(
+            claim,
+            filled_order_ids=("order-1",),
+            observations=(_observation(),),
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertIn(
+            "INSERT INTO resolution_order_observations",
+            session.calls[1][0],
+        )
+        self.assertEqual(
+            session.calls[1][1]["remaining_quantity"],
+            Decimal("0"),
+        )
+        self.assertEqual(session.calls[2][1]["status"], "FILLED")
 
 
 if __name__ == "__main__":

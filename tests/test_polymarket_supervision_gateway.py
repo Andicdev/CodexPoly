@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from cbr_trading.domain import OrderSide, Outcome
 from cbr_trading.execution import ReplacementOrderRequest
+from cbr_trading.execution import RemoteOrderState
 from cbr_trading.live.account_repository import TradingAccountRecord
 from cbr_trading.live.safety import LiveSafetySettings
 from cbr_trading.live.supervision_gateway import (
@@ -82,6 +83,25 @@ def _book(
     )
 
 
+def _remote_order(
+    order_id: str,
+    *,
+    status: str = "LIVE",
+    original: Decimal = Decimal("25"),
+    matched: Decimal = Decimal("0"),
+) -> object:
+    return SimpleNamespace(
+        id=order_id,
+        condition_id=CONDITION_ID,
+        token_id="asset-yes",
+        side="BUY",
+        price=Decimal("0.99"),
+        status=status,
+        original_size=original,
+        size_matched=matched,
+    )
+
+
 class _AccountRepository:
     def __init__(self):
         self.loads: list[str] = []
@@ -120,10 +140,22 @@ class _Client:
         self.cancel_error: Exception | None = None
         self.book_error: Exception | None = None
         self.place_error: Exception | None = None
+        self.orders = {
+            "order-1": _remote_order("order-1"),
+            "order-2": _remote_order("order-2"),
+        }
+        self.order_errors: dict[str, Exception] = {}
+        self.get_order_calls: list[str] = []
         self.cancel_calls: list[tuple[str, ...]] = []
         self.book_calls: list[str] = []
         self.place_calls: list[dict] = []
         self.close_calls = 0
+
+    def get_order(self, *, order_id):
+        self.get_order_calls.append(order_id)
+        if order_id in self.order_errors:
+            raise self.order_errors[order_id]
+        return self.orders[order_id]
 
     def cancel_orders(self, *, order_ids):
         self.cancel_calls.append(tuple(order_ids))
@@ -207,6 +239,141 @@ class PolymarketSupervisionOrderGatewayTests(unittest.TestCase):
             factory_calls,
             [("private-key", WALLET)],
         )
+
+    def test_inspection_normalizes_remaining_and_terminal_state(
+        self,
+    ) -> None:
+        client = _Client()
+        client.orders = {
+            "order-1": _remote_order(
+                "order-1",
+                status="ORDER_STATUS_LIVE",
+                matched=Decimal("7"),
+            ),
+            "order-2": _remote_order(
+                "order-2",
+                status="ORDER_STATUS_MATCHED",
+                matched=Decimal("25"),
+            ),
+        }
+        gateway, _, _ = self._gateway(client=client)
+
+        result = gateway.inspect_orders(
+            account_name="primary",
+            order_ids=("order-1", "order-2"),
+        )
+
+        self.assertEqual(
+            client.get_order_calls,
+            ["order-1", "order-2"],
+        )
+        self.assertEqual(result.failed_order_ids, ())
+        self.assertEqual(
+            result.snapshots[0].state,
+            RemoteOrderState.OPEN,
+        )
+        self.assertEqual(
+            result.snapshots[0].remaining_quantity,
+            Decimal("18"),
+        )
+        self.assertEqual(
+            result.snapshots[1].state,
+            RemoteOrderState.FILLED,
+        )
+
+    def test_inspection_normalizes_official_cancelled_status(
+        self,
+    ) -> None:
+        client = _Client()
+        client.orders["order-1"] = _remote_order(
+            "order-1",
+            status="ORDER_STATUS_CANCELED",
+            matched=Decimal("7"),
+        )
+        gateway, _, _ = self._gateway(client=client)
+
+        result = gateway.inspect_orders(
+            account_name="primary",
+            order_ids=("order-1",),
+        )
+
+        self.assertEqual(
+            result.snapshots[0].state,
+            RemoteOrderState.CANCELLED,
+        )
+        self.assertEqual(
+            result.snapshots[0].remote_status,
+            "ORDER_STATUS_CANCELED",
+        )
+
+    def test_inspection_fails_closed_for_inconsistent_matched_status(
+        self,
+    ) -> None:
+        client = _Client()
+        client.orders["order-1"] = _remote_order(
+            "order-1",
+            status="ORDER_STATUS_MATCHED",
+            matched=Decimal("7"),
+        )
+        gateway, _, _ = self._gateway(client=client)
+
+        result = gateway.inspect_orders(
+            account_name="primary",
+            order_ids=("order-1",),
+        )
+
+        self.assertEqual(
+            result.snapshots[0].state,
+            RemoteOrderState.UNKNOWN,
+        )
+
+    def test_inspection_does_not_replace_market_resolved_cancellation(
+        self,
+    ) -> None:
+        client = _Client()
+        client.orders["order-1"] = _remote_order(
+            "order-1",
+            status="ORDER_STATUS_CANCELED_MARKET_RESOLVED",
+            matched=Decimal("7"),
+        )
+        gateway, _, _ = self._gateway(client=client)
+
+        result = gateway.inspect_orders(
+            account_name="primary",
+            order_ids=("order-1",),
+        )
+
+        self.assertEqual(
+            result.snapshots[0].state,
+            RemoteOrderState.UNKNOWN,
+        )
+
+    def test_inspection_failure_accounts_for_exact_failed_id(
+        self,
+    ) -> None:
+        client = _Client()
+        client.order_errors["order-2"] = RuntimeError(
+            "temporary lookup failure"
+        )
+        gateway, _, _ = self._gateway(client=client)
+
+        result = gateway.inspect_orders(
+            account_name="primary",
+            order_ids=("order-1", "order-2"),
+        )
+
+        self.assertEqual(
+            tuple(
+                snapshot.order_id
+                for snapshot in result.snapshots
+            ),
+            ("order-1",),
+        )
+        self.assertEqual(
+            result.failed_order_ids,
+            ("order-2",),
+        )
+        self.assertIn("RuntimeError", result.error)
 
     def test_partial_cancel_preserves_confirmed_external_effects(
         self,

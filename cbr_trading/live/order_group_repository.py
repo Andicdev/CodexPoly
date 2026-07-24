@@ -16,13 +16,23 @@ from cbr_trading.execution.order_group_state import (
     registration_from_handle,
 )
 from cbr_trading.execution.order_supervisor import TickSizeChange
+from cbr_trading.execution.supervision_gateway import (
+    OrderObservation,
+)
 from cbr_trading.secret_guard import redact_sensitive_text
 
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "migrations"
-    / "001_add_order_supervision_tables.sql"
+_MIGRATION_PATHS = (
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "001_add_order_supervision_tables.sql"
+    ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "002_add_order_observations.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
@@ -69,7 +79,22 @@ SELECT
               'claimed_revision', 'error', 'payload', 'created_at',
               'updated_at'
           ])
-    ) AS events_columns
+    ) AS events_columns,
+    to_regclass('resolution_order_observations') IS NOT NULL
+        AS observations_table,
+    (
+        SELECT count(*) = 15
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'resolution_order_observations'
+          AND column_name = ANY(ARRAY[
+              'event_id', 'order_group_id', 'order_id', 'phase',
+              'condition_id', 'asset_id', 'side', 'remote_state',
+              'remote_status', 'original_quantity', 'matched_quantity',
+              'remaining_quantity', 'limit_price', 'observed_at',
+              'created_at'
+          ])
+    ) AS observations_columns
 """.strip()
 
 _INSERT_GROUP_SQL = """
@@ -277,6 +302,19 @@ WHERE order_group_id = :order_group_id
 RETURNING reprice_count, status, revision
 """.strip()
 
+_COMPLETE_WITHOUT_REPLACEMENT_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    status = 'COMPLETED',
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+RETURNING revision
+""".strip()
+
 _CLOSE_OWNED_ORDERS_SQL = """
 UPDATE resolution_order_group_orders
 SET
@@ -310,6 +348,47 @@ VALUES (
     :parent_order_id,
     CAST(:metadata AS jsonb)
 )
+""".strip()
+
+_INSERT_OBSERVATION_SQL = """
+INSERT INTO resolution_order_observations (
+    event_id,
+    order_group_id,
+    order_id,
+    phase,
+    condition_id,
+    asset_id,
+    side,
+    remote_state,
+    remote_status,
+    limit_price,
+    original_quantity,
+    matched_quantity,
+    remaining_quantity,
+    observed_at
+)
+VALUES (
+    :event_id,
+    :order_group_id,
+    :order_id,
+    :phase,
+    :condition_id,
+    :asset_id,
+    :side,
+    :remote_state,
+    :remote_status,
+    :limit_price,
+    :original_quantity,
+    :matched_quantity,
+    :remaining_quantity,
+    :observed_at
+)
+ON CONFLICT (
+    event_id,
+    order_group_id,
+    order_id,
+    phase
+) DO NOTHING
 """.strip()
 
 _COMPLETE_EVENT_SQL = """
@@ -374,9 +453,12 @@ class SqlAlchemyOrderGroupRepository:
 
         session_factory, text_factory = self._resolve_dependencies()
         try:
-            migration_sql = _MIGRATION_PATH.read_text(encoding="utf-8")
             with session_factory() as session:
-                session.execute(text_factory(migration_sql))
+                for path in _MIGRATION_PATHS:
+                    migration_sql = path.read_text(
+                        encoding="utf-8"
+                    )
+                    session.execute(text_factory(migration_sql))
                 session.commit()
         except Exception as exc:
             raise OrderGroupRepositoryError(
@@ -406,6 +488,8 @@ class SqlAlchemyOrderGroupRepository:
                 "orders_columns",
                 "events_table",
                 "events_columns",
+                "observations_table",
+                "observations_columns",
             )
         ):
             raise OrderGroupRepositoryError(
@@ -577,7 +661,9 @@ class SqlAlchemyOrderGroupRepository:
         *,
         error: str,
         cancelled_order_ids: Sequence[str] = (),
+        filled_order_ids: Sequence[str] = (),
         replacement_orders: Sequence[PlacedOrder] = (),
+        observations: Sequence[OrderObservation] = (),
     ) -> None:
         if not claim.acquired or claim.revision is None:
             raise ValueError("only an acquired supervision claim can fail")
@@ -589,10 +675,20 @@ class SqlAlchemyOrderGroupRepository:
             name="cancelled_order_ids",
             required=False,
         )
+        filled = _normalized_order_ids(
+            filled_order_ids,
+            name="filled_order_ids",
+            required=False,
+        )
+        _require_disjoint_order_ids(
+            cancelled,
+            filled,
+        )
         replacements = _validated_replacement_orders(
             replacement_orders,
             required=False,
         )
+        inspected = _validated_observations(observations)
         params = {
             "event_id": claim.event_id,
             "order_group_id": claim.order_group_id,
@@ -613,23 +709,28 @@ class SqlAlchemyOrderGroupRepository:
                     )
                 generation = int(failed_group["failed_generation"])
 
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                if filled:
+                    _close_owned_orders(
+                        session,
+                        text_factory=text_factory,
+                        params=params,
+                        order_ids=filled,
+                        status="FILLED",
+                    )
                 if cancelled:
-                    closed = session.execute(
-                        text_factory(_CLOSE_OWNED_ORDERS_SQL),
-                        {
-                            **params,
-                            "status": "CANCELLED",
-                            "order_ids": list(cancelled),
-                        },
-                    ).mappings().all()
-                    try:
-                        _require_exact_closed_orders(
-                            closed,
-                            expected=cancelled,
-                        )
-                    except OrderGroupRepositoryError:
-                        session.rollback()
-                        raise
+                    _close_owned_orders(
+                        session,
+                        text_factory=text_factory,
+                        params=params,
+                        order_ids=cancelled,
+                        status="CANCELLED",
+                    )
 
                 parent_order_id = (
                     cancelled[0]
@@ -672,6 +773,8 @@ class SqlAlchemyOrderGroupRepository:
         *,
         cancelled_order_ids: Sequence[str],
         replacement_orders: Sequence[PlacedOrder],
+        filled_order_ids: Sequence[str] = (),
+        observations: Sequence[OrderObservation] = (),
     ) -> None:
         if not claim.acquired or claim.revision is None:
             raise ValueError(
@@ -682,10 +785,20 @@ class SqlAlchemyOrderGroupRepository:
             name="cancelled_order_ids",
             required=True,
         )
+        filled = _normalized_order_ids(
+            filled_order_ids,
+            name="filled_order_ids",
+            required=False,
+        )
+        _require_disjoint_order_ids(
+            cancelled,
+            filled,
+        )
         replacements = _validated_replacement_orders(
             replacement_orders,
             required=True,
         )
+        inspected = _validated_observations(observations)
         params = {
             "event_id": claim.event_id,
             "order_group_id": claim.order_group_id,
@@ -705,22 +818,27 @@ class SqlAlchemyOrderGroupRepository:
                     )
                 generation = int(completed_group["reprice_count"])
 
-                closed = session.execute(
-                    text_factory(_CLOSE_OWNED_ORDERS_SQL),
-                    {
-                        **params,
-                        "status": "REPLACED",
-                        "order_ids": list(cancelled),
-                    },
-                ).mappings().all()
-                try:
-                    _require_exact_closed_orders(
-                        closed,
-                        expected=cancelled,
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                if filled:
+                    _close_owned_orders(
+                        session,
+                        text_factory=text_factory,
+                        params=params,
+                        order_ids=filled,
+                        status="FILLED",
                     )
-                except OrderGroupRepositoryError:
-                    session.rollback()
-                    raise
+                _close_owned_orders(
+                    session,
+                    text_factory=text_factory,
+                    params=params,
+                    order_ids=cancelled,
+                    status="REPLACED",
+                )
 
                 parent_order_id = (
                     cancelled[0]
@@ -754,6 +872,93 @@ class SqlAlchemyOrderGroupRepository:
         except Exception as exc:
             raise OrderGroupRepositoryError(
                 "Failed to complete order repricing: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def complete_without_replacement(
+        self,
+        claim: SupervisionClaim,
+        *,
+        filled_order_ids: Sequence[str],
+        cancelled_order_ids: Sequence[str] = (),
+        observations: Sequence[OrderObservation] = (),
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired supervision claim can complete"
+            )
+        filled = _normalized_order_ids(
+            filled_order_ids,
+            name="filled_order_ids",
+            required=False,
+        )
+        cancelled = _normalized_order_ids(
+            cancelled_order_ids,
+            name="cancelled_order_ids",
+            required=False,
+        )
+        if not filled and not cancelled:
+            raise ValueError(
+                "filled or cancelled order ids are required"
+            )
+        _require_disjoint_order_ids(cancelled, filled)
+        inspected = _validated_observations(observations)
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                completed = session.execute(
+                    text_factory(
+                        _COMPLETE_WITHOUT_REPLACEMENT_GROUP_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if completed is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision claim is no longer current"
+                    )
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                if filled:
+                    _close_owned_orders(
+                        session,
+                        text_factory=text_factory,
+                        params=params,
+                        order_ids=filled,
+                        status="FILLED",
+                    )
+                if cancelled:
+                    _close_owned_orders(
+                        session,
+                        text_factory=text_factory,
+                        params=params,
+                        order_ids=cancelled,
+                        status="CANCELLED",
+                    )
+                completed_event = session.execute(
+                    text_factory(_COMPLETE_EVENT_SQL),
+                    params,
+                )
+                if int(completed_event.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision event completion was not persisted"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to complete filled order group: "
                 f"{type(exc).__name__}"
             ) from exc
 
@@ -812,7 +1017,10 @@ class SqlAlchemyOrderGroupRepository:
 def order_supervision_migration_sql() -> str:
     """Expose the reviewed additive SQL for deployment tooling and tests."""
 
-    return _MIGRATION_PATH.read_text(encoding="utf-8")
+    return "\n\n".join(
+        path.read_text(encoding="utf-8")
+        for path in _MIGRATION_PATHS
+    )
 
 
 def _registration_params(
@@ -908,6 +1116,97 @@ def _validated_replacement_orders(
     if required and not orders:
         raise ValueError("replacement_orders must not be empty")
     return orders
+
+
+def _validated_observations(
+    values: Sequence[OrderObservation],
+) -> tuple[OrderObservation, ...]:
+    observations = tuple(values)
+    if any(
+        not isinstance(observation, OrderObservation)
+        for observation in observations
+    ):
+        raise TypeError(
+            "observations must contain OrderObservation objects"
+        )
+    keys = [
+        (
+            observation.snapshot.order_id,
+            observation.phase.value,
+        )
+        for observation in observations
+    ]
+    if len(keys) != len(set(keys)):
+        raise ValueError(
+            "order observation phase keys must be unique"
+        )
+    return observations
+
+
+def _require_disjoint_order_ids(
+    first: Sequence[str],
+    second: Sequence[str],
+) -> None:
+    if set(first) & set(second):
+        raise ValueError(
+            "cancelled and filled order ids must be disjoint"
+        )
+
+
+def _close_owned_orders(
+    session: Any,
+    *,
+    text_factory: Callable[[str], Any],
+    params: Mapping[str, Any],
+    order_ids: Sequence[str],
+    status: str,
+) -> None:
+    closed = session.execute(
+        text_factory(_CLOSE_OWNED_ORDERS_SQL),
+        {
+            **params,
+            "status": status,
+            "order_ids": list(order_ids),
+        },
+    ).mappings().all()
+    try:
+        _require_exact_closed_orders(
+            closed,
+            expected=order_ids,
+        )
+    except OrderGroupRepositoryError:
+        session.rollback()
+        raise
+
+
+def _persist_observations(
+    session: Any,
+    *,
+    text_factory: Callable[[str], Any],
+    claim: SupervisionClaim,
+    observations: Sequence[OrderObservation],
+) -> None:
+    for observation in observations:
+        snapshot = observation.snapshot
+        session.execute(
+            text_factory(_INSERT_OBSERVATION_SQL),
+            {
+                "event_id": claim.event_id,
+                "order_group_id": claim.order_group_id,
+                "order_id": snapshot.order_id,
+                "phase": observation.phase.value,
+                "condition_id": snapshot.condition_id,
+                "asset_id": snapshot.asset_id,
+                "side": snapshot.side.value,
+                "remote_state": snapshot.state.value,
+                "remote_status": snapshot.remote_status,
+                "limit_price": snapshot.limit_price,
+                "original_quantity": snapshot.original_quantity,
+                "matched_quantity": snapshot.matched_quantity,
+                "remaining_quantity": snapshot.remaining_quantity,
+                "observed_at": snapshot.observed_at,
+            },
+        )
 
 
 def _require_exact_closed_orders(
