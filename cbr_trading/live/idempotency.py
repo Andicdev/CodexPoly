@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 
 from cbr_trading.pipeline import OrderIntent
 from cbr_trading.rule_repository import (
@@ -87,7 +87,7 @@ INSERT INTO news_trade_confirmations (
 )
 VALUES (
     :idempotency_key,
-    'EXECUTING',
+    'PENDING',
     :sub_id,
     :ticker,
     :metric_key,
@@ -118,10 +118,8 @@ SET
     error = :error,
     updated_at = now()
 WHERE id = :claim_id
-  AND status = 'EXECUTING'
+  AND status = 'PENDING'
 """.strip()
-
-_WARM_CONNECTION_SQL = "SELECT 1"
 
 
 class ExecutionLedgerError(RuntimeError):
@@ -176,25 +174,98 @@ class SqlAlchemyExecutionLedger:
                 "news_trade_confirmations is not ready for safe "
                 "idempotency claims"
             )
+        self.verify_reservation_compatibility()
 
-    def warm_claim_capacity(self, count: int) -> None:
-        """Open claim connections before the latency-sensitive release."""
-        capacity = max(1, min(int(count), 8))
+    def verify_reservation_compatibility(self) -> None:
+        """Execute the real PENDING insert shape and always roll it back."""
         session_factory, text_factory = self._resolve_dependencies()
-
-        def probe() -> None:
-            with session_factory() as session:
-                session.execute(text_factory(_WARM_CONNECTION_SQL))
-
+        probe_intent = OrderIntent(
+            rule_id=None,
+            rule_key="schema_probe",
+            account_name="schema_probe",
+            condition_id="0x" + ("0" * 64),
+            action="YES",
+            quantity=1,
+            limit_price="0.01",
+            ready=True,
+            reason="schema_probe",
+        )
+        params = _claim_params(
+            release_url=f"cbr-schema-probe://{uuid4().hex}",
+            intent=probe_intent,
+        )
         try:
-            with ThreadPoolExecutor(
-                max_workers=capacity,
-                thread_name_prefix="cbr-ledger-warm",
-            ) as pool:
-                list(pool.map(lambda _: probe(), range(capacity)))
+            with session_factory() as session:
+                inserted = session.execute(
+                    text_factory(_INSERT_CLAIM_SQL),
+                    params,
+                ).mappings().one_or_none()
+                if inserted is None:
+                    raise ExecutionLedgerError(
+                        "Execution ledger reservation probe conflicted"
+                    )
+                session.rollback()
+        except ExecutionLedgerError:
+            raise
         except Exception as exc:
             raise ExecutionLedgerError(
-                "Failed to warm execution ledger connections: "
+                "Execution ledger reservation probe failed: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def reserve_many(
+        self,
+        *,
+        release_url: str,
+        intents: list[OrderIntent] | tuple[OrderIntent, ...],
+    ) -> tuple[ExecutionClaim, ...]:
+        if not intents:
+            return ()
+        session_factory, text_factory = self._resolve_dependencies()
+        claims: list[ExecutionClaim] = []
+        try:
+            with session_factory() as session:
+                for intent in intents:
+                    params = _claim_params(
+                        release_url=release_url,
+                        intent=intent,
+                    )
+                    inserted = session.execute(
+                        text_factory(_INSERT_CLAIM_SQL),
+                        params,
+                    ).mappings().one_or_none()
+                    if inserted is None:
+                        existing = session.execute(
+                            text_factory(_SELECT_EXISTING_SQL),
+                            {
+                                "idempotency_key": params[
+                                    "idempotency_key"
+                                ]
+                            },
+                        ).mappings().one()
+                        session.rollback()
+                        raise ExecutionLedgerError(
+                            "Live order reservation already exists "
+                            f"for rule={intent.rule_id!r} "
+                            f"action={intent.action} "
+                            f"status={existing.get('status') or 'UNKNOWN'}"
+                        )
+                    claims.append(
+                        ExecutionClaim(
+                            acquired=True,
+                            idempotency_key=str(
+                                params["idempotency_key"]
+                            ),
+                            claim_id=int(inserted["id"]),
+                        )
+                    )
+                session.commit()
+                return tuple(claims)
+        except ExecutionLedgerError:
+            raise
+        except Exception as exc:
+            raise ExecutionLedgerError(
+                "Failed to reserve live order idempotency: "
                 f"{type(exc).__name__}"
             ) from exc
 
@@ -204,82 +275,11 @@ class SqlAlchemyExecutionLedger:
         release_url: str,
         intent: OrderIntent,
     ) -> ExecutionClaim:
-        session_factory, text_factory = self._resolve_dependencies()
-        key = make_idempotency_key(
+        """Compatibility wrapper for one pre-release reservation."""
+        return self.reserve_many(
             release_url=release_url,
-            intent=intent,
-        )
-        payload = {
-            "component": "cbr_trading",
-            "version": 1,
-            "release_url": str(release_url),
-            "rule_id": intent.rule_id,
-            "rule_key": intent.rule_key,
-            "action": intent.action,
-        }
-        params = {
-            "idempotency_key": key,
-            "sub_id": _integer_or_none(intent.rule_id),
-            "ticker": CBR_TICKER,
-            "metric_key": CBR_CHANGE_METRIC,
-            "execution_path": CBR_EXECUTION_PATH,
-            "action": intent.action,
-            "account_name": intent.account_name,
-            "condition_id": intent.condition_id,
-            "order_qty": intent.quantity,
-            "order_price": intent.limit_price,
-            "source_url": str(release_url),
-            "payload": json.dumps(
-                payload,
-                ensure_ascii=False,
-                default=str,
-            ),
-        }
-
-        try:
-            with session_factory() as session:
-                inserted = session.execute(
-                    text_factory(_INSERT_CLAIM_SQL),
-                    params,
-                ).mappings().one_or_none()
-                if inserted is not None:
-                    session.commit()
-                    return ExecutionClaim(
-                        acquired=True,
-                        idempotency_key=key,
-                        claim_id=int(inserted["id"]),
-                    )
-
-                existing = session.execute(
-                    text_factory(_SELECT_EXISTING_SQL),
-                    {"idempotency_key": key},
-                ).mappings().one()
-                session.commit()
-        except Exception as exc:
-            raise ExecutionLedgerError(
-                "Failed to claim live order idempotency: "
-                f"{type(exc).__name__}"
-            ) from exc
-
-        result = existing.get("result")
-        order_id = (
-            str(result.get("order_id"))
-            if isinstance(result, Mapping)
-            and result.get("order_id")
-            else None
-        )
-        return ExecutionClaim(
-            acquired=False,
-            idempotency_key=key,
-            claim_id=int(existing["id"]),
-            existing_status=str(existing.get("status") or "UNKNOWN"),
-            existing_order_id=order_id,
-            existing_error=(
-                str(existing.get("error"))
-                if existing.get("error")
-                else None
-            ),
-        )
+            intents=(intent,),
+        )[0]
 
     def complete(
         self,
@@ -290,7 +290,12 @@ class SqlAlchemyExecutionLedger:
         error: str | None = None,
     ) -> None:
         normalized_status = str(status or "").strip().upper()
-        if normalized_status not in {"EXECUTED", "REJECTED", "FAILED"}:
+        if normalized_status not in {
+            "EXECUTED",
+            "REJECTED",
+            "EXPIRED",
+            "ERROR",
+        }:
             raise ValueError(
                 f"Unsupported execution ledger status: {status!r}"
             )
@@ -313,7 +318,7 @@ class SqlAlchemyExecutionLedger:
                 )
                 if int(updated.rowcount or 0) != 1:
                     raise ExecutionLedgerError(
-                        "Execution claim was not in EXECUTING state"
+                        "Execution reservation was not in PENDING state"
                     )
                 session.commit()
         except ExecutionLedgerError:
@@ -400,6 +405,43 @@ def make_idempotency_key(
     )
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"cbr_auto:v1:{digest}"
+
+
+def _claim_params(
+    *,
+    release_url: str,
+    intent: OrderIntent,
+) -> dict[str, Any]:
+    key = make_idempotency_key(
+        release_url=release_url,
+        intent=intent,
+    )
+    payload = {
+        "component": "cbr_trading",
+        "version": 2,
+        "release_url": str(release_url),
+        "rule_id": intent.rule_id,
+        "rule_key": intent.rule_key,
+        "action": intent.action,
+    }
+    return {
+        "idempotency_key": key,
+        "sub_id": _integer_or_none(intent.rule_id),
+        "ticker": CBR_TICKER,
+        "metric_key": CBR_CHANGE_METRIC,
+        "execution_path": CBR_EXECUTION_PATH,
+        "action": intent.action,
+        "account_name": intent.account_name,
+        "condition_id": intent.condition_id,
+        "order_qty": intent.quantity,
+        "order_price": intent.limit_price,
+        "source_url": str(release_url),
+        "payload": json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=str,
+        ),
+    }
 
 
 def _integer_or_none(value: int | str | None) -> int | None:

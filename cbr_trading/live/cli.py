@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
+from cbr_trading.client import DiscoveryResult
 from cbr_trading.db_config import resolve_database_selection
 from cbr_trading.live.account_repository import (
     SqlAlchemyTradingAccountRepository,
@@ -26,6 +28,8 @@ from cbr_trading.live.safety import (
     LiveSafetySettings,
     build_live_order_plan,
 )
+from cbr_trading.pipeline import OrderIntent
+from cbr_trading.release import build_predicted_release_url
 from cbr_trading.rule_repository import (
     RuleLoadError,
     SqlAlchemyRuleRepository,
@@ -35,6 +39,9 @@ from cbr_trading.secret_guard import (
     redact_sensitive_text,
 )
 from cbr_trading.trading_rules import resolve_order_price
+
+
+_LIVE_TEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -57,6 +64,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.runner_preflight:
         return _run_runner_preflight(
+            database_url=database.url,
+            database_target=database.target,
+        )
+    if args.full_path_live_test:
+        return _run_full_path_live_test(
+            args=args,
             database_url=database.url,
             database_target=database.target,
         )
@@ -289,6 +302,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "books, and idempotency table. Never submits an order."
         ),
     )
+    mode_group.add_argument(
+        "--full-path-live-test",
+        action="store_true",
+        help=(
+            "Submit one real order through the same warmed executor, "
+            "pre-release reservation, batch-post, and ledger-completion "
+            "path as the continuous runner."
+        ),
+    )
+    parser.add_argument(
+        "--test-run-id",
+        default=None,
+        help=(
+            "Required stable idempotency id for --full-path-live-test. "
+            "Reuse the same value to make an accidental rerun fail "
+            "before order submission."
+        ),
+    )
     parser.add_argument(
         "--confirm-live-order",
         action="store_true",
@@ -298,6 +329,232 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _run_full_path_live_test(
+    *,
+    args: argparse.Namespace,
+    database_url: str,
+    database_target: str,
+) -> int:
+    validation_error = _validate_full_path_live_test_args(args)
+    if validation_error is not None:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": False,
+                "error": validation_error,
+            },
+            stream=sys.stderr,
+        )
+        return 4
+
+    action = str(args.action).upper()
+    test_run_id = str(args.test_run_id).strip()
+    try:
+        quantity = _required_decimal(args.quantity, name="order_qty")
+        limit_price = _required_decimal(
+            args.limit_price,
+            name=f"{action} order price",
+        )
+    except ValueError as exc:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": False,
+                "error": redact_sensitive_text(exc),
+            },
+            stream=sys.stderr,
+        )
+        return 4
+    if quantity <= 0:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": False,
+                "error": "Test quantity must be greater than zero",
+            },
+            stream=sys.stderr,
+        )
+        return 4
+    if limit_price <= 0 or limit_price >= 1:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": False,
+                "error": "Test limit price must be between zero and one",
+            },
+            stream=sys.stderr,
+        )
+        return 4
+
+    rule_repository = SqlAlchemyRuleRepository(
+        database_url=database_url
+    )
+    try:
+        rules = rule_repository.load_active_cbr_rules()
+        stored_rule = _select_rule(rules, rule_id=args.rule_id)
+    except (RuleLoadError, ValueError) as exc:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": False,
+                "error": redact_sensitive_text(exc),
+            },
+            stream=sys.stderr,
+        )
+        return 3
+    finally:
+        rule_repository.close()
+
+    test_rule = _with_order_overrides(
+        stored_rule,
+        action=action,
+        quantity=quantity,
+        limit_price=limit_price,
+    )
+    test_url = f"cbr-live-test://{test_run_id}"
+    safety = LiveSafetySettings.from_env()
+    executor = WarmLiveOrderExecutor(
+        subscriptions=(test_rule,),
+        database_url=database_url,
+        safety=safety,
+    )
+    intent = OrderIntent(
+        rule_id=test_rule.get("id"),
+        rule_key=str(test_rule.get("rule_key") or "default"),
+        account_name=str(test_rule.get("account_name") or ""),
+        condition_id=str(test_rule.get("condition_id") or ""),
+        action=action,
+        quantity=quantity,
+        limit_price=limit_price,
+        ready=True,
+        reason="full_path_live_test",
+    )
+    release = DiscoveryResult(
+        ok=True,
+        reason="full_path_live_test",
+        url=test_url,
+        request_url=test_url,
+        title="Manual full-path CBR live test",
+        detected_from="full_path_live_test",
+    )
+
+    execution_started = False
+    try:
+        summary = executor.prepare(release_url=test_url)
+        execution_started = True
+        results = tuple(executor.execute((intent,), release=release))
+    except Exception as exc:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": (
+                    None if execution_started else False
+                ),
+                "database_target": database_target,
+                "test_run_id": test_run_id,
+                "error": _safe_exception(exc),
+            },
+            stream=sys.stderr,
+        )
+        return 5
+    finally:
+        executor.close()
+
+    if len(results) != 1:
+        _print_json(
+            {
+                "ok": False,
+                "mode": "full_path_live_test",
+                "order_submitted": None,
+                "database_target": database_target,
+                "test_run_id": test_run_id,
+                "error": "Full-path executor returned an invalid result count",
+            },
+            stream=sys.stderr,
+        )
+        return 5
+
+    result = results[0]
+    payload = {
+        "ok": result.success is True,
+        "mode": "full_path_live_test",
+        "database_target": database_target,
+        "test_run_id": test_run_id,
+        "prepared_outcomes": summary.outcome_count,
+        "order": {
+            "rule_id": intent.rule_id,
+            "action": intent.action,
+            "quantity": str(quantity),
+            "limit_price": str(limit_price),
+        },
+        "result": {
+            "status": result.status,
+            "attempted": result.attempted,
+            "accepted": result.success,
+            "order_id": result.order_id,
+            "error": result.error,
+        },
+    }
+    _print_json(
+        payload,
+        stream=sys.stdout if result.success is True else sys.stderr,
+    )
+    return 0 if result.success is True else 5
+
+
+def _validate_full_path_live_test_args(
+    args: argparse.Namespace,
+) -> str | None:
+    if not args.confirm_live_order:
+        return (
+            "--confirm-live-order is required with "
+            "--full-path-live-test"
+        )
+    if args.rule_id is None:
+        return "--rule-id is required with --full-path-live-test"
+    if not args.action:
+        return "--action YES|NO is required with --full-path-live-test"
+    if args.quantity is None:
+        return "--quantity is required with --full-path-live-test"
+    if args.limit_price is None:
+        return "--limit-price is required with --full-path-live-test"
+    test_run_id = str(args.test_run_id or "").strip()
+    if not _LIVE_TEST_ID_PATTERN.fullmatch(test_run_id):
+        return (
+            "--test-run-id must be 3-64 characters using only "
+            "letters, digits, dot, underscore, or dash"
+        )
+    return None
+
+
+def _with_order_overrides(
+    rule: Mapping[str, Any],
+    *,
+    action: str,
+    quantity: Decimal,
+    limit_price: Decimal,
+) -> dict[str, Any]:
+    overridden = dict(rule)
+    overridden["order_qty"] = str(quantity)
+    raw_params = rule.get("params")
+    params = (
+        dict(raw_params)
+        if isinstance(raw_params, Mapping)
+        else {}
+    )
+    params[
+        "order_price_yes" if action == "YES" else "order_price_no"
+    ] = str(limit_price)
+    overridden["params"] = params
+    return overridden
 
 
 def _run_runner_preflight(
@@ -327,7 +584,15 @@ def _run_runner_preflight(
         safety=validation_safety,
     )
     try:
-        summary = executor.prepare()
+        summary = executor.prepare(
+            release_url=build_predicted_release_url(
+                release_date=os.environ.get("BOR_RELEASE_DATE"),
+                release_time_suffix=(
+                    os.environ.get("BOR_RELEASE_TIME_SUFFIX") or ""
+                ),
+            ),
+            reserve_claims=False,
+        )
     except Exception as exc:
         _print_json(
             {

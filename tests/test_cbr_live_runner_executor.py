@@ -116,8 +116,14 @@ class _MarketGateway:
 
 
 class _Ledger:
-    def __init__(self, *, acquired: bool = True):
-        self.acquired = acquired
+    def __init__(
+        self,
+        *,
+        reservation_error: Exception | None = None,
+        events: list[str] | None = None,
+    ):
+        self.reservation_error = reservation_error
+        self.events = events
         self.ready_checks = 0
         self.claims: list[str] = []
         self.completions: list[dict] = []
@@ -126,22 +132,29 @@ class _Ledger:
     def ensure_ready(self) -> None:
         self.ready_checks += 1
 
-    def claim(
+    def reserve_many(
         self,
         *,
         release_url: str,
-        intent: OrderIntent,
-    ) -> ExecutionClaim:
-        self.claims.append(intent.action)
-        return ExecutionClaim(
-            acquired=self.acquired,
-            idempotency_key="cbr_auto:v1:key",
-            claim_id=41 if intent.action == "YES" else 42,
-            existing_status=None if self.acquired else "EXECUTED",
-            existing_order_id=None if self.acquired else "old-order",
+        intents: tuple[OrderIntent, ...],
+    ) -> tuple[ExecutionClaim, ...]:
+        if self.reservation_error is not None:
+            raise self.reservation_error
+        if self.events is not None:
+            self.events.append("reserve")
+        self.claims.extend(intent.action for intent in intents)
+        return tuple(
+            ExecutionClaim(
+                acquired=True,
+                idempotency_key=f"cbr_auto:v1:{index}",
+                claim_id=41 + index,
+            )
+            for index, _ in enumerate(intents)
         )
 
     def complete(self, **kwargs: object) -> None:
+        if self.events is not None:
+            self.events.append("complete")
         self.completions.append(dict(kwargs))
 
     def close(self) -> None:
@@ -152,7 +165,8 @@ class _Client:
     wallet = WALLET
     wallet_type = "GNOSIS_SAFE"
 
-    def __init__(self):
+    def __init__(self, *, events: list[str] | None = None):
+        self.events = events
         self.order_creations: list[dict] = []
         self.batch_posts: list[list[object]] = []
         self.closed = False
@@ -174,6 +188,8 @@ class _Client:
         self,
         signed_orders: list[object],
     ) -> tuple[object, ...]:
+        if self.events is not None:
+            self.events.append("post")
         self.batch_posts.append(list(signed_orders))
         return tuple(
             SimpleNamespace(
@@ -220,7 +236,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
             ledger=ledger,
         )
 
-        summary = executor.prepare()
+        summary = executor.prepare(release_url=_release().url)
         result = executor.execute(
             [_intent()],
             release=_release(),
@@ -268,20 +284,20 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertTrue(repository.closed)
         self.assertTrue(ledger.closed)
 
-    def test_duplicate_never_reaches_order_submission(self) -> None:
+    def test_duplicate_reservation_fails_before_polling(self) -> None:
         client = _Client()
-        ledger = _Ledger(acquired=False)
+        ledger = _Ledger(
+            reservation_error=RuntimeError(
+                "reservation already exists"
+            )
+        )
         executor, _ = self._executor(client=client, ledger=ledger)
-        executor.prepare()
 
-        result = executor.execute(
-            [_intent()],
-            release=_release(),
-        )[0]
-
-        self.assertEqual(result.status, "DUPLICATE_SKIPPED")
-        self.assertEqual(result.order_id, "old-order")
-        self.assertFalse(result.attempted)
+        with self.assertRaisesRegex(
+            Exception,
+            "Failed to reserve all live orders before polling",
+        ):
+            executor.prepare(release_url=_release().url)
         self.assertEqual(client.batch_posts, [])
 
     def test_execute_posts_presigned_order_without_book_refresh(
@@ -290,7 +306,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         client = _Client()
         ledger = _Ledger()
         executor, _ = self._executor(client=client, ledger=ledger)
-        executor.prepare()
+        executor.prepare(release_url=_release().url)
 
         result = executor.execute(
             [_intent()],
@@ -303,11 +319,31 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertFalse(client.batch_posts[0][0].post_only)
         self.assertEqual(ledger.completions[0]["status"], "EXECUTED")
 
+    def test_execute_has_no_database_call_before_batch_post(self) -> None:
+        events: list[str] = []
+        client = _Client(events=events)
+        ledger = _Ledger(events=events)
+        executor, _ = self._executor(client=client, ledger=ledger)
+        executor.prepare(release_url=_release().url)
+
+        events.clear()
+        result = executor.execute(
+            [_intent()],
+            release=_release(),
+        )[0]
+
+        self.assertTrue(result.success)
+        self.assertEqual(events[0], "post")
+        self.assertEqual(
+            events,
+            ["post", "complete", "complete"],
+        )
+
     def test_multiple_claimed_orders_use_one_batch_post(self) -> None:
         client = _Client()
         ledger = _Ledger()
         executor, _ = self._executor(client=client, ledger=ledger)
-        executor.prepare()
+        executor.prepare(release_url=_release().url)
 
         results = executor.execute(
             [_intent(action="YES"), _intent(action="NO")],
@@ -315,7 +351,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual([result.status for result in results], ["LIVE", "LIVE"])
-        self.assertCountEqual(ledger.claims, ["YES", "NO"])
+        self.assertEqual(ledger.claims, ["YES", "NO"])
         self.assertEqual(len(client.batch_posts), 1)
         self.assertEqual(
             [order.token_id for order in client.batch_posts[0]],
@@ -344,7 +380,7 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
             Exception,
             "aggregate notional cap",
         ):
-            executor.prepare()
+            executor.prepare(release_url=_release().url)
 
     def test_unavailable_executor_reports_reason(self) -> None:
         executor = UnavailableLiveOrderExecutor("database offline")

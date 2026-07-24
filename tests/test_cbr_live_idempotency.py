@@ -4,6 +4,7 @@ import unittest
 
 from cbr_trading.live.idempotency import (
     ExecutionClaim,
+    ExecutionLedgerError,
     SqlAlchemyExecutionLedger,
     make_idempotency_key,
 )
@@ -53,6 +54,7 @@ class _Session:
         self.results = list(results)
         self.calls: list[tuple[str, dict | None]] = []
         self.commits = 0
+        self.rollbacks = 0
 
     def __enter__(self) -> "_Session":
         return self
@@ -71,6 +73,9 @@ class _Session:
     def commit(self) -> None:
         self.commits += 1
 
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
 
 class ExecutionLedgerTests(unittest.TestCase):
     def test_ready_check_requires_schema_and_unique_key(self) -> None:
@@ -83,7 +88,10 @@ class ExecutionLedgerTests(unittest.TestCase):
                         "key_unique": True,
                         "id_generated": True,
                     }
-                )
+                ),
+                _Result(
+                    one_or_none={"id": 999, "status": "PENDING"}
+                ),
             ]
         )
         ledger = SqlAlchemyExecutionLedger(
@@ -93,7 +101,11 @@ class ExecutionLedgerTests(unittest.TestCase):
 
         ledger.ensure_ready()
 
-        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(session.rollbacks, 1)
+        probe_statement, probe_params = session.calls[1]
+        self.assertIn("'PENDING'", probe_statement)
+        self.assertEqual((probe_params or {})["action"], "YES")
 
     def test_key_is_stable_and_scoped_to_action(self) -> None:
         first = make_idempotency_key(
@@ -113,29 +125,9 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertNotEqual(first, opposite)
         self.assertTrue(first.startswith("cbr_auto:v1:"))
 
-    def test_claim_connections_are_warmed_before_release(self) -> None:
-        sessions: list[_Session] = []
-
-        def session_factory() -> _Session:
-            session = _Session([_Result()])
-            sessions.append(session)
-            return session
-
-        ledger = SqlAlchemyExecutionLedger(
-            session_factory=session_factory,
-            text_factory=lambda value: value,
-        )
-
-        ledger.warm_claim_capacity(3)
-
-        self.assertEqual(len(sessions), 3)
-        self.assertTrue(
-            all(len(session.calls) == 1 for session in sessions)
-        )
-
     def test_claim_inserts_once_and_returns_database_id(self) -> None:
         session = _Session(
-            [_Result(one_or_none={"id": 41, "status": "EXECUTING"})]
+            [_Result(one_or_none={"id": 41, "status": "PENDING"})]
         )
         ledger = SqlAlchemyExecutionLedger(
             session_factory=lambda: session,
@@ -159,8 +151,11 @@ class ExecutionLedgerTests(unittest.TestCase):
         params = session.calls[0][1] or {}
         self.assertEqual(params["action"], "YES")
         self.assertEqual(params["sub_id"], 98)
+        self.assertIn("'PENDING'", session.calls[0][0])
 
-    def test_duplicate_claim_returns_existing_order(self) -> None:
+    def test_duplicate_reservation_rolls_back_before_polling(
+        self,
+    ) -> None:
         session = _Session(
             [
                 _Result(one_or_none=None),
@@ -179,17 +174,19 @@ class ExecutionLedgerTests(unittest.TestCase):
             text_factory=lambda value: value,
         )
 
-        claim = ledger.claim(
-            release_url="https://cbr.ru/release",
-            intent=_intent(),
-        )
+        with self.assertRaisesRegex(
+            ExecutionLedgerError,
+            "already exists",
+        ):
+            ledger.reserve_many(
+                release_url="https://cbr.ru/release",
+                intents=(_intent(),),
+            )
 
-        self.assertFalse(claim.acquired)
-        self.assertEqual(claim.existing_status, "EXECUTED")
-        self.assertEqual(claim.existing_order_id, "order-123")
-        self.assertEqual(session.commits, 1)
+        self.assertEqual(session.commits, 0)
+        self.assertEqual(session.rollbacks, 1)
 
-    def test_complete_updates_only_executing_claim(self) -> None:
+    def test_complete_updates_only_pending_reservation(self) -> None:
         session = _Session([_Result(rowcount=1)])
         ledger = SqlAlchemyExecutionLedger(
             session_factory=lambda: session,
@@ -206,6 +203,23 @@ class ExecutionLedgerTests(unittest.TestCase):
         params = session.calls[0][1] or {}
         self.assertEqual(params["claim_id"], 41)
         self.assertEqual(params["status"], "EXECUTED")
+        self.assertIn("status = 'PENDING'", session.calls[0][0])
+
+    def test_error_is_valid_completion_status(self) -> None:
+        session = _Session([_Result(rowcount=1)])
+        ledger = SqlAlchemyExecutionLedger(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        ledger.complete(
+            claim_id=41,
+            status="ERROR",
+            result={"attempted": True, "accepted": None},
+        )
+
+        params = session.calls[0][1] or {}
+        self.assertEqual(params["status"], "ERROR")
 
 
 if __name__ == "__main__":

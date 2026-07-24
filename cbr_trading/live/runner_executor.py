@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
@@ -14,10 +13,7 @@ from cbr_trading.live.executor import (
     decrypt_private_key,
     signature_type_for_wallet,
 )
-from cbr_trading.live.idempotency import (
-    ExecutionLedgerError,
-    SqlAlchemyExecutionLedger,
-)
+from cbr_trading.live.idempotency import SqlAlchemyExecutionLedger
 from cbr_trading.live.market import (
     PolymarketMarketGateway,
 )
@@ -67,7 +63,7 @@ class _PreparedOutcome:
 
 
 @dataclass(frozen=True)
-class _ClaimedOrder:
+class _ReservedOrder:
     index: int
     intent: OrderIntent
     prepared: _PreparedOutcome
@@ -98,11 +94,19 @@ class WarmLiveOrderExecutor:
         self._client_factory = client_factory
         self._decryptor = decryptor or decrypt_private_key
         self._prepared: dict[tuple[str, str], _PreparedOutcome] = {}
+        self._claims: dict[tuple[str, str], Any] = {}
         self._clients: dict[str, Any] = {}
         self._accounts: dict[str, TradingAccountRecord] = {}
+        self._reserved_release_url = ""
         self._prepared_ok = False
+        self._execution_started = False
 
-    def prepare(self) -> LivePreparationSummary:
+    def prepare(
+        self,
+        *,
+        release_url: str,
+        reserve_claims: bool = True,
+    ) -> LivePreparationSummary:
         if self._prepared_ok:
             raise LivePreparationError(
                 "Live executor has already been prepared"
@@ -114,6 +118,11 @@ class WarmLiveOrderExecutor:
         if not self._database_url:
             raise LivePreparationError(
                 "Primary database URL is not configured"
+            )
+        normalized_release_url = str(release_url or "").strip()
+        if not normalized_release_url:
+            raise LivePreparationError(
+                "Predicted release URL is required before polling"
             )
         self._validate_global_safety()
         self._resolve_dependencies()
@@ -244,13 +253,37 @@ class WarmLiveOrderExecutor:
                 "Prepared rules exceed the configured aggregate "
                 "notional cap"
             )
-        warm_claim_capacity = getattr(
-            self._ledger,
-            "warm_claim_capacity",
-            None,
-        )
-        if callable(warm_claim_capacity):
-            warm_claim_capacity(rule_count)
+        if reserve_claims:
+            reservation_items = tuple(self._prepared.items())
+            reservation_intents = tuple(
+                _intent_from_prepared(prepared)
+                for _, prepared in reservation_items
+            )
+            try:
+                claims = tuple(
+                    self._ledger.reserve_many(
+                        release_url=normalized_release_url,
+                        intents=reservation_intents,
+                    )
+                )
+            except Exception as exc:
+                raise LivePreparationError(
+                    "Failed to reserve all live orders before polling: "
+                    f"{type(exc).__name__}"
+                ) from exc
+            if len(claims) != len(reservation_items):
+                raise LivePreparationError(
+                    "Execution ledger reservation count mismatch"
+                )
+            self._claims = {
+                key: claim
+                for (key, _), claim in zip(
+                    reservation_items,
+                    claims,
+                    strict=True,
+                )
+            }
+        self._reserved_release_url = normalized_release_url
 
         self._prepared_ok = True
         return LivePreparationSummary(
@@ -279,11 +312,36 @@ class WarmLiveOrderExecutor:
                 )
                 for intent in intents
             ]
+        if self._execution_started:
+            return [
+                OrderExecutionResult(
+                    intent=intent,
+                    status="SKIPPED",
+                    attempted=False,
+                    success=None,
+                    error="live_executor_already_used",
+                )
+                for intent in intents
+            ]
+        if (
+            str(release.url or "").strip()
+            != self._reserved_release_url
+        ):
+            return [
+                OrderExecutionResult(
+                    intent=intent,
+                    status="SKIPPED",
+                    attempted=False,
+                    success=None,
+                    error="reserved_release_url_mismatch",
+                )
+                for intent in intents
+            ]
+        self._execution_started = True
 
         results: list[OrderExecutionResult | None] = [None] * len(intents)
-        candidates: list[
-            tuple[int, OrderIntent, _PreparedOutcome]
-        ] = []
+        reserved: list[_ReservedOrder] = []
+        selected_keys: set[tuple[str, str]] = set()
         for index, intent in enumerate(intents):
             prepared, error = self._match_prepared(intent)
             if error is not None:
@@ -304,18 +362,37 @@ class WarmLiveOrderExecutor:
                     error="prepared_order_missing",
                 )
                 continue
-            candidates.append((index, intent, prepared))
+            key = (
+                _rule_key(intent.rule_id),
+                intent.action.upper(),
+            )
+            claim = self._claims.get(key)
+            if claim is None:
+                results[index] = OrderExecutionResult(
+                    intent=intent,
+                    status="SKIPPED",
+                    attempted=False,
+                    success=None,
+                    error="live_reservation_missing",
+                )
+                continue
+            selected_keys.add(key)
+            reserved.append(
+                _ReservedOrder(
+                    index=index,
+                    intent=intent,
+                    prepared=prepared,
+                    claim=claim,
+                )
+            )
 
-        claimed = self._claim_candidates(
-            candidates,
-            release=release,
-            results=results,
-        )
-        groups: dict[int, list[_ClaimedOrder]] = {}
-        for item in claimed:
+        groups: dict[int, list[_ReservedOrder]] = {}
+        for item in reserved:
             groups.setdefault(id(item.prepared.client), []).append(item)
         for items in groups.values():
             self._post_batch(items, results=results)
+        self._persist_selected_results(reserved, results=results)
+        self._expire_unselected_reservations(selected_keys)
 
         return [
             result
@@ -366,88 +443,9 @@ class WarmLiveOrderExecutor:
             return None, "prepared_order_parameters_mismatch"
         return prepared, None
 
-    def _claim_candidates(
-        self,
-        candidates: Sequence[
-            tuple[int, OrderIntent, _PreparedOutcome]
-        ],
-        *,
-        release: DiscoveryResult,
-        results: list[OrderExecutionResult | None],
-    ) -> list[_ClaimedOrder]:
-        if not candidates:
-            return []
-        workers = min(len(candidates), 8)
-        claimed: list[_ClaimedOrder] = []
-        with ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="cbr-idempotency",
-        ) as pool:
-            futures = {
-                pool.submit(
-                    self._ledger.claim,
-                    release_url=release.url,
-                    intent=intent,
-                ): (index, intent, prepared)
-                for index, intent, prepared in candidates
-            }
-            for future in as_completed(futures):
-                index, intent, prepared = futures[future]
-                try:
-                    claim = future.result()
-                except ExecutionLedgerError as exc:
-                    results[index] = OrderExecutionResult(
-                        intent=intent,
-                        status="SKIPPED",
-                        attempted=False,
-                        success=None,
-                        error=redact_sensitive_text(exc),
-                    )
-                    continue
-                except Exception as exc:
-                    results[index] = OrderExecutionResult(
-                        intent=intent,
-                        status="SKIPPED",
-                        attempted=False,
-                        success=None,
-                        error=_safe_exception(exc),
-                    )
-                    continue
-                if not claim.acquired:
-                    detail = (
-                        "idempotency="
-                        f"{claim.existing_status or 'UNKNOWN'}"
-                    )
-                    if claim.existing_error:
-                        detail += (
-                            " error="
-                            + redact_sensitive_text(
-                                claim.existing_error
-                            )
-                        )
-                    results[index] = OrderExecutionResult(
-                        intent=intent,
-                        status="DUPLICATE_SKIPPED",
-                        attempted=False,
-                        success=None,
-                        order_id=claim.existing_order_id,
-                        error=detail,
-                    )
-                    continue
-                claimed.append(
-                    _ClaimedOrder(
-                        index=index,
-                        intent=intent,
-                        prepared=prepared,
-                        claim=claim,
-                    )
-                )
-        claimed.sort(key=lambda item: item.index)
-        return claimed
-
     def _post_batch(
         self,
-        items: Sequence[_ClaimedOrder],
+        items: Sequence[_ReservedOrder],
         *,
         results: list[OrderExecutionResult | None],
     ) -> None:
@@ -470,21 +468,12 @@ class WarmLiveOrderExecutor:
         except Exception as exc:
             error = _safe_exception(exc)
             for item in items:
-                ledger_warning = self._complete_claim(
-                    claim_id=item.claim.claim_id,
-                    status="FAILED",
-                    result={
-                        "attempted": True,
-                        "accepted": None,
-                    },
-                    error=error,
-                )
                 results[item.index] = OrderExecutionResult(
                     intent=item.intent,
                     status="AMBIGUOUS",
                     attempted=True,
                     success=None,
-                    error=ledger_warning or error,
+                    error=error,
                 )
             return
 
@@ -492,24 +481,12 @@ class WarmLiveOrderExecutor:
             if response.ok:
                 order_id = str(response.order_id)
                 status = str(response.status).upper()
-                ledger_warning = self._complete_claim(
-                    claim_id=item.claim.claim_id,
-                    status="EXECUTED",
-                    result={
-                        "attempted": True,
-                        "accepted": True,
-                        "order_id": order_id,
-                        "status": status,
-                        "token_id": item.prepared.token_id,
-                    },
-                )
                 results[item.index] = OrderExecutionResult(
                     intent=item.intent,
                     status=status,
                     attempted=True,
                     success=True,
                     order_id=order_id,
-                    error=ledger_warning,
                 )
                 continue
 
@@ -517,22 +494,68 @@ class WarmLiveOrderExecutor:
                 f"{str(response.code)}: "
                 f"{str(response.message)}"
             )
-            ledger_warning = self._complete_claim(
-                claim_id=item.claim.claim_id,
-                status="REJECTED",
-                result={
-                    "attempted": True,
-                    "accepted": False,
-                    "error_code": str(response.code),
-                },
-                error=error,
-            )
             results[item.index] = OrderExecutionResult(
                 intent=item.intent,
                 status="REJECTED",
                 attempted=True,
                 success=False,
-                error=ledger_warning or error,
+                error=error,
+            )
+
+    def _persist_selected_results(
+        self,
+        items: Sequence[_ReservedOrder],
+        *,
+        results: list[OrderExecutionResult | None],
+    ) -> None:
+        """Persist only after every selected account batch was submitted."""
+        for item in items:
+            order_result = results[item.index]
+            if order_result is None:
+                continue
+            if order_result.success is True:
+                ledger_status = "EXECUTED"
+            elif order_result.success is False:
+                ledger_status = "REJECTED"
+            else:
+                ledger_status = "ERROR"
+            ledger_warning = self._complete_claim(
+                claim_id=item.claim.claim_id,
+                status=ledger_status,
+                result={
+                    "attempted": order_result.attempted,
+                    "accepted": order_result.success,
+                    "order_id": order_result.order_id,
+                    "status": order_result.status,
+                    "token_id": item.prepared.token_id,
+                },
+                error=order_result.error,
+            )
+            if ledger_warning is None:
+                continue
+            results[item.index] = OrderExecutionResult(
+                intent=order_result.intent,
+                status=order_result.status,
+                attempted=order_result.attempted,
+                success=order_result.success,
+                order_id=order_result.order_id,
+                error=ledger_warning,
+            )
+
+    def _expire_unselected_reservations(
+        self,
+        selected_keys: set[tuple[str, str]],
+    ) -> None:
+        for key, claim in self._claims.items():
+            if key in selected_keys:
+                continue
+            self._complete_claim(
+                claim_id=claim.claim_id,
+                status="EXPIRED",
+                result={
+                    "attempted": False,
+                    "reason": "outcome_not_selected",
+                },
             )
 
     def _complete_claim(
@@ -724,6 +747,22 @@ def _required_decimal(value: Any, *, name: str) -> Decimal:
     if not parsed.is_finite() or parsed <= 0:
         raise LivePreparationError(f"Invalid {name}")
     return parsed
+
+
+def _intent_from_prepared(
+    prepared: _PreparedOutcome,
+) -> OrderIntent:
+    return OrderIntent(
+        rule_id=prepared.rule_id,
+        rule_key=prepared.rule_key,
+        account_name=prepared.account.name,
+        condition_id=prepared.condition_id,
+        action=prepared.outcome,
+        quantity=prepared.quantity,
+        limit_price=prepared.limit_price,
+        ready=True,
+        reason="reserved_before_polling",
+    )
 
 
 def _rule_key(rule_id: int | str | None) -> str:

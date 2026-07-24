@@ -27,7 +27,7 @@ class RunnerPreflightCliTests(unittest.TestCase):
             def __init__(self):
                 self.closed = False
 
-            def prepare(self) -> object:
+            def prepare(self, **kwargs: object) -> object:
                 return SimpleNamespace(
                     rule_count=1,
                     account_count=1,
@@ -194,6 +194,228 @@ class IsolatedOrderOverrideCliTests(unittest.TestCase):
             payload["safety"]["blockers"],
             ["live_trading_disabled"],
         )
+
+
+class FullPathLiveTestCliTests(unittest.TestCase):
+    def test_requires_explicit_confirmation_before_loading_rule(
+        self,
+    ) -> None:
+        error = io.StringIO()
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+            ) as repository_class,
+            redirect_stdout(io.StringIO()),
+            patch("sys.stderr", error),
+        ):
+            exit_code = cli.main(
+                [
+                    "--full-path-live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--rule-id",
+                    "102",
+                    "--action",
+                    "NO",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.10",
+                ]
+            )
+
+        payload = json.loads(error.getvalue())
+        self.assertEqual(exit_code, 4)
+        self.assertFalse(payload["order_submitted"])
+        self.assertIn("--confirm-live-order", payload["error"])
+        repository_class.assert_not_called()
+
+    def test_rejects_invalid_numeric_override_without_traceback(
+        self,
+    ) -> None:
+        error = io.StringIO()
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+            ) as repository_class,
+            patch("sys.stderr", error),
+        ):
+            exit_code = cli.main(
+                [
+                    "--full-path-live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--rule-id",
+                    "102",
+                    "--action",
+                    "NO",
+                    "--quantity",
+                    "not-a-number",
+                    "--limit-price",
+                    "0.10",
+                    "--confirm-live-order",
+                ]
+            )
+
+        payload = json.loads(error.getvalue())
+        self.assertEqual(exit_code, 4)
+        self.assertFalse(payload["order_submitted"])
+        self.assertIn("invalid order_qty", payload["error"])
+        repository_class.assert_not_called()
+
+    def test_submits_through_warmed_reserved_batch_path(self) -> None:
+        output = io.StringIO()
+        stored_rule = {
+            "id": 102,
+            "rule_key": "cbr_increase_fast",
+            "condition_id": "condition-increase",
+            "account_name": "KinderSman",
+            "order_qty": "1000",
+            "order_price": "0.99",
+            "params": {
+                "order_price_yes": "0.999",
+                "order_price_no": "0.999",
+            },
+        }
+        repository = SimpleNamespace(
+            load_active_cbr_rules=lambda: [stored_rule],
+            close=lambda: None,
+        )
+        captured: dict[str, object] = {}
+
+        class FakeExecutor:
+            def __init__(self, **kwargs: object):
+                captured["subscriptions"] = kwargs["subscriptions"]
+                captured["safety"] = kwargs["safety"]
+                self.closed = False
+
+            def prepare(self, *, release_url: str) -> object:
+                captured["prepared_url"] = release_url
+                return SimpleNamespace(outcome_count=2)
+
+            def execute(
+                self,
+                intents: object,
+                *,
+                release: object,
+            ) -> object:
+                captured["intents"] = intents
+                captured["release"] = release
+                return [
+                    SimpleNamespace(
+                        status="MATCHED",
+                        attempted=True,
+                        success=True,
+                        order_id="order-123",
+                        error=None,
+                    )
+                ]
+
+            def close(self) -> None:
+                self.closed = True
+                captured["closed"] = True
+
+        safety = LiveSafetySettings(
+            trading_enabled=True,
+            post_only=False,
+            allowed_account="KinderSman",
+            max_order_quantity=Decimal("10"),
+            max_notional=Decimal("10"),
+            max_total_notional=Decimal("10"),
+            accounts_master_key="present",
+        )
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+                return_value=repository,
+            ),
+            patch.object(
+                cli.LiveSafetySettings,
+                "from_env",
+                return_value=safety,
+            ),
+            patch.object(
+                cli,
+                "WarmLiveOrderExecutor",
+                side_effect=FakeExecutor,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = cli.main(
+                [
+                    "--full-path-live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--rule-id",
+                    "102",
+                    "--action",
+                    "NO",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.10",
+                    "--confirm-live-order",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["prepared_outcomes"], 2)
+        self.assertEqual(payload["result"]["order_id"], "order-123")
+        self.assertEqual(
+            captured["prepared_url"],
+            "cbr-live-test://smoke-001",
+        )
+        subscription = captured["subscriptions"][0]
+        self.assertEqual(subscription["order_qty"], "5")
+        self.assertEqual(
+            subscription["params"]["order_price_no"],
+            "0.10",
+        )
+        self.assertEqual(
+            subscription["params"]["order_price_yes"],
+            "0.999",
+        )
+        intent = captured["intents"][0]
+        self.assertEqual(intent.action, "NO")
+        self.assertEqual(intent.quantity, Decimal("5"))
+        self.assertEqual(intent.limit_price, Decimal("0.10"))
+        self.assertEqual(
+            captured["release"].url,
+            "cbr-live-test://smoke-001",
+        )
+        self.assertTrue(captured["closed"])
 
 
 if __name__ == "__main__":

@@ -140,7 +140,7 @@ class RunnerRulePreloadTests(unittest.TestCase):
         trace: list[str] = []
 
         class FakeLiveExecutor:
-            def prepare(self) -> object:
+            def prepare(self, **kwargs: object) -> object:
                 trace.append("prepare")
                 return SimpleNamespace(
                     rule_count=1,
@@ -205,7 +205,7 @@ class RunnerRulePreloadTests(unittest.TestCase):
         trace: list[str] = []
 
         class FailingLiveExecutor:
-            def prepare(self) -> object:
+            def prepare(self, **kwargs: object) -> object:
                 trace.append("prepare")
                 raise LivePreparationError("ledger missing")
 

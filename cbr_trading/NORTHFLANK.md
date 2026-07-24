@@ -129,10 +129,18 @@ CBR live executor warmed before polling rules=... accounts=... outcomes=...
 ```
 
 At this point the account is authenticated, balances and market metadata are
-checked, all possible GTC orders are pre-signed, and the database claim
-connections are warm. After publication the runner does not refresh the order
-book or sign orders; it claims idempotency in parallel and sends one batch
-request per account.
+checked, all possible GTC orders are pre-signed, and every possible order has
+a committed `PENDING` idempotency reservation. After publication the runner
+does not refresh the order book, sign orders, or access the database before it
+sends one batch request per account. Result persistence and Telegram happen
+after the batch request.
+
+Before arming the production worker for an event, run a small real order from
+the same Northflank runtime with
+`python -m cbr_trading.live --full-path-live-test ...`. This must use an
+explicit rule, action, quantity, price, confirmation flag, and stable
+`--test-run-id`. Reusing that id is blocked by the same persistent
+idempotency mechanism before any second order can be sent.
 
 After the event, inspect the order results and Telegram message. The hosted
 worker then logs that it is idle instead of restarting the completed event.

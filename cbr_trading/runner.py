@@ -18,6 +18,7 @@ from cbr_trading.pipeline import (
     TradingPipeline,
 )
 from cbr_trading.poller import CbrPoller
+from cbr_trading.release import build_predicted_release_url
 from cbr_trading.rule_repository import (
     RuleLoadError,
     SqlAlchemyRuleRepository,
@@ -130,7 +131,14 @@ def main() -> int:
                 database_url=settings.rules_database_url,
                 safety=LiveSafetySettings.from_env(),
             )
-            summary = live_executor.prepare()
+            summary = live_executor.prepare(
+                release_url=build_predicted_release_url(
+                    release_date=settings.release_date,
+                    release_time_suffix=(
+                        settings.release_time_suffix
+                    ),
+                )
+            )
         except Exception as exc:
             if live_executor is not None:
                 live_executor.close()

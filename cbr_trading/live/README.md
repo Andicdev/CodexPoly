@@ -6,11 +6,11 @@ Run the full warmed preflight used by the continuous CBR runner:
 python -m cbr_trading.live --runner-preflight
 ```
 
-It loads every active CBR rule, verifies the execution ledger, decrypts and
+It loads every active CBR rule, verifies the execution ledger with the exact
+`PENDING` reservation insert inside a rolled-back transaction, decrypts and
 authenticates each account, checks collateral, and prepares both YES and NO
-outcome tokens. It also pre-signs both possible GTC orders and warms the
-database claim connections so that these operations are not on the
-post-publication path. It never submits an order and does not require
+outcome tokens. It also pre-signs both possible GTC orders. It never submits
+an order and does not require
 `CBR_LIVE_TRADING_ENABLED=1`; the output reports whether that final switch is
 currently enabled.
 
@@ -56,8 +56,31 @@ is cancelled or the market closes. Set `CBR_LIVE_POST_ONLY=1` only when
 maker-only behavior is explicitly required; such an order is skipped if it
 would cross the current ask.
 
-The continuous runner prepares and signs all possible orders before polling.
-After the release it evaluates the rules, acquires persistent idempotency
-claims in parallel, and submits all orders for one account through one batch
-request. Balance, wallet, tick-size, and market checks happen during warm-up,
-not after the CBR title is detected.
+Before every production event, run one small real order through the exact
+continuous-runner path. This is intentionally different from `--apply`: it
+prepares both outcomes, reserves both idempotency rows, sends the selected
+outcome with the batch endpoint, records its result, and expires the
+unselected reservation.
+
+```powershell
+python -m cbr_trading.live `
+  --full-path-live-test `
+  --test-run-id pre-event-001 `
+  --rule-id 102 `
+  --action NO `
+  --quantity 5 `
+  --limit-price 0.10 `
+  --confirm-live-order
+```
+
+The live switch and all safety caps must be armed. Quantity, price, rule,
+action, confirmation, and a 3-64 character test id are mandatory. The test id
+is part of persistent idempotency: rerunning the same command with the same id
+fails before submission instead of placing a duplicate. Use a new id only for
+an intentionally new real test.
+
+The continuous runner prepares, signs, and persistently reserves all possible
+orders before polling. After the release it evaluates the rules and immediately
+submits all selected orders for one account through one batch request. There
+are no database, balance, book, signing, or Telegram calls between detection
+and the batch request. Database result updates and Telegram happen afterward.
