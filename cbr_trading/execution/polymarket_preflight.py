@@ -156,7 +156,7 @@ class PolymarketPreflightPreparedExecutor:
                     condition_id=template.condition_id,
                     outcome=template.outcome.value,
                 )
-                effective_price = _effective_price(
+                effective_price = effective_price_for_template(
                     template,
                     tick_size=snapshot.tick_size,
                 )
@@ -324,7 +324,7 @@ class PolymarketPreflightPreparedExecutor:
             self._live_executor = LiveOrderExecutor()
 
 
-def _effective_price(
+def effective_price_for_template(
     template: OrderTemplate,
     *,
     tick_size: Decimal,

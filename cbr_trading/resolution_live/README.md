@@ -24,7 +24,34 @@ claim, and never mutates the rule. It still requires the existing allowed
 account, safety caps, encrypted account record, and `ACCOUNTS_MASTER_KEY`
 because authenticated preparation is the behavior under test.
 
-This checkpoint deliberately stops before source-neutral idempotency and
-submission. A production source must replace `ManualResolutionSource`, and a
-submitting executor must reserve the exact signal/template identity before it
-can post the already prepared order.
+## Controlled live test
+
+The submitting path is deliberately gated behind all live safety settings and
+every explicit command-line acknowledgement:
+
+```powershell
+python -m cbr_trading.resolution_live `
+  --rule-id 103 `
+  --live-test `
+  --test-run-id UNIQUE_RUN_ID `
+  --quantity 5 `
+  --limit-price 0.90 `
+  --confirm-live-order `
+  --cancel-after-test
+```
+
+The quantity and price are one-shot overrides; the database rule remains
+unchanged. Before polling, the executor authenticates, refreshes the market,
+pre-signs the order, and atomically reserves
+`scope_id + template_id` in `resolution_execution_claims`. A repeated
+`test-run-id` cannot submit again.
+
+After a successful post, the command inspects only the returned order ID,
+cancels only that ID if it is still open, confirms `CANCELLED` or `FILLED`,
+and appends the cleanup outcome to the same execution claim. An ambiguous
+submission without an order ID or an unconfirmed cleanup returns failure for
+manual investigation; it never broadens cancellation to other account orders.
+
+`ManualResolutionSource` is used only by this controlled command. A production
+source replaces it without changing the strategy, intent, or executor
+contracts.

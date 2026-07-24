@@ -14,10 +14,22 @@ by the CBR production runner.
 state observed before and after cancellation. It does not alter migration 001
 or any legacy object.
 
-They do not alter or drop legacy tables, columns, constraints, or data.
-`SqlAlchemyOrderGroupRepository.migrate()` applies both files in one
-transaction. `ensure_ready()` independently verifies all required new tables
-and columns before an `OrderSupervisor` is allowed to use them.
+`003_add_resolution_execution_claims.sql` creates only
+`resolution_execution_claims`. It atomically reserves each source-neutral
+`scope_id` plus `template_id` before polling can submit an order, and stores
+the terminal submission and controlled-test cleanup result.
+
+The migrations do not alter or drop legacy tables, columns, constraints, or
+data.
+`SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in
+one transaction. `ensure_ready()` independently verifies all required
+supervision tables and columns before an `OrderSupervisor` is allowed to use
+them.
+
+Migration 003 is owned separately by
+`SqlAlchemyResolutionExecutionLedger.migrate()`. The source-neutral live
+executor calls only `ensure_ready()` and never applies the migration during
+normal startup.
 
 The opt-in supervision runtime calls `ensure_ready()` before the live executor
 is prepared. It never calls `migrate()` and cannot create or modify schema
@@ -39,3 +51,12 @@ check confirmed:
 - `SqlAlchemyOrderGroupRepository.ensure_ready()` passed;
 - the legacy schema remained at 58 tables and 770 columns before and after the
   migration.
+
+Later on 2026-07-24, migration 003 was explicitly applied through
+`python -m scripts.manage_resolution_execution_schema --apply`. Its
+before/after checkpoint confirmed:
+
+- `resolution_execution_claims` was newly created with zero rows;
+- `SqlAlchemyResolutionExecutionLedger.ensure_ready()` passed;
+- the separately counted legacy schema remained at 58 tables and 815 columns
+  before and after migration 003.

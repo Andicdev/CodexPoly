@@ -42,6 +42,11 @@ from cbr_trading.execution.persistent_order_supervisor import (
 from cbr_trading.execution.polymarket_preflight import (
     PolymarketPreflightDetail,
     PolymarketPreflightPreparedExecutor,
+    effective_price_for_template,
+)
+from cbr_trading.execution.polymarket_prepared import (
+    PolymarketPreparedExecutionError,
+    PolymarketPreparedExecutor,
 )
 from cbr_trading.execution.supervision_gateway import (
     CancellationResult,
@@ -88,6 +93,8 @@ __all__ = [
     "PersistentOrderSupervisor",
     "PolymarketPreflightDetail",
     "PolymarketPreflightPreparedExecutor",
+    "PolymarketPreparedExecutionError",
+    "PolymarketPreparedExecutor",
     "RemoteOrderSnapshot",
     "RemoteOrderState",
     "ReplacementOrderRequest",
@@ -106,6 +113,7 @@ __all__ = [
     "TrackedOrderStatus",
     "UnavailablePreparedExecutor",
     "cbr_preparation_context",
+    "effective_price_for_template",
     "registration_from_handle",
     "replacement_price_for_tick",
 ]

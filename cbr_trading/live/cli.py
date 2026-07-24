@@ -20,6 +20,7 @@ from cbr_trading.live.executor import (
     LiveOrderError,
     LiveOrderExecutor,
 )
+from cbr_trading.live.exact_cleanup import cleanup_exact_order
 from cbr_trading.live.market import (
     MarketPreflightError,
     PolymarketMarketGateway,
@@ -599,91 +600,13 @@ def _cleanup_full_path_test_order(
     account_name: str,
     order_id: str,
 ) -> dict[str, Any]:
-    gateway = PolymarketSupervisionOrderGateway(
+    return cleanup_exact_order(
         database_url=database_url,
         safety=safety,
+        account_name=account_name,
+        order_id=order_id,
+        gateway_factory=PolymarketSupervisionOrderGateway,
     )
-    initial_state: RemoteOrderState | None = None
-    final_state: RemoteOrderState | None = None
-    cancel_requested = False
-    cancel_acknowledged = False
-    failure_types: list[str] = []
-    terminal_states = {
-        RemoteOrderState.CANCELLED,
-        RemoteOrderState.FILLED,
-    }
-    try:
-        try:
-            initial = gateway.inspect_orders(
-                account_name=account_name,
-                order_ids=(order_id,),
-            )
-            initial_state = _single_inspection_state(initial)
-        except Exception as exc:
-            failure_types.append(
-                "initial inspection " + type(exc).__name__
-            )
-
-        final_state = initial_state
-        if initial_state not in terminal_states:
-            cancel_requested = True
-            try:
-                cancellation = gateway.cancel_orders(
-                    account_name=account_name,
-                    order_ids=(order_id,),
-                )
-                cancel_acknowledged = (
-                    order_id in cancellation.cancelled_order_ids
-                )
-                if not cancel_acknowledged:
-                    failure_types.append("cancellation not acknowledged")
-            except Exception as exc:
-                failure_types.append(
-                    "cancellation " + type(exc).__name__
-                )
-
-            try:
-                final = gateway.inspect_orders(
-                    account_name=account_name,
-                    order_ids=(order_id,),
-                )
-                final_state = _single_inspection_state(final)
-                if final_state is None:
-                    failure_types.append(
-                        "final inspection not confirmed"
-                    )
-            except Exception as exc:
-                final_state = None
-                failure_types.append(
-                    "final inspection " + type(exc).__name__
-                )
-    finally:
-        try:
-            gateway.close()
-        except Exception as exc:
-            failure_types.append("gateway close " + type(exc).__name__)
-
-    confirmed_terminal = final_state in terminal_states
-    error = None
-    if not confirmed_terminal:
-        error = redact_sensitive_text(
-            "Exact-order cleanup was not confirmed"
-            + (
-                ": " + "; ".join(dict.fromkeys(failure_types))
-                if failure_types
-                else ""
-            )
-        )
-    return {
-        "required": True,
-        "attempted": True,
-        "cancel_requested": cancel_requested,
-        "cancel_acknowledged": cancel_acknowledged,
-        "initial_state": _remote_state_value(initial_state),
-        "final_state": _remote_state_value(final_state),
-        "confirmed_terminal": confirmed_terminal,
-        "error": error,
-    }
 
 
 def _single_inspection_state(

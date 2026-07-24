@@ -7,7 +7,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from cbr_trading.domain import ExecutionStatus, OrderExecutionResult
+from cbr_trading.domain import (
+    ExecutionHandle,
+    ExecutionStatus,
+    OrderExecutionResult,
+    PlacedOrder,
+)
 from cbr_trading.execution import (
     PreparationItem,
     PreparationStatus,
@@ -90,6 +95,74 @@ class _Executor:
         return None
 
 
+class _LiveExecutor(_Executor):
+    def __init__(self, **kwargs: object):
+        super().__init__(**kwargs)
+        self.maximum_notional = Decimal("4.5")
+        self.details = (
+            SimpleNamespace(
+                **{
+                    **vars(self.details[0]),
+                    "quantity": Decimal("5"),
+                }
+            ),
+        )
+        self.templates = ()
+        self.cleanup_calls: list[dict] = []
+
+    def prepare(self, templates: object, *, context: object) -> object:
+        self.templates = tuple(templates)
+        return super().prepare(self.templates, context=context)
+
+    def execute(self, intents: object, *, signal: object) -> object:
+        results = []
+        for intent in intents:
+            placed = PlacedOrder(
+                order_id="order-live-1",
+                asset_id="yes-token",
+                effective_price=Decimal("0.9"),
+                quantity=Decimal("5"),
+            )
+            handle = ExecutionHandle(
+                order_group_id="group-live-1",
+                intent_id=intent.intent_id,
+                signal_id=intent.signal_id,
+                template_id=intent.template_id,
+                strategy_id=intent.strategy_id,
+                account_name=intent.account_name,
+                condition_id=intent.condition_id,
+                outcome=intent.outcome,
+                side=intent.side,
+                asset_id=placed.asset_id,
+                desired_price=intent.desired_price,
+                quantity=intent.quantity,
+                live_order_ids=(placed.order_id,),
+            )
+            results.append(
+                OrderExecutionResult(
+                    intent=intent,
+                    status=ExecutionStatus.SUBMITTED,
+                    attempted=True,
+                    orders=(placed,),
+                    handle=handle,
+                )
+            )
+        return tuple(results)
+
+    def record_cleanup(
+        self,
+        *,
+        template_id: str,
+        cleanup: object,
+    ) -> None:
+        self.cleanup_calls.append(
+            {
+                "template_id": template_id,
+                "cleanup": cleanup,
+            }
+        )
+
+
 class ResolutionLiveCliTests(unittest.TestCase):
     def test_preflight_runs_manual_signal_without_submission(
         self,
@@ -151,6 +224,120 @@ class ResolutionLiveCliTests(unittest.TestCase):
             "DRY_RUN",
         )
         self.assertTrue(payload["market"][0]["order_presigned"])
+
+    def test_live_test_submits_override_then_confirms_cleanup(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        repository = SimpleNamespace(
+            load_active_rule=lambda rule_id: _rule(),
+            close=lambda: None,
+        )
+        safety = LiveSafetySettings(
+            trading_enabled=True,
+            post_only=True,
+            allowed_account="KinderSman",
+            max_order_quantity=Decimal("5"),
+            max_notional=Decimal("4.5"),
+            max_total_notional=Decimal("4.5"),
+            accounts_master_key="present",
+        )
+        live = _LiveExecutor()
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+                return_value=repository,
+            ),
+            patch.object(
+                cli.LiveSafetySettings,
+                "from_env",
+                return_value=safety,
+            ),
+            patch.object(
+                cli,
+                "PolymarketPreparedExecutor",
+                return_value=live,
+            ),
+            patch.object(
+                cli,
+                "cleanup_exact_order",
+                return_value={
+                    "required": True,
+                    "attempted": True,
+                    "order_id": "order-live-1",
+                    "cancel_requested": True,
+                    "cancel_acknowledged": True,
+                    "initial_state": "OPEN",
+                    "final_state": "CANCELLED",
+                    "confirmed_terminal": True,
+                    "error": None,
+                },
+            ) as cleanup,
+            patch("sys.stdout", output),
+        ):
+            exit_code = cli.main(
+                [
+                    "--rule-id",
+                    "103",
+                    "--live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.90",
+                    "--confirm-live-order",
+                    "--cancel-after-test",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["order_submitted"])
+        self.assertEqual(
+            live.templates[0].quantity,
+            Decimal("5"),
+        )
+        self.assertEqual(
+            live.templates[0].desired_price,
+            Decimal("0.90"),
+        )
+        cleanup.assert_called_once()
+        self.assertEqual(len(live.cleanup_calls), 1)
+        self.assertTrue(payload["cleanup"]["audit_recorded"])
+
+    def test_live_test_requires_all_explicit_guards(self) -> None:
+        error = io.StringIO()
+        with patch("sys.stderr", error):
+            exit_code = cli.main(
+                [
+                    "--rule-id",
+                    "103",
+                    "--live-test",
+                    "--test-run-id",
+                    "smoke-001",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.90",
+                ]
+            )
+
+        payload = json.loads(error.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertIn("--confirm-live-order", payload["error"])
 
 
 if __name__ == "__main__":

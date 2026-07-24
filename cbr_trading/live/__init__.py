@@ -5,6 +5,7 @@ from cbr_trading.live.account_repository import (
     TradingAccountLoadError,
     TradingAccountRecord,
 )
+from cbr_trading.live.exact_cleanup import cleanup_exact_order
 from cbr_trading.live.market import (
     MarketPreflightError,
     MarketSnapshot,
@@ -25,6 +26,12 @@ from cbr_trading.live.order_group_repository import (
     SqlAlchemyOrderGroupRepository,
     order_supervision_migration_sql,
 )
+from cbr_trading.live.resolution_idempotency import (
+    ResolutionExecutionClaim,
+    ResolutionExecutionLedgerError,
+    SqlAlchemyResolutionExecutionLedger,
+    make_resolution_idempotency_key,
+)
 from cbr_trading.live.supervision_gateway import (
     PolymarketSupervisionGatewayError,
     PolymarketSupervisionOrderGateway,
@@ -41,6 +48,8 @@ __all__ = [
     "MarketSnapshot",
     "MarketChannelError",
     "OrderGroupRepositoryError",
+    "ResolutionExecutionClaim",
+    "ResolutionExecutionLedgerError",
     "OrderSupervisionRuntime",
     "OrderSupervisionRuntimeError",
     "PolymarketMarketChannel",
@@ -49,9 +58,12 @@ __all__ = [
     "PolymarketSupervisionGatewayError",
     "PolymarketSupervisionOrderGateway",
     "SqlAlchemyOrderGroupRepository",
+    "SqlAlchemyResolutionExecutionLedger",
     "SqlAlchemyTradingAccountRepository",
     "TradingAccountLoadError",
     "TradingAccountRecord",
     "build_live_order_plan",
+    "cleanup_exact_order",
+    "make_resolution_idempotency_key",
     "order_supervision_migration_sql",
 ]
