@@ -8,6 +8,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from cbr_trading.live.account_repository import TradingAccountRecord
+from cbr_trading.live.market import MarketSnapshot
 from cbr_trading.live.safety import LiveSafetySettings
 import cbr_trading.live.cli as cli
 
@@ -80,6 +82,118 @@ class RunnerPreflightCliTests(unittest.TestCase):
         self.assertTrue(executor.closed)
         validation_safety = executor_class.call_args.kwargs["safety"]
         self.assertTrue(validation_safety.trading_enabled)
+
+
+class IsolatedOrderOverrideCliTests(unittest.TestCase):
+    def test_preview_uses_one_shot_quantity_and_price_overrides(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        repository = SimpleNamespace(
+            load_active_cbr_rules=lambda: [
+                {
+                    "id": 102,
+                    "rule_key": "cbr_increase_fast",
+                    "condition_id": "condition-increase",
+                    "account_name": "KinderSman",
+                    "order_qty": "1000",
+                    "yes_price": "0.999",
+                    "no_price": "0.999",
+                }
+            ],
+            close=lambda: None,
+        )
+        account_repository = SimpleNamespace(
+            load_active=lambda _name: TradingAccountRecord(
+                name="KinderSman",
+                wallet_address="0x1234567890abcdef",
+                venue="polymarket",
+                is_active=True,
+                encrypted_private_key=b"encrypted",
+                signature_type=1,
+            ),
+            close=lambda: None,
+        )
+        snapshot = MarketSnapshot(
+            condition_id="condition-increase",
+            question="Will the key rate increase?",
+            outcome="NO",
+            token_id="token-no",
+            best_bid=Decimal("0.001"),
+            best_ask=Decimal("0.999"),
+            last_trade_price=Decimal("0.50"),
+            tick_size=Decimal("0.001"),
+            minimum_order_size=Decimal("5"),
+            neg_risk=False,
+        )
+        safety = LiveSafetySettings(
+            trading_enabled=False,
+            post_only=False,
+            allowed_account="KinderSman",
+            max_order_quantity=Decimal("5000"),
+            max_notional=Decimal("5000"),
+            max_total_notional=Decimal("5000"),
+            accounts_master_key="present",
+        )
+
+        with (
+            patch.object(
+                cli,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyRuleRepository",
+                return_value=repository,
+            ),
+            patch.object(
+                cli,
+                "SqlAlchemyTradingAccountRepository",
+                return_value=account_repository,
+            ),
+            patch.object(
+                cli.PolymarketMarketGateway,
+                "load_snapshot",
+                return_value=snapshot,
+            ),
+            patch.object(
+                cli.LiveSafetySettings,
+                "from_env",
+                return_value=safety,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = cli.main(
+                [
+                    "--rule-id",
+                    "102",
+                    "--action",
+                    "NO",
+                    "--quantity",
+                    "100",
+                    "--limit-price",
+                    "0.999",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["mode"], "preview")
+        self.assertEqual(payload["rule"]["id"], 102)
+        self.assertEqual(payload["order"]["outcome"], "NO")
+        self.assertEqual(payload["order"]["quantity"], "100")
+        self.assertEqual(payload["order"]["limit_price"], "0.999")
+        self.assertEqual(payload["order"]["max_notional"], "99.900")
+        self.assertFalse(payload["safety"]["ready_to_apply"])
+        self.assertEqual(
+            payload["safety"]["blockers"],
+            ["live_trading_disabled"],
+        )
 
 
 if __name__ == "__main__":

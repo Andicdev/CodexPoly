@@ -84,11 +84,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         rule = _select_rule(rules, rule_id=args.rule_id)
         action = args.action.upper()
         quantity = _required_decimal(
-            rule.get("order_qty"),
+            (
+                args.quantity
+                if args.quantity is not None
+                else rule.get("order_qty")
+            ),
             name="order_qty",
         )
         limit_price = _required_decimal(
-            resolve_order_price(rule, action),
+            (
+                args.limit_price
+                if args.limit_price is not None
+                else resolve_order_price(rule, action)
+            ),
             name=f"{action} order price",
         )
         account = account_repository.load_active(
@@ -239,6 +247,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Active monitored_news id. When omitted, exactly one "
             "active CBR fast-path rule must exist."
+        ),
+    )
+    parser.add_argument(
+        "--quantity",
+        default=None,
+        help=(
+            "One-shot quantity override for this isolated command. "
+            "Does not update the stored rule."
+        ),
+    )
+    parser.add_argument(
+        "--limit-price",
+        default=None,
+        help=(
+            "One-shot limit-price override for this isolated command. "
+            "Does not update the stored rule."
         ),
     )
     mode_group = parser.add_mutually_exclusive_group()
