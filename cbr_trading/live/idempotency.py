@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -120,6 +121,8 @@ WHERE id = :claim_id
   AND status = 'EXECUTING'
 """.strip()
 
+_WARM_CONNECTION_SQL = "SELECT 1"
+
 
 class ExecutionLedgerError(RuntimeError):
     """Safe failure while checking or updating order idempotency."""
@@ -173,6 +176,27 @@ class SqlAlchemyExecutionLedger:
                 "news_trade_confirmations is not ready for safe "
                 "idempotency claims"
             )
+
+    def warm_claim_capacity(self, count: int) -> None:
+        """Open claim connections before the latency-sensitive release."""
+        capacity = max(1, min(int(count), 8))
+        session_factory, text_factory = self._resolve_dependencies()
+
+        def probe() -> None:
+            with session_factory() as session:
+                session.execute(text_factory(_WARM_CONNECTION_SQL))
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=capacity,
+                thread_name_prefix="cbr-ledger-warm",
+            ) as pool:
+                list(pool.map(lambda _: probe(), range(capacity)))
+        except Exception as exc:
+            raise ExecutionLedgerError(
+                "Failed to warm execution ledger connections: "
+                f"{type(exc).__name__}"
+            ) from exc
 
     def claim(
         self,

@@ -113,6 +113,26 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertNotEqual(first, opposite)
         self.assertTrue(first.startswith("cbr_auto:v1:"))
 
+    def test_claim_connections_are_warmed_before_release(self) -> None:
+        sessions: list[_Session] = []
+
+        def session_factory() -> _Session:
+            session = _Session([_Result()])
+            sessions.append(session)
+            return session
+
+        ledger = SqlAlchemyExecutionLedger(
+            session_factory=session_factory,
+            text_factory=lambda value: value,
+        )
+
+        ledger.warm_claim_capacity(3)
+
+        self.assertEqual(len(sessions), 3)
+        self.assertTrue(
+            all(len(session.calls) == 1 for session in sessions)
+        )
+
     def test_claim_inserts_once_and_returns_database_id(self) -> None:
         session = _Session(
             [_Result(one_or_none={"id": 41, "status": "EXECUTING"})]

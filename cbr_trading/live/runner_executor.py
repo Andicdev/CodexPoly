@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
@@ -18,7 +19,6 @@ from cbr_trading.live.idempotency import (
     SqlAlchemyExecutionLedger,
 )
 from cbr_trading.live.market import (
-    MarketSnapshot,
     PolymarketMarketGateway,
 )
 from cbr_trading.live.safety import (
@@ -61,10 +61,21 @@ class _PreparedOutcome:
     question: str
     outcome: str
     token_id: str
+    quantity: Decimal
+    limit_price: Decimal
+    signed_order: Any
+
+
+@dataclass(frozen=True)
+class _ClaimedOrder:
+    index: int
+    intent: OrderIntent
+    prepared: _PreparedOutcome
+    claim: Any
 
 
 class WarmLiveOrderExecutor:
-    """Warm clients before polling and place orders with one fresh book read."""
+    """Pre-sign before polling and batch-post orders after publication."""
 
     def __init__(
         self,
@@ -162,6 +173,31 @@ class WarmLiveOrderExecutor:
                         f"Rule {rule_id!r} {action} is blocked: "
                         + ",".join(permanent_blockers)
                     )
+                try:
+                    signed_order = client.create_limit_order(
+                        token_id=plan.token_id,
+                        price=str(plan.limit_price),
+                        size=str(plan.quantity),
+                        side="BUY",
+                        post_only=plan.post_only,
+                    )
+                except Exception as exc:
+                    raise LivePreparationError(
+                        f"Failed to pre-sign rule {rule_id!r} {action}: "
+                        f"{type(exc).__name__}"
+                    ) from exc
+                if (
+                    str(getattr(signed_order, "token_id", ""))
+                    != plan.token_id
+                    or str(getattr(signed_order, "order_type", ""))
+                    != "GTC"
+                    or bool(getattr(signed_order, "post_only", False))
+                    != plan.post_only
+                ):
+                    raise LivePreparationError(
+                        f"Pre-signed rule {rule_id!r} {action} "
+                        "does not match the GTC order plan"
+                    )
 
                 key = (_rule_key(rule_id), action)
                 if key in self._prepared:
@@ -177,6 +213,9 @@ class WarmLiveOrderExecutor:
                     question=snapshot.question,
                     outcome=action,
                     token_id=snapshot.token_id,
+                    quantity=plan.quantity,
+                    limit_price=plan.limit_price,
+                    signed_order=signed_order,
                 )
                 action_notionals.append(plan.notional)
 
@@ -205,6 +244,13 @@ class WarmLiveOrderExecutor:
                 "Prepared rules exceed the configured aggregate "
                 "notional cap"
             )
+        warm_claim_capacity = getattr(
+            self._ledger,
+            "warm_claim_capacity",
+            None,
+        )
+        if callable(warm_claim_capacity):
+            warm_claim_capacity(rule_count)
 
         self._prepared_ok = True
         return LivePreparationSummary(
@@ -234,157 +280,245 @@ class WarmLiveOrderExecutor:
                 for intent in intents
             ]
 
-        return [
-            self._execute_one(intent=intent, release=release)
-            for intent in intents
-        ]
-
-    def _execute_one(
-        self,
-        *,
-        intent: OrderIntent,
-        release: DiscoveryResult,
-    ) -> OrderExecutionResult:
-        if not intent.ready:
-            return OrderExecutionResult(
-                intent=intent,
-                status="SKIPPED",
-                attempted=False,
-                success=None,
-                error=intent.reason,
-            )
-
-        prepared = self._prepared.get(
-            (_rule_key(intent.rule_id), intent.action.upper())
-        )
-        if prepared is None:
-            return OrderExecutionResult(
-                intent=intent,
-                status="SKIPPED",
-                attempted=False,
-                success=None,
-                error="prepared_rule_outcome_not_found",
-            )
-        if (
-            prepared.condition_id.casefold()
-            != intent.condition_id.casefold()
-            or prepared.account.name.casefold()
-            != intent.account_name.casefold()
-        ):
-            return OrderExecutionResult(
-                intent=intent,
-                status="SKIPPED",
-                attempted=False,
-                success=None,
-                error="prepared_order_identity_mismatch",
-            )
-
-        try:
-            claim = self._ledger.claim(
-                release_url=release.url,
-                intent=intent,
-            )
-        except ExecutionLedgerError as exc:
-            return OrderExecutionResult(
-                intent=intent,
-                status="SKIPPED",
-                attempted=False,
-                success=None,
-                error=redact_sensitive_text(exc),
-            )
-
-        if not claim.acquired:
-            detail = (
-                f"idempotency={claim.existing_status or 'UNKNOWN'}"
-            )
-            if claim.existing_error:
-                detail += (
-                    " error="
-                    + redact_sensitive_text(claim.existing_error)
-                )
-            return OrderExecutionResult(
-                intent=intent,
-                status="DUPLICATE_SKIPPED",
-                attempted=False,
-                success=None,
-                order_id=claim.existing_order_id,
-                error=detail,
-            )
-
-        attempted = False
-        try:
-            snapshot = _snapshot_from_client(
-                prepared.client,
-                prepared=prepared,
-            )
-            plan = build_live_order_plan(
-                account=prepared.account,
-                rule_id=intent.rule_id,
-                rule_key=intent.rule_key,
-                quantity=_required_decimal(
-                    intent.quantity,
-                    name="intent quantity",
-                ),
-                limit_price=_required_decimal(
-                    intent.limit_price,
-                    name="intent limit price",
-                ),
-                snapshot=snapshot,
-                settings=self._safety,
-            )
-            if not plan.ready_to_apply:
-                error = "safety:" + ",".join(plan.blockers)
-                self._complete_claim(
-                    claim_id=claim.claim_id,
-                    status="FAILED",
-                    result={"attempted": False},
-                    error=error,
-                )
-                return OrderExecutionResult(
+        results: list[OrderExecutionResult | None] = [None] * len(intents)
+        candidates: list[
+            tuple[int, OrderIntent, _PreparedOutcome]
+        ] = []
+        for index, intent in enumerate(intents):
+            prepared, error = self._match_prepared(intent)
+            if error is not None:
+                results[index] = OrderExecutionResult(
                     intent=intent,
                     status="SKIPPED",
                     attempted=False,
                     success=None,
                     error=error,
                 )
+                continue
+            if prepared is None:
+                results[index] = OrderExecutionResult(
+                    intent=intent,
+                    status="SKIPPED",
+                    attempted=False,
+                    success=None,
+                    error="prepared_order_missing",
+                )
+                continue
+            candidates.append((index, intent, prepared))
 
-            attempted = True
-            response = prepared.client.place_limit_order(
-                token_id=plan.token_id,
-                price=str(plan.limit_price),
-                size=str(plan.quantity),
-                side="BUY",
-                post_only=plan.post_only,
+        claimed = self._claim_candidates(
+            candidates,
+            release=release,
+            results=results,
+        )
+        groups: dict[int, list[_ClaimedOrder]] = {}
+        for item in claimed:
+            groups.setdefault(id(item.prepared.client), []).append(item)
+        for items in groups.values():
+            self._post_batch(items, results=results)
+
+        return [
+            result
+            if result is not None
+            else OrderExecutionResult(
+                intent=intents[index],
+                status="SKIPPED",
+                attempted=False,
+                success=None,
+                error="live_batch_result_missing",
             )
+            for index, result in enumerate(results)
+        ]
+
+    def _match_prepared(
+        self,
+        intent: OrderIntent,
+    ) -> tuple[_PreparedOutcome | None, str | None]:
+        if not intent.ready:
+            return None, intent.reason
+        prepared = self._prepared.get(
+            (_rule_key(intent.rule_id), intent.action.upper())
+        )
+        if prepared is None:
+            return None, "prepared_rule_outcome_not_found"
+        if (
+            prepared.condition_id.casefold()
+            != intent.condition_id.casefold()
+            or prepared.account.name.casefold()
+            != intent.account_name.casefold()
+        ):
+            return None, "prepared_order_identity_mismatch"
+        try:
+            quantity = _required_decimal(
+                intent.quantity,
+                name="intent quantity",
+            )
+            limit_price = _required_decimal(
+                intent.limit_price,
+                name="intent limit price",
+            )
+        except LivePreparationError as exc:
+            return None, str(exc)
+        if (
+            quantity != prepared.quantity
+            or limit_price != prepared.limit_price
+        ):
+            return None, "prepared_order_parameters_mismatch"
+        return prepared, None
+
+    def _claim_candidates(
+        self,
+        candidates: Sequence[
+            tuple[int, OrderIntent, _PreparedOutcome]
+        ],
+        *,
+        release: DiscoveryResult,
+        results: list[OrderExecutionResult | None],
+    ) -> list[_ClaimedOrder]:
+        if not candidates:
+            return []
+        workers = min(len(candidates), 8)
+        claimed: list[_ClaimedOrder] = []
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="cbr-idempotency",
+        ) as pool:
+            futures = {
+                pool.submit(
+                    self._ledger.claim,
+                    release_url=release.url,
+                    intent=intent,
+                ): (index, intent, prepared)
+                for index, intent, prepared in candidates
+            }
+            for future in as_completed(futures):
+                index, intent, prepared = futures[future]
+                try:
+                    claim = future.result()
+                except ExecutionLedgerError as exc:
+                    results[index] = OrderExecutionResult(
+                        intent=intent,
+                        status="SKIPPED",
+                        attempted=False,
+                        success=None,
+                        error=redact_sensitive_text(exc),
+                    )
+                    continue
+                except Exception as exc:
+                    results[index] = OrderExecutionResult(
+                        intent=intent,
+                        status="SKIPPED",
+                        attempted=False,
+                        success=None,
+                        error=_safe_exception(exc),
+                    )
+                    continue
+                if not claim.acquired:
+                    detail = (
+                        "idempotency="
+                        f"{claim.existing_status or 'UNKNOWN'}"
+                    )
+                    if claim.existing_error:
+                        detail += (
+                            " error="
+                            + redact_sensitive_text(
+                                claim.existing_error
+                            )
+                        )
+                    results[index] = OrderExecutionResult(
+                        intent=intent,
+                        status="DUPLICATE_SKIPPED",
+                        attempted=False,
+                        success=None,
+                        order_id=claim.existing_order_id,
+                        error=detail,
+                    )
+                    continue
+                claimed.append(
+                    _ClaimedOrder(
+                        index=index,
+                        intent=intent,
+                        prepared=prepared,
+                        claim=claim,
+                    )
+                )
+        claimed.sort(key=lambda item: item.index)
+        return claimed
+
+    def _post_batch(
+        self,
+        items: Sequence[_ClaimedOrder],
+        *,
+        results: list[OrderExecutionResult | None],
+    ) -> None:
+        if not items:
+            return
+        client = items[0].prepared.client
+        try:
+            responses = tuple(
+                client.post_orders(
+                    [
+                        item.prepared.signed_order
+                        for item in items
+                    ]
+                )
+            )
+            if len(responses) != len(items):
+                raise LivePreparationError(
+                    "Polymarket batch response count mismatch"
+                )
+        except Exception as exc:
+            error = _safe_exception(exc)
+            for item in items:
+                ledger_warning = self._complete_claim(
+                    claim_id=item.claim.claim_id,
+                    status="FAILED",
+                    result={
+                        "attempted": True,
+                        "accepted": None,
+                    },
+                    error=error,
+                )
+                results[item.index] = OrderExecutionResult(
+                    intent=item.intent,
+                    status="AMBIGUOUS",
+                    attempted=True,
+                    success=None,
+                    error=ledger_warning or error,
+                )
+            return
+
+        for item, response in zip(items, responses, strict=True):
             if response.ok:
                 order_id = str(response.order_id)
                 status = str(response.status).upper()
                 ledger_warning = self._complete_claim(
-                    claim_id=claim.claim_id,
+                    claim_id=item.claim.claim_id,
                     status="EXECUTED",
                     result={
                         "attempted": True,
                         "accepted": True,
                         "order_id": order_id,
                         "status": status,
-                        "token_id": plan.token_id,
+                        "token_id": item.prepared.token_id,
                     },
                 )
-                return OrderExecutionResult(
-                    intent=intent,
+                results[item.index] = OrderExecutionResult(
+                    intent=item.intent,
                     status=status,
                     attempted=True,
                     success=True,
                     order_id=order_id,
                     error=ledger_warning,
                 )
+                continue
 
             error = redact_sensitive_text(
                 f"{str(response.code)}: "
                 f"{str(response.message)}"
             )
             ledger_warning = self._complete_claim(
-                claim_id=claim.claim_id,
+                claim_id=item.claim.claim_id,
                 status="REJECTED",
                 result={
                     "attempted": True,
@@ -393,29 +527,11 @@ class WarmLiveOrderExecutor:
                 },
                 error=error,
             )
-            return OrderExecutionResult(
-                intent=intent,
+            results[item.index] = OrderExecutionResult(
+                intent=item.intent,
                 status="REJECTED",
                 attempted=True,
                 success=False,
-                error=ledger_warning or error,
-            )
-        except Exception as exc:
-            error = _safe_exception(exc)
-            ledger_warning = self._complete_claim(
-                claim_id=claim.claim_id,
-                status="FAILED",
-                result={
-                    "attempted": attempted,
-                    "accepted": None,
-                },
-                error=error,
-            )
-            return OrderExecutionResult(
-                intent=intent,
-                status="AMBIGUOUS" if attempted else "SKIPPED",
-                attempted=attempted,
-                success=None,
                 error=ledger_warning or error,
             )
 
@@ -591,39 +707,6 @@ class UnavailableLiveOrderExecutor:
             )
             for intent in intents
         ]
-
-
-def _snapshot_from_client(
-    client: Any,
-    *,
-    prepared: _PreparedOutcome,
-) -> MarketSnapshot:
-    book = client.get_order_book(token_id=prepared.token_id)
-    condition_id = str(
-        getattr(book, "condition_id", "") or ""
-    ).strip().lower()
-    if condition_id != prepared.condition_id.casefold():
-        raise LivePreparationError(
-            "Fresh order book condition does not match prepared rule"
-        )
-    bids = [Decimal(str(level.price)) for level in book.bids]
-    asks = [Decimal(str(level.price)) for level in book.asks]
-    return MarketSnapshot(
-        condition_id=prepared.condition_id,
-        question=prepared.question,
-        outcome=prepared.outcome,
-        token_id=prepared.token_id,
-        best_bid=max(bids) if bids else None,
-        best_ask=min(asks) if asks else None,
-        last_trade_price=(
-            Decimal(str(book.last_trade_price))
-            if book.last_trade_price is not None
-            else None
-        ),
-        tick_size=Decimal(str(book.tick_size)),
-        minimum_order_size=Decimal(str(book.min_order_size)),
-        neg_risk=bool(book.neg_risk),
-    )
 
 
 def _balance_decimal(client: Any) -> Decimal:

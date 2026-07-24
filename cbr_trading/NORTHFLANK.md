@@ -128,5 +128,11 @@ Before leaving the service armed, the log must also contain:
 CBR live executor warmed before polling rules=... accounts=... outcomes=...
 ```
 
+At this point the account is authenticated, balances and market metadata are
+checked, all possible GTC orders are pre-signed, and the database claim
+connections are warm. After publication the runner does not refresh the order
+book or sign orders; it claims idempotency in parallel and sends one batch
+request per account.
+
 After the event, inspect the order results and Telegram message. The hosted
 worker then logs that it is idle instead of restarting the completed event.

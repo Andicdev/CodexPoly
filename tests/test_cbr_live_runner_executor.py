@@ -119,6 +119,7 @@ class _Ledger:
     def __init__(self, *, acquired: bool = True):
         self.acquired = acquired
         self.ready_checks = 0
+        self.claims: list[str] = []
         self.completions: list[dict] = []
         self.closed = False
 
@@ -131,10 +132,11 @@ class _Ledger:
         release_url: str,
         intent: OrderIntent,
     ) -> ExecutionClaim:
+        self.claims.append(intent.action)
         return ExecutionClaim(
             acquired=self.acquired,
             idempotency_key="cbr_auto:v1:key",
-            claim_id=41,
+            claim_id=41 if intent.action == "YES" else 42,
             existing_status=None if self.acquired else "EXECUTED",
             existing_order_id=None if self.acquired else "old-order",
         )
@@ -150,32 +152,36 @@ class _Client:
     wallet = WALLET
     wallet_type = "GNOSIS_SAFE"
 
-    def __init__(self, *, fresh_ask: str = "0.60"):
-        self.fresh_ask = fresh_ask
-        self.placements: list[dict] = []
+    def __init__(self):
+        self.order_creations: list[dict] = []
+        self.batch_posts: list[list[object]] = []
         self.closed = False
 
     def get_balance_allowance(self, *, asset_type: str) -> object:
         return SimpleNamespace(balance="50000000")
 
-    def get_order_book(self, *, token_id: str) -> object:
-        level = lambda price: SimpleNamespace(price=price)
+    def create_limit_order(self, **kwargs: object) -> object:
+        self.order_creations.append(dict(kwargs))
         return SimpleNamespace(
-            condition_id=CONDITION_ID,
-            bids=[level("0.10")],
-            asks=[level(self.fresh_ask)],
-            last_trade_price="0.30",
-            tick_size="0.01",
-            min_order_size="5",
-            neg_risk=False,
+            token_id=kwargs["token_id"],
+            order_type="GTC",
+            post_only=kwargs["post_only"],
+            price=kwargs["price"],
+            size=kwargs["size"],
         )
 
-    def place_limit_order(self, **kwargs: object) -> object:
-        self.placements.append(dict(kwargs))
-        return SimpleNamespace(
-            ok=True,
-            order_id="order-123",
-            status="LIVE",
+    def post_orders(
+        self,
+        signed_orders: list[object],
+    ) -> tuple[object, ...]:
+        self.batch_posts.append(list(signed_orders))
+        return tuple(
+            SimpleNamespace(
+                ok=True,
+                order_id=f"order-{index + 1}",
+                status="LIVE",
+            )
+            for index, _ in enumerate(signed_orders)
         )
 
     def close(self) -> None:
@@ -229,9 +235,9 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(ledger.ready_checks, 1)
         self.assertTrue(result.success)
         self.assertEqual(result.status, "LIVE")
-        self.assertEqual(result.order_id, "order-123")
+        self.assertEqual(result.order_id, "order-1")
         self.assertEqual(
-            client.placements,
+            client.order_creations,
             [
                 {
                     "token_id": "token-yes",
@@ -239,8 +245,20 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
                     "size": "100",
                     "side": "BUY",
                     "post_only": False,
-                }
+                },
+                {
+                    "token_id": "token-no",
+                    "price": "0.2",
+                    "size": "100",
+                    "side": "BUY",
+                    "post_only": False,
+                },
             ],
+        )
+        self.assertEqual(len(client.batch_posts), 1)
+        self.assertEqual(
+            [order.token_id for order in client.batch_posts[0]],
+            ["token-yes"],
         )
         self.assertEqual(
             ledger.completions[0]["status"],
@@ -264,10 +282,12 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, "DUPLICATE_SKIPPED")
         self.assertEqual(result.order_id, "old-order")
         self.assertFalse(result.attempted)
-        self.assertEqual(client.placements, [])
+        self.assertEqual(client.batch_posts, [])
 
-    def test_fresh_crossing_ask_places_aggressive_gtc(self) -> None:
-        client = _Client(fresh_ask="0.20")
+    def test_execute_posts_presigned_order_without_book_refresh(
+        self,
+    ) -> None:
+        client = _Client()
         ledger = _Ledger()
         executor, _ = self._executor(client=client, ledger=ledger)
         executor.prepare()
@@ -280,8 +300,27 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, "LIVE")
         self.assertTrue(result.attempted)
         self.assertTrue(result.success)
-        self.assertEqual(client.placements[0]["post_only"], False)
+        self.assertFalse(client.batch_posts[0][0].post_only)
         self.assertEqual(ledger.completions[0]["status"], "EXECUTED")
+
+    def test_multiple_claimed_orders_use_one_batch_post(self) -> None:
+        client = _Client()
+        ledger = _Ledger()
+        executor, _ = self._executor(client=client, ledger=ledger)
+        executor.prepare()
+
+        results = executor.execute(
+            [_intent(action="YES"), _intent(action="NO")],
+            release=_release(),
+        )
+
+        self.assertEqual([result.status for result in results], ["LIVE", "LIVE"])
+        self.assertCountEqual(ledger.claims, ["YES", "NO"])
+        self.assertEqual(len(client.batch_posts), 1)
+        self.assertEqual(
+            [order.token_id for order in client.batch_posts[0]],
+            ["token-yes", "token-no"],
+        )
 
     def test_aggregate_notional_cap_fails_closed(self) -> None:
         client = _Client()

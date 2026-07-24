@@ -8,7 +8,9 @@ python -m cbr_trading.live --runner-preflight
 
 It loads every active CBR rule, verifies the execution ledger, decrypts and
 authenticates each account, checks collateral, and prepares both YES and NO
-outcome tokens. It never submits an order and does not require
+outcome tokens. It also pre-signs both possible GTC orders and warms the
+database claim connections so that these operations are not on the
+post-publication path. It never submits an order and does not require
 `CBR_LIVE_TRADING_ENABLED=1`; the output reports whether that final switch is
 currently enabled.
 
@@ -53,3 +55,9 @@ immediately and any unfilled remainder rests at the configured limit until it
 is cancelled or the market closes. Set `CBR_LIVE_POST_ONLY=1` only when
 maker-only behavior is explicitly required; such an order is skipped if it
 would cross the current ask.
+
+The continuous runner prepares and signs all possible orders before polling.
+After the release it evaluates the rules, acquires persistent idempotency
+claims in parallel, and submits all orders for one account through one batch
+request. Balance, wallet, tick-size, and market checks happen during warm-up,
+not after the CBR title is detected.
