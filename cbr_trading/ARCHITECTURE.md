@@ -245,6 +245,22 @@ for tick supervision only when its effective price still differs from its
 desired price, so an order prepared after the finer tick is already active is
 not cancelled and replaced with the same price.
 
+The complete path is covered by
+`tests/test_resolution_order_lifecycle_integration.py`. It composes the real
+CBR source, strategy, coordinator, warm adapter, supervised executor,
+persistent supervisor, tick detector, and market channel. With only external
+I/O boundaries replaced by stateful test doubles, it proves:
+
+1. desired BUY price `0.999` is prepared and submitted at `0.99` on tick
+   `0.01`;
+2. the submitted order ID is registered as one owned order group;
+3. a real `0.999` book level proves tick `0.001` even without an explicit
+   tick-change event;
+4. only the owned initial order is cancelled;
+5. the replacement is submitted at `0.999`, becomes the group's live order
+   with `reprice_count=1`, and a repeated book observation does not trigger a
+   second replacement.
+
 ## Invariants
 
 - Sources have no dependency on strategies or execution.
