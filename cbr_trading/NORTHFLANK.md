@@ -144,3 +144,64 @@ idempotency mechanism before any second order can be sent.
 
 After the event, inspect the order results and Telegram message. The hosted
 worker then logs that it is idle instead of restarting the completed event.
+
+## Earnings shadow source service
+
+Deploy earnings ingestion as a separate combined service. Do not add it to the
+CBR trading service and do not attach trading-account or Polymarket signing
+secrets.
+
+- repository and build settings: the same as above;
+- instances: exactly 1;
+- networking: no public ports;
+- command: `python -u -m cbr_trading.earnings`;
+- migration behavior: readiness check only; it never applies migration 004;
+- execution mode: permanently `shadow` for this checkpoint.
+
+Safe service variables:
+
+```dotenv
+PYTHONUNBUFFERED=1
+LOG_LEVEL=INFO
+CBR_ON_RENDER=0
+EARNINGS_WORKER_MODE=shadow
+EARNINGS_FETCH_TIMEOUT_SEC=15
+EARNINGS_MAX_DOCUMENT_BYTES=8388608
+EARNINGS_FETCH_ATTEMPTS=3
+EARNINGS_FETCH_RETRY_SEC=0.5
+EARNINGS_RECONNECT_INITIAL_SEC=1
+EARNINGS_RECONNECT_MAX_SEC=30
+EARNINGS_NO_RULES_RETRY_SEC=30
+EARNINGS_HEARTBEAT_SEC=60
+```
+
+Set `EARNINGS_HTTP_USER_AGENT` to an operator-approved SEC identification
+string. It is sent only to public SEC exhibit URLs and is not logged.
+
+Create a restricted Secret Group for this service and enter manually:
+
+```dotenv
+DATABASE_URL_SERVER_EXT=
+SEC_API_KEY=
+```
+
+If the existing SEC service uses `SEC_API_IO_KEY` or `SEC_API_STREAM_KEY`,
+that key name is also supported. Never copy its value through logs, shell
+arguments, screenshots, browser snapshots, or chat.
+
+A healthy startup contains:
+
+```text
+Earnings shadow worker schema ready mode=shadow
+SEC earnings shadow stream connecting watches=1
+```
+
+Before starting the service, run
+`python -m scripts.check_earnings_shadow_runtime` in its runtime. The output
+must show `mode=shadow`, one active NVTS scope, one watch, no missing parser,
+and only a boolean SEC credential presence flag.
+
+The periodic heartbeat reports only connection state and aggregate counts.
+An accepted document logs its scope, parser status, database row identifiers,
+and public EPS value. It never logs the WebSocket URI, API credential, raw
+document, database URL, or authenticated values.

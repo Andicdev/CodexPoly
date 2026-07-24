@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
+from decimal import Decimal
+from enum import Enum
 from typing import Any, Callable, Sequence
 
 from cbr_trading.earnings.contracts import (
@@ -15,6 +19,7 @@ from cbr_trading.earnings.contracts import (
     EpsBasis,
     SourceAuthority,
 )
+from cbr_trading.secret_guard import redact_sensitive_text
 
 
 _MIGRATION_PATH = (
@@ -186,10 +191,20 @@ RETURNING id
 """.strip()
 
 _SELECT_EVENT_SQL = """
-SELECT id
+SELECT id, status
 FROM earnings_source_events
 WHERE idempotency_key = :idempotency_key
 LIMIT 1
+""".strip()
+
+_UPDATE_EVENT_STATUS_SQL = """
+UPDATE earnings_source_events
+SET
+    status = :status,
+    error = :error,
+    updated_at = now()
+WHERE id = :event_id
+RETURNING id
 """.strip()
 
 _INSERT_FACT_SQL = """
@@ -284,6 +299,43 @@ WHERE fact.status = 'VALIDATED'
 ORDER BY fact.detected_at, fact.id
 """.strip()
 
+_LOAD_ACTIVE_RULES_SQL = """
+SELECT
+    rule_key,
+    scope_id,
+    ticker,
+    cik,
+    fiscal_year,
+    fiscal_quarter,
+    period_end,
+    estimated_release_at,
+    metric_kind,
+    primary_basis,
+    fallback_basis,
+    comparison_op,
+    strike,
+    rounding_places,
+    currency,
+    market_slug,
+    condition_id,
+    source_policy,
+    fallback_policy
+FROM earnings_market_rules
+WHERE status IN ('SHADOW', 'WATCHING')
+ORDER BY estimated_release_at, id
+""".strip()
+
+_EVENT_STATUSES = frozenset(
+    {
+        "RECEIVED",
+        "FETCHED",
+        "PARSED",
+        "NO_MATCH",
+        "QUARANTINED",
+        "ERROR",
+    }
+)
+
 
 class EarningsStoreError(RuntimeError):
     """Sanitized failure in additive earnings shadow persistence."""
@@ -293,6 +345,7 @@ class EarningsStoreError(RuntimeError):
 class StoredEarningsRecord:
     row_id: int
     created: bool
+    status: str | None = None
 
 
 class SqlAlchemyEarningsStore:
@@ -391,6 +444,7 @@ class SqlAlchemyEarningsStore:
                     return StoredEarningsRecord(
                         row_id=int(inserted["id"]),
                         created=True,
+                        status="RECEIVED",
                     )
                 existing = session.execute(
                     text_factory(_SELECT_EVENT_SQL),
@@ -409,7 +463,48 @@ class SqlAlchemyEarningsStore:
         return StoredEarningsRecord(
             row_id=int(existing["id"]),
             created=False,
+            status=str(existing["status"]),
         )
+
+    def update_source_event_status(
+        self,
+        event_id: int,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        normalized_status = str(status or "").strip().upper()
+        if normalized_status not in _EVENT_STATUSES:
+            raise ValueError("unsupported earnings source event status")
+        safe_error = (
+            redact_sensitive_text(error, max_length=240)
+            if error is not None
+            else None
+        )
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                updated = session.execute(
+                    text_factory(_UPDATE_EVENT_STATUS_SQL),
+                    {
+                        "event_id": int(event_id),
+                        "status": normalized_status,
+                        "error": safe_error,
+                    },
+                ).mappings().one_or_none()
+                if updated is None:
+                    session.rollback()
+                    raise EarningsStoreError(
+                        "Earnings source event does not exist"
+                    )
+                session.commit()
+        except EarningsStoreError:
+            raise
+        except Exception as exc:
+            raise EarningsStoreError(
+                "Failed to update earnings source event: "
+                f"{type(exc).__name__}"
+            ) from None
 
     def record_fact(
         self,
@@ -480,6 +575,20 @@ class SqlAlchemyEarningsStore:
                 f"{type(exc).__name__}"
             ) from None
         return tuple(_fact_from_row(row) for row in rows)
+
+    def load_active_rules(self) -> tuple[EarningsMarketRule, ...]:
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                rows = session.execute(
+                    text_factory(_LOAD_ACTIVE_RULES_SQL)
+                ).mappings().all()
+        except Exception as exc:
+            raise EarningsStoreError(
+                "Failed to load active earnings rules: "
+                f"{type(exc).__name__}"
+            ) from None
+        return tuple(_rule_from_row(row) for row in rows)
 
     def close(self) -> None:
         if self._engine is not None:
@@ -557,6 +666,30 @@ def _rule_params(rule: EarningsMarketRule) -> dict[str, Any]:
         "fallback_policy": _json_dumps(rule.fallback_policy),
         "status": "SHADOW",
     }
+
+
+def _rule_from_row(row: Any) -> EarningsMarketRule:
+    return EarningsMarketRule(
+        rule_key=str(row["rule_key"]),
+        scope_id=str(row["scope_id"]),
+        ticker=str(row["ticker"]),
+        cik=str(row["cik"]),
+        fiscal_year=int(row["fiscal_year"]),
+        fiscal_quarter=int(row["fiscal_quarter"]),
+        period_end=row["period_end"],
+        estimated_release_at=row["estimated_release_at"],
+        metric=EarningsMetric(str(row["metric_kind"])),
+        primary_basis=EpsBasis(str(row["primary_basis"])),
+        fallback_basis=EpsBasis(str(row["fallback_basis"])),
+        comparison_op=str(row["comparison_op"]),
+        strike=row["strike"],
+        rounding_places=int(row["rounding_places"]),
+        currency=str(row["currency"]),
+        market_slug=row.get("market_slug"),
+        condition_id=row.get("condition_id"),
+        source_policy=_json_mapping(row.get("source_policy")),
+        fallback_policy=_json_mapping(row.get("fallback_policy")),
+    )
 
 
 def _event_params(
@@ -678,11 +811,41 @@ def _fact_key(candidate: EarningsFactCandidate) -> str:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(
-        value,
+        _json_ready(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
-        default=str,
+    )
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        decoded = json.loads(value)
+    else:
+        decoded = value
+    if not isinstance(decoded, dict):
+        raise ValueError("earnings rule policy must be a JSON object")
+    return dict(decoded)
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_ready(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (Decimal, date, datetime)):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(
+        f"unsupported JSON value type: {type(value).__name__}"
     )
 
 

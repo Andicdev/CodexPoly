@@ -17,6 +17,7 @@ from cbr_trading.earnings.repository import (
     SqlAlchemyEarningsStore,
     StoredEarningsRecord,
 )
+from cbr_trading.earnings.settings import EarningsWorkerSettings
 
 __all__ = [
     "EarningsDocumentCandidate",
@@ -26,6 +27,7 @@ __all__ = [
     "EarningsParseResult",
     "EarningsProvider",
     "EarningsStoreError",
+    "EarningsWorkerSettings",
     "EpsBasis",
     "ParseStatus",
     "SourceAuthority",

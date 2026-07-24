@@ -53,6 +53,45 @@ python -m scripts.manage_earnings_schema --apply --seed-nvts-shadow
 The seed remains `SHADOW` and does not create source events, fact candidates,
 execution claims, or orders.
 
+## Hosted shadow worker
+
+Run the long-lived source worker with:
+
+```text
+python -u -m cbr_trading.earnings
+```
+
+Before opening the WebSocket, run the presence/schema/rule preflight:
+
+```text
+python -m scripts.check_earnings_shadow_runtime
+```
+
+It reports only the selected database target, credential presence, active
+scope names, watch count, and missing parser names.
+
+It performs this loop:
+
+1. verifies migration 004 without applying migrations;
+2. loads only `SHADOW` and `WATCHING` rules;
+3. opens one SEC WebSocket connection;
+4. persists a deduplicated source event;
+5. downloads only a bounded public `https://*.sec.gov` exhibit;
+6. runs the configured company parser;
+7. persists a validated fact and logs a shadow `ResolutionSignal`.
+
+The worker rejects any mode except `shadow`. It does not import a strategy,
+account repository, Polymarket client, `OrderIntent`, or `PreparedExecutor`.
+Rule changes are picked up on the next reconnect or service restart.
+
+Required confidential runtime values:
+
+- a configured primary database URL;
+- one of `SEC_API_KEY`, `SEC_API_IO_KEY`, or `SEC_API_STREAM_KEY`.
+
+Keep both in a restricted platform Secret Group. Do not attach trading-account
+or Polymarket signing secrets to the shadow source service.
+
 ## Historical replay
 
 Run the parser against four official Navitas IR releases without storing the

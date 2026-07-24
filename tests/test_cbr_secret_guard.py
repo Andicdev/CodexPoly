@@ -45,6 +45,19 @@ class SecretGuardTests(unittest.TestCase):
         self.assertTrue(result.startswith("RuntimeError:"))
         self.assertNotIn("password", result)
 
+    def test_redacts_sec_api_key_assignment(self) -> None:
+        secret = "sec-api-credential"
+
+        result = redact_sensitive_text(
+            f"SEC_API_STREAM_KEY={secret}"
+        )
+
+        self.assertNotIn(secret, result)
+        self.assertEqual(
+            result,
+            "SEC_API_STREAM_KEY=[REDACTED]",
+        )
+
     def test_presence_report_contains_names_only(self) -> None:
         values = {
             "DATABASE_URL_SERVER_EXT": "database-secret",

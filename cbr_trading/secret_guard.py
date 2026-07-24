@@ -33,6 +33,9 @@ SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "DATABASE_URL_SERVER_INT",
         "POLYMARKET_PRIVATE_KEY",
         "PRIVATE_KEY",
+        "SEC_API_KEY",
+        "SEC_API_IO_KEY",
+        "SEC_API_STREAM_KEY",
         "TELEGRAM_INGEST_CHAT_ID",
         "TG_BOT_TOKEN",
     }
