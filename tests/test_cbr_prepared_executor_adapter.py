@@ -30,10 +30,12 @@ class _LegacyWarmExecutor:
         preparation_error: Exception | None = None,
         result_mode: str = "success",
         omit_prepared_details: bool = False,
+        initial_tick_size: Decimal | None = None,
     ):
         self.preparation_error = preparation_error
         self.result_mode = result_mode
         self.omit_prepared_details = omit_prepared_details
+        self.initial_tick_size = initial_tick_size
         self.prepare_calls: list[dict] = []
         self.execute_calls: list[dict] = []
         self.closed = False
@@ -52,6 +54,11 @@ class _LegacyWarmExecutor:
         )
         if self.preparation_error is not None:
             raise self.preparation_error
+        yes_limit_price = (
+            Decimal("0.99")
+            if self.initial_tick_size == Decimal("0.01")
+            else Decimal("0.999")
+        )
         prepared_orders = () if self.omit_prepared_details else (
             LivePreparedOrderSummary(
                 rule_id=17,
@@ -61,7 +68,13 @@ class _LegacyWarmExecutor:
                 outcome="YES",
                 token_id="asset-yes",
                 quantity=Decimal("100"),
-                limit_price=Decimal("0.999"),
+                limit_price=yes_limit_price,
+                desired_price=(
+                    Decimal("0.999")
+                    if self.initial_tick_size is not None
+                    else None
+                ),
+                tick_size=self.initial_tick_size,
             ),
             LivePreparedOrderSummary(
                 rule_id=17,
@@ -72,6 +85,12 @@ class _LegacyWarmExecutor:
                 token_id="asset-no",
                 quantity=Decimal("100"),
                 limit_price=Decimal("0.95"),
+                desired_price=(
+                    Decimal("0.95")
+                    if self.initial_tick_size is not None
+                    else None
+                ),
+                tick_size=self.initial_tick_size,
             ),
         )
         return LivePreparationSummary(
@@ -224,6 +243,36 @@ class CbrPreparedExecutorAdapterTests(unittest.TestCase):
         self.assertFalse(rejected[0].attempted)
         self.assertEqual(accepted[0].status, ExecutionStatus.SUBMITTED)
         self.assertEqual(len(legacy.execute_calls), 1)
+
+    def test_executes_effective_old_tick_price_but_keeps_desired_price(
+        self,
+    ) -> None:
+        signal, strategy, context = _setup()
+        legacy = _LegacyWarmExecutor(
+            initial_tick_size=Decimal("0.01")
+        )
+        adapter = CbrWarmPreparedExecutorAdapter(legacy)
+
+        summary = adapter.prepare(
+            strategy.order_templates(),
+            context=context,
+        )
+        result = adapter.execute(
+            strategy.evaluate(signal),
+            signal=signal,
+        )[0]
+
+        self.assertTrue(summary.ready)
+        sent_intent = legacy.execute_calls[0]["intents"][0]
+        self.assertEqual(sent_intent.limit_price, Decimal("0.99"))
+        self.assertEqual(
+            result.orders[0].effective_price,
+            Decimal("0.99"),
+        )
+        self.assertEqual(
+            result.handle.desired_price,
+            Decimal("0.999"),
+        )
 
     def test_empty_selection_consumes_executor_and_expires_legacy_claims(self) -> None:
         signal, strategy, context = _setup()

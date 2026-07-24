@@ -76,6 +76,7 @@ def _rule() -> dict:
 
 def _reprice_rule() -> dict:
     rule = _rule()
+    rule["order_price"] = 0.519
     rule["params"] = {
         **rule["params"],
         "order_lifecycle": {
@@ -533,6 +534,8 @@ class RunnerRulePreloadTests(unittest.TestCase):
                             token_id="asset-yes",
                             quantity=Decimal("100"),
                             limit_price=Decimal("0.51"),
+                            desired_price=Decimal("0.519"),
+                            tick_size=Decimal("0.01"),
                         ),
                         SimpleNamespace(
                             rule_id=1,
@@ -543,6 +546,8 @@ class RunnerRulePreloadTests(unittest.TestCase):
                             token_id="asset-no",
                             quantity=Decimal("100"),
                             limit_price=Decimal("0.51"),
+                            desired_price=Decimal("0.519"),
+                            tick_size=Decimal("0.01"),
                         ),
                     ),
                 )

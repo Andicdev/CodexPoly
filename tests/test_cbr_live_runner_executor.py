@@ -36,7 +36,26 @@ def _subscription() -> dict:
     }
 
 
-def _intent(*, action: str = "YES") -> OrderIntent:
+def _reprice_subscription() -> dict:
+    subscription = _subscription()
+    subscription["params"] = {
+        **subscription["params"],
+        "order_price_yes": "0.999",
+        "order_price_no": "0.95",
+        "order_lifecycle": {
+            "kind": "reprice_on_tick_change",
+            "old_tick": "0.01",
+            "new_tick": "0.001",
+        },
+    }
+    return subscription
+
+
+def _intent(
+    *,
+    action: str = "YES",
+    limit_price: Decimal | float = 0.20,
+) -> OrderIntent:
     return OrderIntent(
         rule_id=98,
         rule_key="cbr_decrease_fast",
@@ -44,7 +63,7 @@ def _intent(*, action: str = "YES") -> OrderIntent:
         condition_id=CONDITION_ID,
         action=action,
         quantity=100,
-        limit_price=0.20,
+        limit_price=limit_price,
         ready=True,
         reason="ready",
     )
@@ -95,6 +114,9 @@ class _AccountRepository:
 
 
 class _MarketGateway:
+    def __init__(self, *, tick_size: Decimal = Decimal("0.01")):
+        self.tick_size = tick_size
+
     def load_snapshot(
         self,
         *,
@@ -109,7 +131,7 @@ class _MarketGateway:
             best_bid=Decimal("0.10"),
             best_ask=Decimal("0.60"),
             last_trade_price=Decimal("0.30"),
-            tick_size=Decimal("0.01"),
+            tick_size=self.tick_size,
             minimum_order_size=Decimal("5"),
             neg_risk=False,
         )
@@ -165,14 +187,20 @@ class _Client:
     wallet = WALLET
     wallet_type = "GNOSIS_SAFE"
 
-    def __init__(self, *, events: list[str] | None = None):
+    def __init__(
+        self,
+        *,
+        events: list[str] | None = None,
+        balance: str = "50000000",
+    ):
         self.events = events
+        self.balance = balance
         self.order_creations: list[dict] = []
         self.batch_posts: list[list[object]] = []
         self.closed = False
 
     def get_balance_allowance(self, *, asset_type: str) -> object:
-        return SimpleNamespace(balance="50000000")
+        return SimpleNamespace(balance=self.balance)
 
     def create_limit_order(self, **kwargs: object) -> object:
         self.order_creations.append(dict(kwargs))
@@ -211,22 +239,36 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         client: _Client,
         ledger: _Ledger,
         safety: LiveSafetySettings | None = None,
+        subscription: dict | None = None,
+        market_gateway: _MarketGateway | None = None,
     ) -> tuple[
         WarmLiveOrderExecutor,
         _AccountRepository,
     ]:
         repository = _AccountRepository()
         executor = WarmLiveOrderExecutor(
-            subscriptions=[_subscription()],
+            subscriptions=[subscription or _subscription()],
             database_url="postgresql://unused",
             safety=safety or _safety(),
             account_repository=repository,
-            market_gateway=_MarketGateway(),
+            market_gateway=market_gateway or _MarketGateway(),
             ledger=ledger,
             client_factory=lambda private_key, wallet: client,
             decryptor=lambda encrypted, key: "private-key",
         )
         return executor, repository
+
+    @staticmethod
+    def _high_price_safety() -> LiveSafetySettings:
+        return LiveSafetySettings(
+            trading_enabled=True,
+            post_only=False,
+            allowed_account="kinderSman",
+            max_order_quantity=Decimal("100"),
+            max_notional=Decimal("100"),
+            max_total_notional=Decimal("100"),
+            accounts_master_key="test-master-key",
+        )
 
     def test_prepare_warms_once_then_places_ordinary_gtc(self) -> None:
         client = _Client()
@@ -288,6 +330,102 @@ class WarmLiveOrderExecutorTests(unittest.TestCase):
         self.assertTrue(client.closed)
         self.assertTrue(repository.closed)
         self.assertTrue(ledger.closed)
+
+    def test_reprice_policy_preserves_desired_price_and_signs_current_tick(
+        self,
+    ) -> None:
+        client = _Client(balance="500000000")
+        ledger = _Ledger()
+        executor, _ = self._executor(
+            client=client,
+            ledger=ledger,
+            safety=self._high_price_safety(),
+            subscription=_reprice_subscription(),
+        )
+
+        summary = executor.prepare(release_url=_release().url)
+        yes = next(
+            item
+            for item in summary.prepared_orders
+            if item.outcome == "YES"
+        )
+        result = executor.execute(
+            [_intent(limit_price=Decimal("0.99"))],
+            release=_release(),
+        )[0]
+
+        self.assertEqual(yes.desired_price, Decimal("0.999"))
+        self.assertEqual(yes.limit_price, Decimal("0.99"))
+        self.assertEqual(yes.tick_size, Decimal("0.01"))
+        self.assertEqual(
+            [row["price"] for row in client.order_creations],
+            ["0.99", "0.95"],
+        )
+        self.assertTrue(result.success)
+
+    def test_reprice_policy_uses_desired_price_when_fine_tick_is_active(
+        self,
+    ) -> None:
+        client = _Client(balance="500000000")
+        executor, _ = self._executor(
+            client=client,
+            ledger=_Ledger(),
+            safety=self._high_price_safety(),
+            subscription=_reprice_subscription(),
+            market_gateway=_MarketGateway(
+                tick_size=Decimal("0.001")
+            ),
+        )
+
+        summary = executor.prepare(release_url=_release().url)
+        yes = next(
+            item
+            for item in summary.prepared_orders
+            if item.outcome == "YES"
+        )
+
+        self.assertEqual(yes.desired_price, Decimal("0.999"))
+        self.assertEqual(yes.limit_price, Decimal("0.999"))
+        self.assertEqual(yes.tick_size, Decimal("0.001"))
+
+    def test_keep_open_price_must_still_align_to_current_tick(self) -> None:
+        client = _Client()
+        subscription = _subscription()
+        subscription["order_price"] = "0.999"
+        executor, _ = self._executor(
+            client=client,
+            ledger=_Ledger(),
+            safety=self._high_price_safety(),
+            subscription=subscription,
+        )
+
+        with self.assertRaisesRegex(
+            Exception,
+            "limit_price_not_tick_aligned",
+        ):
+            executor.prepare(release_url=_release().url)
+
+        self.assertEqual(client.order_creations, [])
+
+    def test_reprice_policy_rejects_unexpected_market_tick(self) -> None:
+        client = _Client()
+        executor, _ = self._executor(
+            client=client,
+            ledger=_Ledger(),
+            safety=self._high_price_safety(),
+            subscription=_reprice_subscription(),
+            market_gateway=_MarketGateway(
+                tick_size=Decimal("0.1")
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            Exception,
+            "unexpected_tick_size_for_reprice_policy",
+        ):
+            executor.prepare(release_url=_release().url)
+
+        self.assertEqual(client.order_creations, [])
 
     def test_duplicate_reservation_fails_before_polling(self) -> None:
         client = _Client()

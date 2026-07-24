@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
 
 from cbr_trading.client import DiscoveryResult
+from cbr_trading.domain.intents import OrderSide
 from cbr_trading.live.account_repository import (
     SqlAlchemyTradingAccountRepository,
     TradingAccountRecord,
@@ -49,6 +50,8 @@ class LivePreparedOrderSummary:
     token_id: str
     quantity: Decimal
     limit_price: Decimal
+    desired_price: Decimal | None = None
+    tick_size: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,9 @@ class _PreparedOutcome:
     outcome: str
     token_id: str
     quantity: Decimal
+    desired_price: Decimal
     limit_price: Decimal
+    tick_size: Decimal
     signed_order: Any
 
 
@@ -168,7 +173,7 @@ class WarmLiveOrderExecutor:
             )
             action_notionals: list[Decimal] = []
             for action in ("YES", "NO"):
-                price = _required_decimal(
+                desired_price = _required_decimal(
                     resolve_order_price(subscription, action),
                     name=f"{action} order price",
                 )
@@ -176,12 +181,17 @@ class WarmLiveOrderExecutor:
                     condition_id=condition_id,
                     outcome=action,
                 )
+                initial_limit_price = _initial_limit_price(
+                    subscription,
+                    desired_price=desired_price,
+                    tick_size=snapshot.tick_size,
+                )
                 plan = build_live_order_plan(
                     account=account,
                     rule_id=rule_id,
                     rule_key=rule_key,
                     quantity=quantity,
-                    limit_price=price,
+                    limit_price=initial_limit_price,
                     snapshot=snapshot,
                     settings=self._safety,
                 )
@@ -236,7 +246,9 @@ class WarmLiveOrderExecutor:
                     outcome=action,
                     token_id=snapshot.token_id,
                     quantity=plan.quantity,
+                    desired_price=desired_price,
                     limit_price=plan.limit_price,
+                    tick_size=snapshot.tick_size,
                     signed_order=signed_order,
                 )
                 action_notionals.append(plan.notional)
@@ -316,6 +328,8 @@ class WarmLiveOrderExecutor:
                     token_id=prepared.token_id,
                     quantity=prepared.quantity,
                     limit_price=prepared.limit_price,
+                    desired_price=prepared.desired_price,
+                    tick_size=prepared.tick_size,
                 )
                 for prepared in self._prepared.values()
             ),
@@ -773,6 +787,68 @@ def _required_decimal(value: Any, *, name: str) -> Decimal:
     if not parsed.is_finite() or parsed <= 0:
         raise LivePreparationError(f"Invalid {name}")
     return parsed
+
+
+def _initial_limit_price(
+    subscription: Mapping[str, Any],
+    *,
+    desired_price: Decimal,
+    tick_size: Decimal,
+) -> Decimal:
+    params = subscription.get("params")
+    if not isinstance(params, Mapping):
+        return desired_price
+    raw_policy = params.get("order_lifecycle")
+    if raw_policy is None:
+        return desired_price
+    if not isinstance(raw_policy, Mapping):
+        raise LivePreparationError("Invalid order_lifecycle")
+
+    kind = str(raw_policy.get("kind") or "keep_open").strip().lower()
+    if kind == "keep_open":
+        return desired_price
+    if kind != "reprice_on_tick_change":
+        raise LivePreparationError(
+            f"Unsupported order_lifecycle kind: {kind}"
+        )
+
+    old_tick = _required_decimal(
+        raw_policy.get("old_tick"),
+        name="order_lifecycle old_tick",
+    )
+    new_tick = _required_decimal(
+        raw_policy.get("new_tick"),
+        name="order_lifecycle new_tick",
+    )
+    current_tick = _required_decimal(
+        tick_size,
+        name="market tick_size",
+    )
+    if new_tick >= old_tick:
+        raise LivePreparationError(
+            "Invalid order_lifecycle tick transition"
+        )
+    if current_tick not in {old_tick, new_tick}:
+        raise LivePreparationError(
+            "unexpected_tick_size_for_reprice_policy"
+        )
+
+    # Import lazily because the universal adapter imports this legacy bridge
+    # while the execution package itself is still being initialized.
+    from cbr_trading.execution.supervision_gateway import (
+        replacement_price_for_tick,
+    )
+
+    try:
+        return replacement_price_for_tick(
+            desired_price,
+            tick_size=current_tick,
+            side=OrderSide.BUY,
+        )
+    except (ArithmeticError, TypeError, ValueError) as exc:
+        raise LivePreparationError(
+            "desired_price_cannot_be_represented_at_current_tick"
+        ) from exc
 
 
 def _intent_from_prepared(

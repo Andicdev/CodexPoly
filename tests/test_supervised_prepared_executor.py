@@ -59,12 +59,16 @@ def _signal() -> ResolutionSignal:
     )
 
 
-def _result(template: OrderTemplate) -> OrderExecutionResult:
+def _result(
+    template: OrderTemplate,
+    *,
+    effective_price: Decimal = Decimal("0.99"),
+) -> OrderExecutionResult:
     intent = template.bind(signal_id="signal-1")
     order = PlacedOrder(
         order_id="order-1",
         asset_id="asset-yes",
-        effective_price=Decimal("0.99"),
+        effective_price=effective_price,
         quantity=Decimal("10"),
     )
     handle = ExecutionHandle(
@@ -156,6 +160,28 @@ class SupervisedPreparedExecutorTests(unittest.TestCase):
     def test_keep_open_result_is_not_persisted_for_supervision(self) -> None:
         template = _template(policy=KeepOpenPolicy())
         result = _result(template)
+        supervisor = _Supervisor()
+        executor = SupervisedPreparedExecutor(
+            _Delegate(result),
+            supervisor=supervisor,
+        )
+
+        actual = executor.execute(
+            (result.intent,),
+            signal=_signal(),
+        )
+
+        self.assertEqual(actual, (result,))
+        self.assertEqual(supervisor.registrations, [])
+
+    def test_order_already_at_desired_price_needs_no_supervision(
+        self,
+    ) -> None:
+        template = _template()
+        result = _result(
+            template,
+            effective_price=Decimal("0.999"),
+        )
         supervisor = _Supervisor()
         executor = SupervisedPreparedExecutor(
             _Delegate(result),

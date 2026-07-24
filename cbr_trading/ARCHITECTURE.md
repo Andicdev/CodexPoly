@@ -231,10 +231,19 @@ can reserve or submit anything. Runtime startup failure also swaps in the
 non-submitting executor before preparation.
 
 The gate never applies migrations. Migrations 001 and 002 remain explicit,
-forward-only deployment actions. The current warm CBR executor also still
-requires its initially prepared limit price to align to the current book tick;
-preparing a desired finer price at the old tick is the next executor
-checkpoint.
+forward-only deployment actions.
+
+The warm CBR bridge keeps the strategy's `desired_price` separate from the
+initially signed `effective_price`. For `reprice_on_tick_change`, preparation
+accepts only the configured old or new tick and derives the effective price
+with the same side-aware tick normalization used by the supervisor. Thus a BUY
+with desired price `0.999` is signed at `0.99` while the market is on tick
+`0.01`, but its persisted order-group handle retains `0.999` for replacement
+when tick `0.001` becomes active. `keep_open` prices are never normalized and
+must still align exactly to the current tick. A submitted order is registered
+for tick supervision only when its effective price still differs from its
+desired price, so an order prepared after the finer tick is already active is
+not cancelled and replaced with the same price.
 
 ## Invariants
 

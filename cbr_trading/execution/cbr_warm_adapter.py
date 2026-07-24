@@ -6,7 +6,11 @@ from decimal import Decimal
 from typing import Protocol, Sequence
 
 from cbr_trading.client import DiscoveryResult
-from cbr_trading.domain.intents import OrderIntent, OrderTemplate
+from cbr_trading.domain.intents import (
+    OrderIntent,
+    OrderTemplate,
+    RepriceOnTickChange,
+)
 from cbr_trading.domain.results import (
     ExecutionHandle,
     ExecutionStatus,
@@ -19,6 +23,9 @@ from cbr_trading.execution.prepared_executor import (
     PreparationItem,
     PreparationStatus,
     PreparationSummary,
+)
+from cbr_trading.execution.supervision_gateway import (
+    replacement_price_for_tick,
 )
 from cbr_trading.live.runner_executor import (
     LivePreparationSummary,
@@ -177,7 +184,9 @@ class CbrWarmPreparedExecutorAdapter:
                 )
                 continue
             selected.append((index, intent, prepared))
-            legacy_intents.append(_to_legacy_intent(intent))
+            legacy_intents.append(
+                _to_legacy_intent(intent, prepared=prepared)
+            )
 
         self._execution_started = True
         try:
@@ -332,7 +341,7 @@ def _match_prepared_templates(
             != template.condition_id.casefold()
             or legacy.outcome.upper() != template.outcome.value
             or legacy.quantity != template.quantity
-            or legacy.limit_price != template.desired_price
+            or not _prepared_price_matches(legacy, template)
         ):
             raise ValueError(
                 f"legacy preparation mismatch for {template.template_id}"
@@ -349,7 +358,50 @@ def _match_prepared_templates(
     return tuple(prepared_rows)
 
 
-def _to_legacy_intent(intent: OrderIntent) -> LegacyOrderIntent:
+def _prepared_price_matches(
+    legacy: LivePreparedOrderSummary,
+    template: OrderTemplate,
+) -> bool:
+    legacy_desired = getattr(legacy, "desired_price", None)
+    legacy_tick = getattr(legacy, "tick_size", None)
+
+    # Older warm-executor implementations exposed only one price. Retain that
+    # bridge behavior when both additive fields are absent.
+    if legacy_desired is None and legacy_tick is None:
+        return legacy.limit_price == template.desired_price
+    if legacy_desired is None or legacy_tick is None:
+        return False
+
+    try:
+        desired = Decimal(str(legacy_desired))
+        tick_size = Decimal(str(legacy_tick))
+        effective = Decimal(str(legacy.limit_price))
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+    if desired != template.desired_price:
+        return False
+
+    policy = template.lifecycle_policy
+    if not isinstance(policy, RepriceOnTickChange):
+        return effective == desired
+    if tick_size not in {policy.old_tick, policy.new_tick}:
+        return False
+    try:
+        expected = replacement_price_for_tick(
+            desired,
+            tick_size=tick_size,
+            side=template.side,
+        )
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+    return effective == expected
+
+
+def _to_legacy_intent(
+    intent: OrderIntent,
+    *,
+    prepared: _PreparedTemplate,
+) -> LegacyOrderIntent:
     return LegacyOrderIntent(
         rule_id=intent.metadata.get("legacy_rule_id"),
         rule_key=str(intent.metadata.get("rule_key") or "default"),
@@ -357,7 +409,7 @@ def _to_legacy_intent(intent: OrderIntent) -> LegacyOrderIntent:
         condition_id=intent.condition_id,
         action=intent.outcome.value,
         quantity=intent.quantity,
-        limit_price=intent.desired_price,
+        limit_price=prepared.legacy.limit_price,
         ready=True,
         reason="selected_from_prepared_template",
     )

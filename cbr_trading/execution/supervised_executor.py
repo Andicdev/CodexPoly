@@ -62,6 +62,11 @@ class SupervisedPreparedExecutor:
                 and result.handle is not None
                 and result.orders
                 and isinstance(policy, RepriceOnTickChange)
+                and any(
+                    order.effective_price
+                    != result.handle.desired_price
+                    for order in result.orders
+                )
             ):
                 try:
                     self._supervisor.register(
