@@ -1,5 +1,8 @@
 [CmdletBinding()]
 param(
+    [Parameter()]
+    [string]$StdinSqlFile,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemoteCommand
 )
@@ -16,6 +19,20 @@ if (-not (Test-Path -LiteralPath $sshExecutable -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $identityFile -PathType Leaf)) {
     throw "CodexPoly deployment identity is not installed."
 }
+if ($StdinSqlFile) {
+    $resolvedSqlFile = (
+        Resolve-Path -LiteralPath $StdinSqlFile -ErrorAction Stop
+    ).Path
+    if (
+        -not (Test-Path -LiteralPath $resolvedSqlFile -PathType Leaf) -or
+        [IO.Path]::GetExtension($resolvedSqlFile) -ne ".sql"
+    ) {
+        throw "StdinSqlFile must be an existing .sql file."
+    }
+    if ($RemoteCommand.Count -eq 0) {
+        throw "A remote migration runner command is required."
+    }
+}
 
 $sshArguments = @(
     "-i", $identityFile,
@@ -30,5 +47,10 @@ if ($RemoteCommand.Count -gt 0) {
     $sshArguments += $RemoteCommand
 }
 
-& $sshExecutable @sshArguments
+if ($StdinSqlFile) {
+    Get-Content -LiteralPath $resolvedSqlFile -Raw |
+        & $sshExecutable @sshArguments
+} else {
+    & $sshExecutable @sshArguments
+}
 exit $LASTEXITCODE

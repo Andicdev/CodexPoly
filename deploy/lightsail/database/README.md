@@ -52,6 +52,19 @@ environments through fixed stdin-only commands:
 sudo /usr/local/sbin/codexpoly-production-migrate < migration.sql
 ```
 
+From the local CodexPoly workspace, use the SSH helper's SQL-only stdin mode:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/codexpoly_ssh.ps1 `
+  -StdinSqlFile cbr_trading/migrations/001_add_order_supervision_tables.sql `
+  /opt/codexpoly/config/codexpoly-staging-migrate
+```
+
+`-StdinSqlFile` accepts only an existing `.sql` file and requires an explicit
+remote command. It cannot be used to upload environment files, private keys,
+or arbitrary release artifacts.
+
 The production sudo rule permits only the second wrapper. It does not grant an
 interactive root shell, arbitrary sudo commands, the system Docker socket, or
 the database administrator password. Both wrappers execute SQL as
