@@ -1,0 +1,31 @@
+services:
+  resolution-worker:
+    environment:
+      RESOLUTION_ORCHESTRATOR_MODE: "${RESOLUTION_ORCHESTRATOR_MODE:-preflight}"
+      RESOLUTION_SUPERVISION_ENABLED: "${RESOLUTION_SUPERVISION_ENABLED:-0}"
+      RESOLUTION_SUPERVISION_WATCH_REFRESH_SEC: "5"
+      RESOLUTION_SUPERVISION_RECONCILE_SEC: "5"
+      RESOLUTION_SUPERVISION_STALE_SEC: "30"
+      RESOLUTION_SUPERVISION_BATCH_SIZE: "100"
+      TRADING_ACCOUNT_SOURCE: single_secret
+      TRADING_ACCOUNT_NAME: abccbaq
+      TRADING_ACCOUNT_WALLET_ADDRESS: "${TRADING_ACCOUNT_WALLET_ADDRESS:?set the abccbaq proxy wallet}"
+      TRADING_ACCOUNT_VENUE: polymarket_clob
+      TRADING_ACCOUNT_SIGNATURE_TYPE: "2"
+      ACCOUNTS_MASTER_KEY_FILE: /run/secrets/ACCOUNTS_MASTER_KEY
+      TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_FILE: /run/secrets/TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
+      CBR_LIVE_TRADING_ENABLED: "${CBR_LIVE_TRADING_ENABLED:-0}"
+      CBR_LIVE_ALLOWED_ACCOUNT: abccbaq
+      CBR_LIVE_MAX_ORDER_QTY: "${CBR_LIVE_MAX_ORDER_QTY:?set the live quantity cap}"
+      CBR_LIVE_MAX_NOTIONAL: "${CBR_LIVE_MAX_NOTIONAL:?set the per-order notional cap}"
+      CBR_LIVE_MAX_TOTAL_NOTIONAL: "${CBR_LIVE_MAX_TOTAL_NOTIONAL:?set the aggregate notional cap}"
+      CBR_LIVE_POST_ONLY: "${CBR_LIVE_POST_ONLY:-0}"
+    secrets:
+      - accounts_master_key
+      - encrypted_private_key
+
+secrets:
+  accounts_master_key:
+    file: /opt/codexpoly/secrets/prod/ACCOUNTS_MASTER_KEY
+  encrypted_private_key:
+    file: /opt/codexpoly/secrets/prod/TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED

@@ -4,6 +4,7 @@ import requests
 from common import config
 from decimal import Decimal
 from common.logger import get_logger
+from cbr_trading.secret_guard import redact_exception
 logger = get_logger(__name__)
 # from typing import List, Dict, Any, Optional
 import re
@@ -75,9 +76,17 @@ def _tg_send_sync(*, token: str, chat_id: str | int, text: str, parse_mode: str 
                 raise
             last_err = e
             backoff = 1.5 * attempt
-            logger.warning("telegram api error: %s (attempt %s/3) -> sleep %.2fs", str(e)[:240], attempt, backoff)
+            logger.warning(
+                "telegram api error: %s (attempt %s/3) -> sleep %.2fs",
+                redact_exception(e),
+                attempt,
+                backoff,
+            )
             time.sleep(backoff)
-    raise RuntimeError(f"Telegram send failed after retries: {last_err}")
+    raise RuntimeError(
+        "Telegram send failed after retries: "
+        f"{redact_exception(last_err or RuntimeError())}"
+    )
 
 async def _tg_send(*, token: str, chat_id: str | int, text: str, parse_mode: str | None) -> dict:
     return await asyncio.to_thread(_tg_send_sync, token=token, chat_id=chat_id, text=text, parse_mode=parse_mode)
@@ -149,21 +158,20 @@ async def _notify_send_failure_to_errors(
 
         msg = "\n".join([
             "🚨 Telegram send failed",
-            f"• target_chat: {original_chat_id}",
+            "• target_chat: configured",
             f"• parse_mode: {parse_mode}",
-            f"• error: {type(error).__name__}: {error}",
-            f"• text_len: {len(str(text or ''))}",
-            "",
-            "— preview —",
-            _safe_preview(text),
+            f"• error: {redact_exception(error)}",
         ])
         # IMPORTANT: send without parse_mode to avoid new parse errors
         await _tg_send(token=token, chat_id=str(err_chat), text=msg, parse_mode=None)
 
-        logger.info("📬 Error notification sent: chat_id=%s", err_chat)
+        logger.info("📬 Error notification sent")
     except Exception as e2:
         # do not recurse
-        logger.warning("send_failure_notify: could not send to ERRORS_CHANNEL_ID: %s", e2)
+        logger.warning(
+            "send_failure_notify: could not send to ERRORS_CHANNEL_ID: %s",
+            redact_exception(e2),
+        )
 
 
 async def handle_order_update(order: dict, changes: list[str]):
@@ -217,8 +225,7 @@ async def send_telegram_message(
         logger.error("⚠️ TG_BOT_TOKEN или CHANNEL_ID не заданы")
         return
     
-    logger.info(f"📨 Отправка сообщения в Telegram: {text[:40]}...")
-    logger.debug(f"TOKEN={token[:6]}..., CHAT_ID={channel_id}")
+    logger.info("📨 Отправка сообщения в Telegram")
     
     for attempt in range(3):
         try:
@@ -227,7 +234,11 @@ async def send_telegram_message(
             logger.info("📬 Уведомление отправлено в канал")
             return
         except Exception as e:
-            logger.warning(f"⚠️ Попытка {attempt+1}: Ошибка Telegram: {e}")
+            logger.warning(
+                "⚠️ Попытка %s: Ошибка Telegram: %s",
+                attempt + 1,
+                redact_exception(e),
+            )
             await asyncio.sleep(4 * (attempt + 1))
 
 async def send_message_in_user_channel(
@@ -241,8 +252,7 @@ async def send_message_in_user_channel(
         logger.error("⚠️ TG_BOT_TOKEN или USER_CHANNEL_ID не заданы")
         return
 
-    logger.info(f"📨 Отправка уведомления в пользовательский канал: {text[:40]}...")
-    logger.debug(f"TOKEN={token[:6]}..., CHAT_ID={user_channel_id}")
+    logger.info("📨 Отправка уведомления в пользовательский канал")
 
 
     for attempt in range(3):
@@ -252,7 +262,11 @@ async def send_message_in_user_channel(
             logger.info("📬 Сообщение отправлено в пользовательский канал")
             return
         except Exception as e:
-            logger.warning(f"⚠️ Попытка {attempt+1}: Ошибка Telegram: {e}")
+            logger.warning(
+                "⚠️ Попытка %s: Ошибка Telegram: %s",
+                attempt + 1,
+                redact_exception(e),
+            )
             await asyncio.sleep(4 * (attempt + 1))
 
 # --------- безопасная отправка с разбиением и подробным логом ----------
@@ -307,11 +321,7 @@ async def send_message_safe(
         msg = chunk if total == 1 else f"({idx}/{total})\n{chunk}"
         # Лог — из этого модуля (никаких «public_users» в имени логгера)
         logger.info(
-            "telegram-send ctx: user=%s wallet=%s chat=%s len=%s part=%s/%s",
-            user_name,
-            (wallet[:12] + "…") if wallet else None,
-            chat_id,
-            len(msg),
+            "telegram-send part=%s/%s",
             idx,
             total,
         )
@@ -330,7 +340,7 @@ async def send_strategy_notification(text: str):
         logger.error("⚠️ TG_BOT_TOKEN или STRATEGY_CHANNEL_ID не заданы")
         return
 
-    logger.info(f"📨 Уведомление в стратегический канал: {text[:40]}...")
+    logger.info("📨 Уведомление в стратегический канал")
 
     for attempt in range(3):
         try:
@@ -338,7 +348,11 @@ async def send_strategy_notification(text: str):
             logger.info("📬 Стратегическое уведомление отправлено")
             return
         except Exception as e:
-            logger.warning(f"⚠️ Попытка {attempt+1}: Telegram error: {e}")
+            logger.warning(
+                "⚠️ Попытка %s: Telegram error: %s",
+                attempt + 1,
+                redact_exception(e),
+            )
             await asyncio.sleep(4 * (attempt + 1))
 
 def build_strategy_message(
@@ -390,7 +404,7 @@ async def send_message_to_chat(chat_id: str, text: str, parse_mode: str | None =
     for attempt in range(3):
         try:
             await _tg_send(token=token, chat_id=chat_id, text=text, parse_mode=parse_mode)
-            logger.info(f"📬 Сообщение отправлено: chat_id={chat_id}")
+            logger.info("📬 Сообщение отправлено")
             return
         except Exception as e:
             last_exc = e
@@ -399,17 +413,27 @@ async def send_message_to_chat(chat_id: str, text: str, parse_mode: str | None =
                 used_fallback_plain = True
                 try:
                     logger.warning(
-                        "⚠️ Telegram parse error (likely Markdown). Fallback to plain text once. chat_id=%s err=%s",
-                        chat_id, e
+                        "⚠️ Telegram parse error (likely Markdown). "
+                        "Fallback to plain text once. err=%s",
+                        redact_exception(e),
                     )
                     await _tg_send(token=token, chat_id=chat_id, text=text, parse_mode=None)
-                    logger.info("📬 Сообщение отправлено (plain fallback): chat_id=%s", chat_id)
+                    logger.info(
+                        "📬 Сообщение отправлено (plain fallback)"
+                    )
                     return
                 except Exception as e_fb:
                     last_exc = e_fb
-                    logger.warning("⚠️ Plain fallback failed: %s", e_fb)
+                    logger.warning(
+                        "⚠️ Plain fallback failed: %s",
+                        redact_exception(e_fb),
+                    )
 
-            logger.warning(f"⚠️ Попытка {attempt+1}: Ошибка Telegram: {e}")
+            logger.warning(
+                "⚠️ Попытка %s: Ошибка Telegram: %s",
+                attempt + 1,
+                redact_exception(e),
+            )
             await asyncio.sleep(4 * (attempt + 1))
 
     # If we are here — message was NOT sent after retries/fallbacks.
@@ -453,7 +477,10 @@ def send_ingest_summary_sync(text: str, *, parse_mode: str | None = "Markdown") 
         else:
             asyncio.run(_run())
     except Exception as e:
-        logger.warning(f"ingest_summary: ошибка отправки: {e}")
+        logger.warning(
+            "ingest_summary: ошибка отправки: %s",
+            redact_exception(e),
+        )
 
 def send_message_to_chat_sync(
     *,
@@ -482,7 +509,10 @@ def send_message_to_chat_sync(
         else:
             asyncio.run(_run())
     except Exception as e:
-        logger.warning(f"send_message_to_chat_sync: ошибка отправки: {e}")
+        logger.warning(
+            "send_message_to_chat_sync: ошибка отправки: %s",
+            redact_exception(e),
+        )
 
 def send_error_notification_sync(
     text: str,
@@ -520,4 +550,7 @@ def send_error_notification_sync(
         else:
             asyncio.run(_run())
     except Exception as e:
-        logger.warning(f"send_error_notification_sync: ошибка отправки: {e}")
+        logger.warning(
+            "send_error_notification_sync: ошибка отправки: %s",
+            redact_exception(e),
+        )

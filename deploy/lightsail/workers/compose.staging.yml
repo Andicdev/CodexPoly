@@ -1,0 +1,102 @@
+name: codexpoly-staging-workers
+
+services:
+  earnings-worker:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command: ["python", "-u", "-m", "cbr_trading.earnings"]
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      EARNINGS_WORKER_MODE: shadow
+      EARNINGS_HTTP_USER_AGENT: "${EARNINGS_HTTP_USER_AGENT:?set an approved SEC user agent}"
+      EARNINGS_FETCH_TIMEOUT_SEC: "15"
+      EARNINGS_MAX_DOCUMENT_BYTES: "8388608"
+      EARNINGS_FETCH_ATTEMPTS: "3"
+      EARNINGS_FETCH_RETRY_SEC: "0.5"
+      EARNINGS_RECONNECT_INITIAL_SEC: "1"
+      EARNINGS_RECONNECT_MAX_SEC: "30"
+      EARNINGS_NO_RULES_RETRY_SEC: "30"
+      EARNINGS_HEARTBEAT_SEC: "60"
+      SEC_API_KEY_FILE: /run/secrets/SEC_API_KEY
+    secrets:
+      - database_app_password
+      - sec_api_key
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 150
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.50
+    stop_grace_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  resolution-worker:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command: ["python", "-u", "-m", "cbr_trading.resolution_hosted"]
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      RESOLUTION_ORCHESTRATOR_MODE: shadow
+      RESOLUTION_ORCHESTRATOR_POLL_SEC: "0.25"
+      RESOLUTION_ORCHESTRATOR_HEARTBEAT_SEC: "30"
+      RESOLUTION_ORCHESTRATOR_NO_PROFILES_SEC: "30"
+      RESOLUTION_SUPERVISION_ENABLED: "0"
+    secrets:
+      - database_app_password
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 384m
+    mem_reservation: 192m
+    cpus: 0.75
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  backend:
+    name: codexpoly-staging-backend
+    external: true
+
+secrets:
+  database_app_password:
+    file: /home/codexdeploy/.config/codexpoly/secrets/staging/DATABASE_APP_PASSWORD
+  sec_api_key:
+    file: /home/codexdeploy/.config/codexpoly/secrets/staging/SEC_API_KEY

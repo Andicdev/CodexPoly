@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Mapping
 
+from cbr_trading.runtime_secrets import read_runtime_secret
+
 from cbr_trading.client import CbrClientConfig
 from cbr_trading.db_config import resolve_database_selection
 from cbr_trading.release import DEFAULT_RELEASE_TIME_SUFFIX
@@ -174,10 +176,22 @@ class CbrSettings:
                 default=False,
             ),
             telegram_bot_token=(
-                _clean(env.get("TG_BOT_TOKEN")) or None
+                _clean(
+                    read_runtime_secret(
+                        "TG_BOT_TOKEN",
+                        environ=env,
+                    )
+                )
+                or None
             ),
             telegram_chat_id=(
-                _clean(env.get("TELEGRAM_INGEST_CHAT_ID")) or None
+                _clean(
+                    read_runtime_secret(
+                        "TELEGRAM_INGEST_CHAT_ID",
+                        environ=env,
+                    )
+                )
+                or None
             ),
             telegram_timeout=float(
                 _clean(env.get("TG_HTTP_TIMEOUT")) or "10"

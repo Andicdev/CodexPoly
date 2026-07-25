@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from cbr_trading.db_config import resolve_database_selection
+from cbr_trading.runtime_secrets import read_runtime_secret
 
 
 @dataclass(frozen=True)
@@ -46,9 +47,18 @@ class EarningsWorkerSettings:
             database_error=database.error,
             sec_api_key=(
                 _clean(
-                    env.get("SEC_API_KEY")
-                    or env.get("SEC_API_IO_KEY")
-                    or env.get("SEC_API_STREAM_KEY")
+                    read_runtime_secret(
+                        "SEC_API_KEY",
+                        environ=env,
+                    )
+                    or read_runtime_secret(
+                        "SEC_API_IO_KEY",
+                        environ=env,
+                    )
+                    or read_runtime_secret(
+                        "SEC_API_STREAM_KEY",
+                        environ=env,
+                    )
                 )
                 or None
             ),

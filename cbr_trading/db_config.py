@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from typing import Mapping
+from urllib.parse import quote
+
+from cbr_trading.runtime_secrets import read_runtime_secret
 
 
 _VALID_ROLES = {"primary", "analytics"}
@@ -45,7 +48,9 @@ def resolve_database_selection(
         )
     )
     for name in direct_names:
-        direct_url = _clean(env.get(name))
+        direct_url = _clean(
+            read_runtime_secret(name, environ=env)
+        )
         if direct_url:
             return DatabaseSelection(
                 role=normalized_role,
@@ -99,7 +104,21 @@ def resolve_database_selection(
         )
 
     source = url_names[target]
-    url = _clean(env.get(source)) or None
+    url = _clean(
+        read_runtime_secret(source, environ=env)
+    ) or None
+    if url is None and target == "server_int":
+        component_url = build_internal_database_url(
+            normalized_role,
+            env,
+        )
+        if component_url:
+            url = component_url
+            source = (
+                "DATABASE_APP_PASSWORD"
+                if normalized_role == "primary"
+                else "ANALYTICS_DATABASE_PASSWORD"
+            )
     error = None
     if url is None:
         error = (
@@ -119,7 +138,12 @@ def resolve_admin_database_selection(
     environ: Mapping[str, str] | None = None,
 ) -> DatabaseSelection:
     env = environ if environ is not None else os.environ
-    admin_url = _clean(env.get("CBR_ADMIN_DATABASE_URL"))
+    admin_url = _clean(
+        read_runtime_secret(
+            "CBR_ADMIN_DATABASE_URL",
+            environ=env,
+        )
+    )
     if admin_url:
         return DatabaseSelection(
             role="primary",
@@ -127,7 +151,95 @@ def resolve_admin_database_selection(
             source="CBR_ADMIN_DATABASE_URL",
             url=admin_url,
         )
+    internal_admin_url = _build_database_url(
+        env,
+        password_name="POSTGRES_PASSWORD",
+        host_name="DATABASE_HOST",
+        port_name="DATABASE_PORT",
+        database_name="DATABASE_NAME",
+        user_name="POSTGRES_USER",
+        default_host="postgres",
+        default_database="codexpoly",
+        default_user="codexpoly_admin",
+    )
+    if internal_admin_url:
+        return DatabaseSelection(
+            role="primary",
+            target="admin_internal",
+            source="POSTGRES_PASSWORD",
+            url=internal_admin_url,
+        )
     return resolve_database_selection("primary", env)
+
+
+def build_internal_database_url(
+    role: str,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    env = environ if environ is not None else os.environ
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role == "primary":
+        return _build_database_url(
+            env,
+            password_name="DATABASE_APP_PASSWORD",
+            host_name="DATABASE_HOST",
+            port_name="DATABASE_PORT",
+            database_name="DATABASE_NAME",
+            user_name="DATABASE_USER",
+            default_host="postgres",
+            default_database="codexpoly",
+            default_user="codexpoly_app",
+        )
+    if normalized_role == "analytics":
+        return _build_database_url(
+            env,
+            password_name="ANALYTICS_DATABASE_PASSWORD",
+            host_name="ANALYTICS_DATABASE_HOST",
+            port_name="ANALYTICS_DATABASE_PORT",
+            database_name="ANALYTICS_DATABASE_NAME",
+            user_name="ANALYTICS_DATABASE_USER",
+            default_host="analytics-postgres",
+            default_database="codexpoly_analytics",
+            default_user="codexpoly_analytics",
+        )
+    raise ValueError(f"Unknown database role: {normalized_role!r}")
+
+
+def _build_database_url(
+    env: Mapping[str, str],
+    *,
+    password_name: str,
+    host_name: str,
+    port_name: str,
+    database_name: str,
+    user_name: str,
+    default_host: str,
+    default_database: str,
+    default_user: str,
+) -> str | None:
+    password = read_runtime_secret(password_name, environ=env)
+    if password is None:
+        return None
+
+    host = _clean(env.get(host_name)) or default_host
+    port_text = _clean(env.get(port_name)) or "5432"
+    database = _clean(env.get(database_name)) or default_database
+    user = _clean(env.get(user_name)) or default_user
+    if not host.replace(".", "").replace("-", "").isalnum():
+        raise ValueError(f"{host_name} contains unsupported characters")
+    try:
+        port = int(port_text)
+    except ValueError:
+        raise ValueError(f"{port_name} must be an integer") from None
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{port_name} must be between 1 and 65535")
+    if not str(password):
+        return None
+    return (
+        f"postgresql://{quote(user, safe='')}:"
+        f"{quote(str(password), safe='')}@"
+        f"{host}:{port}/{quote(database, safe='')}"
+    )
 
 
 def _resolve_on_render(env: Mapping[str, str]) -> bool:

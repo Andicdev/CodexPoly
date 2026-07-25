@@ -126,6 +126,46 @@ class DatabaseSelectionTests(unittest.TestCase):
         self.assertEqual(fallback.source, "DATABASE_URL_SERVER_EXT")
         self.assertEqual(fallback.url, "postgresql://external")
 
+    def test_internal_url_is_built_from_one_password_secret(self) -> None:
+        selection = resolve_database_selection(
+            "primary",
+            {
+                "PRIMARY_DB_TARGET": "server_int",
+                "DATABASE_HOST": "postgres",
+                "DATABASE_PORT": "5432",
+                "DATABASE_NAME": "codexpoly",
+                "DATABASE_USER": "codexpoly_app",
+                "DATABASE_APP_PASSWORD": "p@ss/word",
+            },
+        )
+
+        self.assertEqual(selection.target, "server_int")
+        self.assertEqual(selection.source, "DATABASE_APP_PASSWORD")
+        self.assertEqual(
+            selection.url,
+            "postgresql://codexpoly_app:p%40ss%2Fword"
+            "@postgres:5432/codexpoly",
+        )
+        self.assertNotIn("p@ss/word", repr(selection))
+
+    def test_admin_internal_url_uses_postgres_password_only(self) -> None:
+        selection = resolve_admin_database_selection(
+            {
+                "DATABASE_HOST": "postgres",
+                "DATABASE_NAME": "codexpoly",
+                "POSTGRES_USER": "codexpoly_admin",
+                "POSTGRES_PASSWORD": "admin-password",
+            }
+        )
+
+        self.assertEqual(selection.target, "admin_internal")
+        self.assertEqual(selection.source, "POSTGRES_PASSWORD")
+        self.assertEqual(
+            selection.url,
+            "postgresql://codexpoly_admin:admin-password"
+            "@postgres:5432/codexpoly",
+        )
+
     def test_secrets_are_hidden_from_repr(self) -> None:
         selection = resolve_database_selection(
             "primary",

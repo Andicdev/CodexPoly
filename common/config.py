@@ -4,16 +4,27 @@ import os
 from dotenv import load_dotenv
 from typing import Set
 
+from cbr_trading.db_config import build_internal_database_url
+from cbr_trading.runtime_secrets import read_runtime_secret
+
 # Загружаем переменные из .env (только один раз в проекте)
 load_dotenv()
 
+
+def _secret(name: str, default: str | None = None) -> str | None:
+    value = read_runtime_secret(name, environ=os.environ)
+    return default if value is None else value
+
 # ── PRIMARY (прод) ──────────────────────────────────────────────────────────────
-DATABASE_URL_LOCAL = os.getenv("DATABASE_URL_LOCAL")
-DATABASE_URL_SERVER_INT = os.getenv("DATABASE_URL_SERVER_INT")
-DATABASE_URL_SERVER_EXT = os.getenv("DATABASE_URL_SERVER_EXT")
+DATABASE_URL_LOCAL = _secret("DATABASE_URL_LOCAL")
+DATABASE_URL_SERVER_INT = (
+    _secret("DATABASE_URL_SERVER_INT")
+    or build_internal_database_url("primary", os.environ)
+)
+DATABASE_URL_SERVER_EXT = _secret("DATABASE_URL_SERVER_EXT")
 
 
-POLYGONSCAN_API_KEY = os.getenv("POLYGONSCAN_API_KEY")
+POLYGONSCAN_API_KEY = _secret("POLYGONSCAN_API_KEY")
 
 # ── Polygon RPC providers: Infura / Alchemy / custom ─────────────────────────
 # Идея:
@@ -26,9 +37,9 @@ POLYGONSCAN_API_KEY = os.getenv("POLYGONSCAN_API_KEY")
 #   ALCHEMY_API_KEY=...
 # или полный URL:
 #   ALCHEMY_POLYGON_RPC_URL=https://polygon-mainnet.g.alchemy.com/v2/...
-ALCHEMY_API_KEY = (os.getenv("ALCHEMY_API_KEY") or "").strip()
+ALCHEMY_API_KEY = (_secret("ALCHEMY_API_KEY") or "").strip()
 ALCHEMY_POLYGON_RPC_URL = (
-    (os.getenv("ALCHEMY_POLYGON_RPC_URL") or "").strip()
+    (_secret("ALCHEMY_POLYGON_RPC_URL") or "").strip()
     or (
         f"https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
         if ALCHEMY_API_KEY
@@ -42,23 +53,27 @@ ALCHEMY_POLYGON_RPC_URL = (
 # или полный URL:
 #   INFURA_POLYGON_RPC_URL=https://polygon-mainnet.infura.io/v3/...
 INFURA_PROJECT_ID = (
-    os.getenv("INFURA_PROJECT_ID")
-    or os.getenv("INFURA_API_KEY")
-    or os.getenv("INFURA_KEY")
+    _secret("INFURA_PROJECT_ID")
+    or _secret("INFURA_API_KEY")
+    or _secret("INFURA_KEY")
     or ""
 ).strip()
 INFURA_POLYGON_NETWORK = (
     os.getenv("INFURA_POLYGON_NETWORK", "polygon-mainnet") or "polygon-mainnet"
 ).strip()
 
-INFURA_POLYGON_RPC_URL = (os.getenv("INFURA_POLYGON_RPC_URL") or "").strip()
+INFURA_POLYGON_RPC_URL = (
+    _secret("INFURA_POLYGON_RPC_URL") or ""
+).strip()
 if not INFURA_POLYGON_RPC_URL and INFURA_PROJECT_ID:
     INFURA_POLYGON_RPC_URL = (
         f"https://{INFURA_POLYGON_NETWORK}.infura.io/v3/{INFURA_PROJECT_ID}"
     )
 
 # Custom/direct URL, если нужен третий провайдер или ручной endpoint.
-CUSTOM_POLYGON_RPC_URL = (os.getenv("POLYGON_RPC_URL") or "").strip()
+CUSTOM_POLYGON_RPC_URL = (
+    _secret("POLYGON_RPC_URL") or ""
+).strip()
 
 # Флаги выбора провайдера:
 #   POLYGON_RPC_PROVIDER=infura|alchemy|custom
@@ -137,7 +152,7 @@ POLYGON_RPC_URL = _resolve_polygon_rpc_url(
 # POLYGON_RPC_URL_TRADES, поэтому ключ Infura можно оставить в env.
 POLYGON_RPC_URL_TRADES = _resolve_polygon_rpc_url(
     provider=POLYGON_RPC_PROVIDER_TRADES or POLYGON_RPC_PROVIDER,
-    direct_url=(os.getenv("POLYGON_RPC_URL_TRADES") or "").strip(),
+    direct_url=(_secret("POLYGON_RPC_URL_TRADES") or "").strip(),
     fallback_url=POLYGON_RPC_URL,
 )
 
@@ -145,8 +160,8 @@ POLYGON_RPC_URL_TRADES = _resolve_polygon_rpc_url(
 POLYGON_RPC_URL_BALANCE = _resolve_polygon_rpc_url(
     provider=POLYGON_RPC_PROVIDER_BALANCE or POLYGON_RPC_PROVIDER,
     direct_url=(
-        (os.getenv("POLYGON_RPC_URL_BALANCE") or "").strip()
-        or (os.getenv("POLYGON_RPC_URL_BALANCES") or "").strip()
+        (_secret("POLYGON_RPC_URL_BALANCE") or "").strip()
+        or (_secret("POLYGON_RPC_URL_BALANCES") or "").strip()
     ),
     fallback_url=POLYGON_RPC_URL,
 )
@@ -173,13 +188,16 @@ DATABASES = {
         "server_int": DATABASE_URL_SERVER_INT,
         "server_ext": DATABASE_URL_SERVER_EXT,
         # прямой URL, если хочешь переопределить сразу:
-        "url": os.getenv("DATABASE_URL"),
+        "url": _secret("DATABASE_URL"),
     },
     "analytics": {
-        "local":      os.getenv("ANALYTICS_DATABASE_URL_LOCAL"),
-        "server_int": os.getenv("ANALYTICS_DATABASE_URL_SERVER_INT"),
-        "server_ext": os.getenv("ANALYTICS_DATABASE_URL_SERVER_EXT"),
-        "url":        os.getenv("ANALYTICS_DATABASE_URL"),
+        "local":      _secret("ANALYTICS_DATABASE_URL_LOCAL"),
+        "server_int": (
+            _secret("ANALYTICS_DATABASE_URL_SERVER_INT")
+            or build_internal_database_url("analytics", os.environ)
+        ),
+        "server_ext": _secret("ANALYTICS_DATABASE_URL_SERVER_EXT"),
+        "url":        _secret("ANALYTICS_DATABASE_URL"),
     },
 }
 
@@ -200,23 +218,23 @@ def resolve_db_url(role: str):
 
 
 # Polymarket API
-POLYMARKET_API_KEY = os.getenv("POLYMARKET_API_KEY")
-POLYMARKET_API_SECRET = os.getenv("POLYMARKET_API_SECRET")
-POLYMARKET_API_PASSPHRASE = os.getenv("POLYMARKET_API_PASSPHRASE")
-POLYMARKET_ADDRESS1 = os.getenv("POLYMARKET_ADDRESS1")  
-PK = os.getenv("PK")
+POLYMARKET_API_KEY = _secret("POLYMARKET_API_KEY")
+POLYMARKET_API_SECRET = _secret("POLYMARKET_API_SECRET")
+POLYMARKET_API_PASSPHRASE = _secret("POLYMARKET_API_PASSPHRASE")
+POLYMARKET_ADDRESS1 = _secret("POLYMARKET_ADDRESS1")
+PK = _secret("PK")
 
 # Trading accounts (encrypt api secrets stored in DB)
 # Generate once:
 #   python -m scripts.generate_accounts_master_key
 # Store in .env / host secrets as ACCOUNTS_MASTER_KEY (DO NOT commit)
-ACCOUNTS_MASTER_KEY = os.getenv("ACCOUNTS_MASTER_KEY")
+ACCOUNTS_MASTER_KEY = _secret("ACCOUNTS_MASTER_KEY")
 
 # Telegram
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-User_CHANNEL_ID = os.getenv("USER_CHANNEL_ID")
-STRATEGY_CHANNEL_ID = os.getenv("STRATEGY_CHANNEL_ID")
+TG_BOT_TOKEN = _secret("TG_BOT_TOKEN")
+CHANNEL_ID = _secret("CHANNEL_ID")
+User_CHANNEL_ID = _secret("USER_CHANNEL_ID")
+STRATEGY_CHANNEL_ID = _secret("STRATEGY_CHANNEL_ID")
 
 # ── Telegram commands security (for telegram_commands_worker) ─────────────────
 def _parse_csv_ints(raw: str | None) -> set[int]:
@@ -238,33 +256,56 @@ def _parse_csv_strs(raw: str | None) -> set[str]:
         return set()
     return {p.strip().lstrip("@").lower() for p in raw.split(",") if p.strip()}
 
-TG_COMMANDS_ALLOWED_CHAT_IDS: set[int] = _parse_csv_ints(os.getenv("TG_COMMANDS_ALLOWED_CHAT_IDS", "").strip())
-TG_COMMANDS_ADMIN_USER_IDS: set[int] = _parse_csv_ints(os.getenv("TG_COMMANDS_ADMIN_USER_IDS", "").strip())
-TG_COMMANDS_ADMIN_USERNAMES: set[str] = _parse_csv_strs(os.getenv("TG_COMMANDS_ADMIN_USERNAMES", "akistenev").strip())
+TG_COMMANDS_ALLOWED_CHAT_IDS: set[int] = _parse_csv_ints(
+    (_secret("TG_COMMANDS_ALLOWED_CHAT_IDS", "") or "").strip()
+)
+TG_COMMANDS_ADMIN_USER_IDS: set[int] = _parse_csv_ints(
+    (_secret("TG_COMMANDS_ADMIN_USER_IDS", "") or "").strip()
+)
+TG_COMMANDS_ADMIN_USERNAMES: set[str] = _parse_csv_strs(
+    (_secret("TG_COMMANDS_ADMIN_USERNAMES", "akistenev") or "").strip()
+)
 
 # QuietBuyer channels
 # If QUIETBUYER_CHANNEL_ID is not set, strategy may fall back to instance.params["notify_chat"]
 # or other strategy defaults.
-QUIETBUYER_CHANNEL_ID = os.getenv("QUIETBUYER_CHANNEL_ID")
+QUIETBUYER_CHANNEL_ID = _secret("QUIETBUYER_CHANNEL_ID")
 # Separate channel for JUST_NOTIFY triggers (optional). ms volume default chanel
-QUIETBUYER_JUSTNOTIFY_CHANNEL_ID = os.getenv("QUIETBUYER_JUSTNOTIFY_CHANNEL_ID", "-1003654384503") 
+QUIETBUYER_JUSTNOTIFY_CHANNEL_ID = _secret(
+    "QUIETBUYER_JUSTNOTIFY_CHANNEL_ID",
+    "-1003654384503",
+)
 
 # Отдельный канал под уведомления SkyBuyer
 # по умолчанию используем твой текущий id -1003367251004
-SKYBUYER_CHANNEL_ID = os.getenv("SKYBUYER_CHANNEL_ID", "-1003367251004")
-MARKET_ALERTS_CHANNEL_ID = os.getenv("MARKET_ALERTS_CHANNEL_ID")
-BINANCE_PRICE_ALERTS_CHANNEL_ID = os.getenv("BINANCE_PRICE_ALERTS_CHANNEL_ID")
-EVENT_ALERTS_CHANNEL_ID = os.getenv("EVENT_ALERTS_CHANNEL_ID", "-1002881599821")
+SKYBUYER_CHANNEL_ID = _secret(
+    "SKYBUYER_CHANNEL_ID",
+    "-1003367251004",
+)
+MARKET_ALERTS_CHANNEL_ID = _secret("MARKET_ALERTS_CHANNEL_ID")
+BINANCE_PRICE_ALERTS_CHANNEL_ID = _secret(
+    "BINANCE_PRICE_ALERTS_CHANNEL_ID"
+)
+EVENT_ALERTS_CHANNEL_ID = _secret(
+    "EVENT_ALERTS_CHANNEL_ID",
+    "-1002881599821",
+)
 # Отдельный канал для ошибок воркеров/агентов
 # по умолчанию используем твой канал "My errors"
-ERRORS_CHANNEL_ID = os.getenv("ERRORS_CHANNEL_ID", "-1003429125459")
+ERRORS_CHANNEL_ID = _secret(
+    "ERRORS_CHANNEL_ID",
+    "-1003429125459",
+)
 
 # ── Microstrategy keyword alerts ─────────────────────────────────────────────
 MICROSTRATEGY_ALERTS_ENABLED = os.getenv("MICROSTRATEGY_ALERTS_ENABLED", "true").lower() == "true"
 MICROSTRATEGY_ALERTS_PERIOD_SEC = int(os.getenv("MICROSTRATEGY_ALERTS_PERIOD_SEC", "300"))
 MICROSTRATEGY_ALERTS_KEYWORD = os.getenv("MICROSTRATEGY_ALERTS_KEYWORD", "microstrategy")
 # Если не задан — таск будет fallback'иться в MARKET_ALERTS_CHANNEL_ID / CHANNEL_ID / STRATEGY_CHANNEL_ID
-MICROSTRATEGY_ALERTS_CHANNEL_ID = os.getenv("MICROSTRATEGY_ALERTS_CHANNEL_ID", "-1003322427842")
+MICROSTRATEGY_ALERTS_CHANNEL_ID = _secret(
+    "MICROSTRATEGY_ALERTS_CHANNEL_ID",
+    "-1003322427842",
+)
 MICROSTRATEGY_ALERTS_LOOKBACK_HOURS = int(os.getenv("MICROSTRATEGY_ALERTS_LOOKBACK_HOURS", "48"))
 MICROSTRATEGY_ALERTS_LIMIT = int(os.getenv("MICROSTRATEGY_ALERTS_LIMIT", "50"))
 
@@ -304,7 +345,9 @@ TRADES_TAIL_ADAPT_MAX_SEC = float(os.getenv("TRADES_TAIL_ADAPT_MAX_SEC", "10.0")
 # Почасовая сводка загрузки (в телеграм)
 INGEST_SUMMARY_ENABLED = os.getenv("INGEST_SUMMARY_ENABLED", "true").lower() == "true"
 INGEST_SUMMARY_PERIOD_MIN = int(os.getenv("INGEST_SUMMARY_PERIOD_MIN", "60"))
-TELEGRAM_INGEST_CHAT_ID = os.getenv("TELEGRAM_INGEST_CHAT_ID")  # опционально
+TELEGRAM_INGEST_CHAT_ID = _secret(
+    "TELEGRAM_INGEST_CHAT_ID"
+)  # опционально
 
 # cleanup
 INGEST_CLEAN_ENABLED = os.getenv("INGEST_CLEAN_ENABLED", "true").lower() == "true"
@@ -428,7 +471,7 @@ PRIMARY_DB_ALIAS = os.getenv("PRIMARY_DB_ALIAS", "primary")
 # Уведомления в Telegram при появлении новых рынков
 GAMMA_NEW_MARKETS_NOTIFY = os.getenv("GAMMA_NEW_MARKETS_NOTIFY", "true").lower() == "true"
 # Куда слать (если не указать, попробуем MARKET_ALERTS_CHANNEL_ID, потом CHANNEL_ID)
-GAMMA_NEW_MARKETS_CHAT_ID = os.getenv("GAMMA_NEW_MARKETS_CHAT_ID")
+GAMMA_NEW_MARKETS_CHAT_ID = _secret("GAMMA_NEW_MARKETS_CHAT_ID")
 
 # ── Очистка «давно не виденных» рынков ───────────────────────────────────────
 # включить/выключить чистку
