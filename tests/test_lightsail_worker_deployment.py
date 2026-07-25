@@ -72,6 +72,12 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
                 text,
             )
             self.assertIn("target: SEC_API_KEY", text)
+            self.assertEqual(
+                text.count("      - 169.254.169.253"),
+                2,
+            )
+            self.assertNotIn("8.8.8.8", text)
+            self.assertNotIn("1.1.1.1", text)
 
     def test_production_overlay_is_the_only_trading_mount(self) -> None:
         text = (

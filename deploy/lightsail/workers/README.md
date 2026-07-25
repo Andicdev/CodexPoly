@@ -11,6 +11,8 @@ reviewed CodexPoly image:
 
 Neither service publishes a host port. Both join the existing internal
 PostgreSQL network and connect to `postgres:5432` as `codexpoly_app`.
+Both use the AWS link-local resolver `169.254.169.253`; this avoids forwarding
+external lookups from rootless Docker to the host-only systemd-resolved stub.
 `earnings-worker` receives the SEC credential but never receives a trading
 credential. The base `resolution-worker` starts in `shadow` and receives only
 the application database password.

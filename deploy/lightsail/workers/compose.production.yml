@@ -33,6 +33,8 @@ services:
         target: SEC_API_KEY
     networks:
       - backend
+    dns:
+      - 169.254.169.253
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
@@ -75,6 +77,8 @@ services:
         target: DATABASE_APP_PASSWORD
     networks:
       - backend
+    dns:
+      - 169.254.169.253
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
