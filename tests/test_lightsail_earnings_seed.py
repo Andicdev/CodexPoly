@@ -66,6 +66,8 @@ class LightsailEarningsSeedTests(unittest.TestCase):
         self.assertIn("earnings_source_events", text)
         self.assertIn("earnings_fact_candidates", text)
         self.assertIn("resolution_execution_claims", text)
+        self.assertIn("provider_event_id NOT LIKE 'staging-smoke-%'", text)
+        self.assertIn("fact.status <> 'SUPERSEDED'", text)
         self.assertNotIn("INSERT INTO", text)
         self.assertNotIn("UPDATE ", text)
         self.assertNotIn("DELETE FROM", text)

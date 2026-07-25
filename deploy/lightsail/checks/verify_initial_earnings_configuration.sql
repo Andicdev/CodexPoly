@@ -127,13 +127,44 @@ BEGIN
     END IF;
 
     SELECT
-        (SELECT count(*) FROM earnings_source_events)
-        + (SELECT count(*) FROM earnings_fact_candidates)
+        (
+            SELECT count(*)
+            FROM earnings_source_events
+            WHERE provider_event_id NOT LIKE 'staging-smoke-%'
+        )
+        + (
+            SELECT count(*)
+            FROM earnings_fact_candidates AS fact
+            JOIN earnings_source_events AS event
+              ON event.id = fact.source_event_id
+            WHERE event.provider_event_id NOT LIKE 'staging-smoke-%'
+        )
         + (SELECT count(*) FROM resolution_execution_claims)
     INTO runtime_row_count;
 
     IF runtime_row_count <> 0 THEN
         RAISE EXCEPTION 'runtime history was unexpectedly copied';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM resolution_execution_profiles
+        WHERE profile_key LIKE 'staging-smoke-%'
+          AND status <> 'DISABLED'
+    ) OR EXISTS (
+        SELECT 1
+        FROM earnings_market_rules
+        WHERE rule_key LIKE 'staging-smoke-%'
+          AND status <> 'DISABLED'
+    ) OR EXISTS (
+        SELECT 1
+        FROM earnings_fact_candidates AS fact
+        JOIN earnings_source_events AS event
+          ON event.id = fact.source_event_id
+        WHERE event.provider_event_id LIKE 'staging-smoke-%'
+          AND fact.status <> 'SUPERSEDED'
+    ) THEN
+        RAISE EXCEPTION 'staging smoke audit remains active';
     END IF;
 END
 $verify$;
