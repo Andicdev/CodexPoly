@@ -15,6 +15,12 @@ It deliberately has no dependency on a strategy, `OrderIntent`, or
 `PreparedExecutor`. A signal emitted here cannot place an order unless a
 separate later composition explicitly wires it to those layers.
 
+The separate hosted composition lives in
+`cbr_trading.resolution_hosted`. It reads only persisted `VALIDATED` facts,
+builds `ResolutionSignal -> NumericThresholdStrategy -> OrderIntent`, and
+passes the selected intent to the source-neutral executor. The SEC source
+service still has no trading dependency or signing secret.
+
 ## Checked-in company rules
 
 The checked-in rules remain `SHADOW` configurations:
@@ -132,6 +138,55 @@ simulator prepares and pre-signs both market outcomes, then returns one
 The injected fact is kept only in memory: no source event or fact candidate is
 stored. Every run also uses a unique synthetic signal scope, leaving the real
 `earnings:NVTS:2026Q2` idempotency scope untouched for Monday.
+
+## Hosted resolution orchestrator
+
+Migration 005 adds only `resolution_execution_profiles`. Each row contains
+the pre-publication scope, Polymarket condition, account, separate YES/NO
+prices, quantity, lifecycle policy, and a mandatory preparation/expiry
+window. New and updated profiles remain `DISABLED`; an enabled profile outside
+its time window is not loaded.
+
+Apply the migration explicitly:
+
+```text
+python -m scripts.manage_resolution_profiles --apply
+```
+
+Configure each earnings market with operator-selected prices, quantity, and
+time window. Configuration does not enable the profile:
+
+```text
+python -m scripts.manage_resolution_profiles \
+  --configure-earnings NVTS \
+  --account-name <account> \
+  --yes-price <price> \
+  --no-price <price> \
+  --quantity <shares> \
+  --prepare-from <UTC-ISO-8601> \
+  --expires-at <UTC-ISO-8601>
+```
+
+Repeat for `WWD` and `BBBY`. Enable each profile only after its authenticated
+preflight:
+
+```text
+python -m scripts.manage_resolution_profiles \
+  --enable-profile earnings-nvts-2026q2
+```
+
+Run the separate service with:
+
+```text
+python -u -m cbr_trading.resolution_hosted
+```
+
+`RESOLUTION_ORCHESTRATOR_MODE=shadow` is the default and uses a non-submitting
+executor. `preflight` authenticates, checks both market outcomes, verifies
+collateral and caps, and pre-signs without submitting. `live` uses persistent
+resolution claims and requires tick supervision for every
+`reprice_on_tick_change` profile. A profile condition ID must exactly match
+the active source rule before either outcome is prepared.
 
 A controlled live smoke additionally requires every explicit guard, an armed
 live environment, and post-only safety:

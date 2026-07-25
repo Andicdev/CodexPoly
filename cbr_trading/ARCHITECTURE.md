@@ -354,3 +354,39 @@ This preflight does not reuse `CbrWarmPreparedExecutorAdapter`: that adapter
 still validates the CBR source scope, prepares both binary outcomes, and uses
 the legacy CBR execution ledger. Source-neutral idempotency and real
 submission remain a separate checkpoint.
+
+## Persisted-fact hosted composition
+
+The earnings deployment keeps transport and execution in separate services:
+
+```text
+SEC source service
+    -> VALIDATED earnings_fact_candidates
+    -> hosted resolution service
+    -> EarningsResolutionSource
+    -> ResolutionSignal
+    -> NumericThresholdStrategy
+    -> one OrderIntent
+    -> PreparedExecutor
+```
+
+`resolution_execution_profiles` is additive and source-neutral. Each enabled
+row binds one stable resolution scope to an account and condition, defines
+separate YES/NO prices, quantity, lifecycle policy, and a hard preparation
+window. Both templates must prepare successfully before facts are polled. A
+condition mismatch with the earnings source rule fails before authentication
+or execution.
+
+The hosted service defaults to `shadow`, where the complete decision path
+ends at a non-submitting executor. `preflight` authenticates and pre-signs
+both alternatives without creating execution claims. `live` uses
+`PolymarketPreparedExecutor`; a repricing profile additionally requires the
+persistent supervisor and market channel before preparation.
+
+Only `VALIDATED` official facts enter the source. Facts for all scopes are
+loaded in one polling snapshot, then each prepared event coordinator consumes
+only its own scope. The executor posts the selected pre-signed alternative
+before terminal result persistence. The unselected alternative is marked
+`EXPIRED`. If the profile time window closes first, every still-pending claim
+is explicitly expired and that coordinator closes without consuming a late
+fact.

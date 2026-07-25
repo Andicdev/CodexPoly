@@ -190,6 +190,7 @@ def _run(
     *,
     ledger: _Ledger,
     client: _Client,
+    poll: bool = True,
 ):
     strategy = FixedOutcomeStrategy((_rule(),))
     signal = ResolutionSignal(
@@ -226,13 +227,48 @@ def _run(
     preparation = coordinator.prepare()
     outcome = (
         coordinator.poll_once()
-        if preparation.ready
+        if preparation.ready and poll
         else None
     )
     return executor, coordinator, preparation, outcome
 
 
 class PolymarketPreparedExecutorTests(unittest.TestCase):
+    def test_explicit_window_expiry_closes_all_pending_claims(
+        self,
+    ) -> None:
+        ledger = _Ledger()
+        client = _Client()
+        executor, coordinator, preparation, outcome = _run(
+            ledger=ledger,
+            client=client,
+            poll=False,
+        )
+
+        executor.expire_pending()
+        coordinator.close()
+
+        self.assertTrue(preparation.ready)
+        self.assertIsNone(outcome)
+        self.assertEqual(client.posts, [])
+        self.assertEqual(
+            len(ledger.completions),
+            len(executor.details),
+        )
+        self.assertTrue(
+            all(
+                completion["status"] == "EXPIRED"
+                for completion in ledger.completions
+            )
+        )
+        self.assertTrue(
+            all(
+                completion["result"]["reason"]
+                == "preparation_window_expired"
+                for completion in ledger.completions
+            )
+        )
+
     def test_submits_selected_template_and_completes_claim(self) -> None:
         ledger = _Ledger()
         client = _Client()

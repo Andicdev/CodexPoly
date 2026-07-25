@@ -205,3 +205,59 @@ The periodic heartbeat reports only connection state and aggregate counts.
 An accepted document logs its scope, parser status, database row identifiers,
 and public EPS value. It never logs the WebSocket URI, API credential, raw
 document, database URL, or authenticated values.
+
+## Earnings resolution orchestrator service
+
+Deploy the consumer/executor as a third private combined service. Do not put
+`SEC_API_KEY` on this service, and do not attach trading secrets to the
+earnings shadow source service.
+
+- instances: exactly 1;
+- networking: no public ports;
+- command: `python -u -m cbr_trading.resolution_hosted`;
+- schema behavior: readiness checks only; it never applies migration 005;
+- initial mode: `shadow`.
+
+Safe initial values:
+
+```dotenv
+PYTHONUNBUFFERED=1
+LOG_LEVEL=INFO
+CBR_ON_RENDER=0
+RESOLUTION_ORCHESTRATOR_MODE=shadow
+RESOLUTION_ORCHESTRATOR_POLL_SEC=0.25
+RESOLUTION_ORCHESTRATOR_HEARTBEAT_SEC=30
+RESOLUTION_ORCHESTRATOR_NO_PROFILES_SEC=30
+RESOLUTION_SUPERVISION_ENABLED=0
+```
+
+The orchestrator needs the primary database URL. `shadow` mode needs no
+trading key. `preflight` and `live` additionally use the existing restricted
+trading secret group containing `ACCOUNTS_MASTER_KEY`, and the ordinary
+`CBR_LIVE_*` safety settings. Never attach the SEC credential.
+
+The promotion sequence is:
+
+1. apply migration 005 explicitly while the new service is stopped;
+2. configure NVTS, WWD, and BBBY profiles; they remain `DISABLED`;
+3. switch the service to `preflight`, attach the trading secret group, and
+   enable one in-window profile at a time;
+4. verify that two templates per profile are ready;
+5. return profiles to disabled while changing any parameters;
+6. only after explicit approval set `RESOLUTION_ORCHESTRATOR_MODE=live`,
+   `RESOLUTION_SUPERVISION_ENABLED=1`, and the existing live safety guards;
+7. restart once before the preparation window and do not hot-edit an enabled
+   profile.
+
+Healthy startup for three profiles contains only safe aggregate identifiers:
+
+```text
+Hosted resolution ready mode=preflight profiles=3 templates=6
+```
+
+The service loads only enabled profiles whose mandatory preparation/expiry
+window contains the current time. It rejects a profile whose condition ID
+does not exactly match its source rule. In `live`, the existing resolution
+claim ledger prevents a restarted service from claiming the same
+scope/template twice, and the persistent order supervisor monitors both
+explicit tick events and real finer-price levels in the order book.

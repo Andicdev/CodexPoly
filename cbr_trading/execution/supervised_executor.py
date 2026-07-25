@@ -91,6 +91,15 @@ class SupervisedPreparedExecutor:
     def close(self) -> None:
         self._delegate.close()
 
+    def expire_pending(
+        self,
+        *,
+        reason: str = "preparation_window_expired",
+    ) -> None:
+        expire = getattr(self._delegate, "expire_pending", None)
+        if callable(expire):
+            expire(reason=reason)
+
 
 def _registration_error(
     *,

@@ -29,6 +29,11 @@ These tables hold shadow earnings source configuration, normalized document
 metadata, and validated EPS candidates. They do not call a strategy or an
 executor, and migration 004 does not seed an armed trading rule.
 
+`005_add_resolution_execution_profiles.sql` creates only
+`resolution_execution_profiles`. It stores source-neutral YES/NO preparation
+parameters and defaults every profile to `DISABLED`; it does not arm an
+executor or submit an order.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

@@ -472,6 +472,33 @@ class PolymarketPreparedExecutor:
                 redact_exception(first_error)
             ) from None
 
+    def expire_pending(
+        self,
+        *,
+        reason: str = "preparation_window_expired",
+    ) -> None:
+        """Expire every unsubmitted claim after an explicit hard cutoff."""
+
+        if self._execution_started or not self._claims:
+            return
+        self._execution_started = True
+        safe_reason = (
+            redact_sensitive_text(reason, max_length=120)
+            or "preparation_window_expired"
+        )
+        for claim in self._claims.values():
+            try:
+                self._ledger.complete(
+                    claim.claim_id,
+                    status="EXPIRED",
+                    result={
+                        "attempted": False,
+                        "reason": safe_reason,
+                    },
+                )
+            except Exception:
+                pass
+
     def _validate_global_safety(self) -> None:
         blockers: list[str] = []
         if not self._safety.trading_enabled:
