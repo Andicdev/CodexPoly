@@ -33,6 +33,7 @@ services:
         target: SEC_API_KEY
     networks:
       - backend
+      - egress
     dns:
       - 169.254.169.253
     read_only: true
@@ -77,6 +78,7 @@ services:
         target: DATABASE_APP_PASSWORD
     networks:
       - backend
+      - egress
     dns:
       - 169.254.169.253
     read_only: true
@@ -101,6 +103,9 @@ networks:
   backend:
     name: codexpoly-staging-backend
     external: true
+  egress:
+    name: codexpoly-staging-egress
+    driver: bridge
 
 secrets:
   database_app_password:

@@ -76,6 +76,14 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
                 text.count("      - 169.254.169.253"),
                 2,
             )
+            self.assertEqual(
+                text.count("      - egress"),
+                2,
+            )
+            self.assertIn(
+                f"name: {network.replace('-backend', '-egress')}",
+                text,
+            )
             self.assertNotIn("8.8.8.8", text)
             self.assertNotIn("1.1.1.1", text)
 

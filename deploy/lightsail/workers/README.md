@@ -10,9 +10,12 @@ reviewed CodexPoly image:
   `python -u -m cbr_trading.resolution_hosted`.
 
 Neither service publishes a host port. Both join the existing internal
-PostgreSQL network and connect to `postgres:5432` as `codexpoly_app`.
-Both use the AWS link-local resolver `169.254.169.253`; this avoids forwarding
-external lookups from rootless Docker to the host-only systemd-resolved stub.
+PostgreSQL network and connect to `postgres:5432` as `codexpoly_app`. The
+database network remains `internal`; each worker also joins a dedicated bridge
+network used only for outbound traffic. No service publishes a port on either
+network. Both use the AWS link-local resolver `169.254.169.253`; this avoids
+forwarding external lookups from rootless Docker to the host-only
+systemd-resolved stub.
 `earnings-worker` receives the SEC credential but never receives a trading
 credential. The base `resolution-worker` starts in `shadow` and receives only
 the application database password.
