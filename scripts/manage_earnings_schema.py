@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 from cbr_trading.db_config import resolve_database_selection
+from cbr_trading.earnings.parsers import checked_in_shadow_rules
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -47,6 +48,14 @@ def main() -> int:
             "This never enables trading."
         ),
     )
+    parser.add_argument(
+        "--seed-checked-in-shadow",
+        action="store_true",
+        help=(
+            "Insert or update every checked-in SHADOW earnings rule. "
+            "This never enables trading."
+        ),
+    )
     args = parser.parse_args()
     _load_dotenv_if_available()
     database = resolve_database_selection("primary", os.environ)
@@ -75,13 +84,27 @@ def main() -> int:
         if after_migration["schema_exists"]:
             store.ensure_ready()
         seeded_rule_id = None
-        if args.seed_nvts_shadow:
+        seeded_rule_ids: dict[str, int] = {}
+        rules_to_seed = (
+            checked_in_shadow_rules()
+            if args.seed_checked_in_shadow
+            else (
+                (nvts_q2_2026_shadow_rule(),)
+                if args.seed_nvts_shadow
+                else ()
+            )
+        )
+        if rules_to_seed:
             if not after_migration["schema_exists"]:
                 raise RuntimeError(
                     "Earnings schema must exist before seeding"
                 )
-            seeded_rule_id = store.save_shadow_rule(
-                nvts_q2_2026_shadow_rule()
+            for rule in rules_to_seed:
+                seeded_rule_ids[rule.rule_key] = (
+                    store.save_shadow_rule(rule)
+                )
+            seeded_rule_id = seeded_rule_ids.get(
+                nvts_q2_2026_shadow_rule().rule_key
             )
         after = _snapshot(database.url)
     except Exception as exc:
@@ -93,6 +116,9 @@ def main() -> int:
                     "applied": bool(args.apply),
                     "seeded_nvts_shadow": bool(
                         args.seed_nvts_shadow
+                    ),
+                    "seeded_checked_in_shadow": bool(
+                        args.seed_checked_in_shadow
                     ),
                     "error": redact_exception(
                         RuntimeError(
@@ -125,7 +151,11 @@ def main() -> int:
         "target": database.target,
         "applied": bool(args.apply),
         "seeded_nvts_shadow": bool(args.seed_nvts_shadow),
+        "seeded_checked_in_shadow": bool(
+            args.seed_checked_in_shadow
+        ),
         "seeded_rule_id": seeded_rule_id,
+        "seeded_rule_ids": seeded_rule_ids,
         "legacy_unchanged": legacy_unchanged,
         "no_runtime_rows": no_runtime_rows,
         "before": before,

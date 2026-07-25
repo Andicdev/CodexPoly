@@ -85,3 +85,7 @@ before/after checkpoint confirmed:
 - `SqlAlchemyEarningsStore.ensure_ready()` passed;
 - the separately counted legacy schema remained at 58 tables and 815 columns
   before and after migration 004.
+
+Additional company rules use the same additive tables and can be upserted
+without another migration through
+`python -m scripts.manage_earnings_schema --seed-checked-in-shadow`.

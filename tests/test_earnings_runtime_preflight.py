@@ -5,6 +5,7 @@ import io
 import json
 import unittest
 
+from cbr_trading.earnings.parsers import checked_in_shadow_rules
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -88,6 +89,30 @@ class EarningsRuntimePreflightTests(unittest.TestCase):
         self.assertEqual(payload["watch_count"], 1)
         self.assertNotIn("postgresql://configured", stderr.getvalue())
         self.assertTrue(created[0].ready)
+
+    def test_all_checked_in_rules_have_runtime_parsers(self) -> None:
+        stdout = io.StringIO()
+
+        def factory(**kwargs):
+            return _Store(
+                **kwargs,
+                rules=checked_in_shadow_rules(),
+            )
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(
+                environ={
+                    "CBR_DATABASE_URL": "postgresql://configured",
+                    "SEC_API_KEY": "configured",
+                },
+                store_factory=factory,
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["active_rule_count"], 3)
+        self.assertEqual(payload["watch_count"], 3)
+        self.assertEqual(payload["missing_parsers"], [])
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cbr_trading.earnings.hosted_worker import _watches_from_rules
-from cbr_trading.earnings.parsers.navitas import NavitasEpsParser
+from cbr_trading.earnings.parsers import earnings_parser_registry
 from cbr_trading.earnings.repository import SqlAlchemyEarningsStore
 from cbr_trading.earnings.settings import EarningsWorkerSettings
 from cbr_trading.secret_guard import redact_exception
@@ -54,7 +54,7 @@ def main(
         stage = "build_watches"
         watches = _watches_from_rules(rules)
         stage = "check_parsers"
-        configured_parsers = {"NVTS": NavitasEpsParser()}
+        configured_parsers = earnings_parser_registry()
         missing_parsers = sorted(
             {
                 rule.ticker

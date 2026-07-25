@@ -15,18 +15,20 @@ It deliberately has no dependency on a strategy, `OrderIntent`, or
 `PreparedExecutor`. A signal emitted here cannot place an order unless a
 separate later composition explicitly wires it to those layers.
 
-## NVTS checkpoint
+## Checked-in company rules
 
-The checked-in NVTS rule is a `SHADOW` configuration for fiscal 2026 Q2:
+The checked-in rules remain `SHADOW` configurations:
 
-- stable scope: `earnings:NVTS:2026Q2`;
-- expected period end: 2026-06-30;
-- official release time: 2026-07-27 17:00 ET;
-- primary metric: non-GAAP EPS;
-- comparison and strike retained for the future strategy: `> -0.04`;
-- standard cent rounding;
-- official-company source first, with fallback timing recorded but not yet
-  implemented.
+- NVTS fiscal 2026 Q2: non-GAAP EPS `> -0.04`, expected July 27;
+- WWD fiscal 2026 Q3: GAAP diluted EPS `> 2.42`, officially scheduled for
+  July 29 at approximately 16:00 ET;
+- BBBY fiscal 2026 Q2: non-GAAP diluted EPS `> -0.26`, officially scheduled
+  for August 4 after market close.
+
+The WWD and BBBY Polymarket slugs retain the platform's original July 27
+estimated date. Their official investor-relations announcements supersede that
+estimate for monitoring time; the market rule itself continues to refer to the
+next quarterly release.
 
 The SEC router accepts only an initial `8-K` with `Item 2.02` and one
 `EX-99.1` press-release exhibit for the watched ticker/CIK. It rejects
@@ -36,6 +38,15 @@ The Navitas parser requires the expected fiscal period and the exact
 reconciliation row for non-GAAP net loss per share. Missing non-GAAP EPS
 returns `NO_MATCH`; it never produces a premature `NO` resolution.
 
+The Woodward parser requires the expected fiscal period, the explicit
+fully-diluted basis statement, and the headline as-reported GAAP
+`Earnings per share (EPS)` row. It does not substitute adjusted EPS.
+
+The Bed Bath & Beyond parser requires the expected fiscal period and the
+current-period reconciliation from diluted GAAP loss per share to
+`Adjusted Diluted EPS`. It does not substitute the GAAP loss or a prior-period
+column.
+
 ## Explicit database setup
 
 Normal runners never apply migration 004. Check readiness with:
@@ -44,14 +55,16 @@ Normal runners never apply migration 004. Check readiness with:
 python -m scripts.manage_earnings_schema
 ```
 
-Explicitly create the three additive tables and save the NVTS shadow rule:
+Explicitly create the three additive tables and save every checked-in shadow
+rule:
 
 ```text
-python -m scripts.manage_earnings_schema --apply --seed-nvts-shadow
+python -m scripts.manage_earnings_schema --apply --seed-checked-in-shadow
 ```
 
-The seed remains `SHADOW` and does not create source events, fact candidates,
-execution claims, or orders.
+The legacy `--seed-nvts-shadow` option remains available. Both seed modes keep
+rules in `SHADOW` and do not create source events, fact candidates, execution
+claims, or orders.
 
 ## Hosted shadow worker
 

@@ -8,6 +8,7 @@ from cbr_trading.earnings.hosted_worker import (
     WorkerCycleStatus,
     _watches_from_rules,
 )
+from cbr_trading.earnings.parsers import checked_in_shadow_rules
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -70,6 +71,29 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, WorkerCycleStatus.NO_RULES)
         self.assertEqual(result.watch_count, 0)
+
+    async def test_connection_cycle_watches_all_checked_in_issuers(
+        self,
+    ) -> None:
+        captured = []
+
+        def builder(watches):
+            captured.extend(watches)
+            return _EmptyTransport()
+
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            transport_builder=builder,
+        )
+
+        result = await worker.run_connection_cycle()
+
+        self.assertEqual(result.watch_count, 3)
+        self.assertEqual(
+            {watch.ticker for watch in captured},
+            {"BBBY", "NVTS", "WWD"},
+        )
 
     def test_multiple_active_scopes_for_same_cik_are_rejected(self) -> None:
         first = nvts_q2_2026_shadow_rule()

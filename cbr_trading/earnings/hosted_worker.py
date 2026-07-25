@@ -11,7 +11,7 @@ from typing import Protocol
 
 from cbr_trading.earnings.contracts import EarningsMarketRule
 from cbr_trading.earnings.document_fetcher import SecDocumentFetcher
-from cbr_trading.earnings.parsers.navitas import NavitasEpsParser
+from cbr_trading.earnings.parsers import earnings_parser_registry
 from cbr_trading.earnings.processor import (
     EarningsShadowProcessor,
     ShadowProcessingStatus,
@@ -68,7 +68,7 @@ class EarningsHostedShadowWorker:
         )
         self._parsers = dict(
             parsers
-            or {"NVTS": NavitasEpsParser()}
+            or earnings_parser_registry()
         )
         self._logger = logger or logging.getLogger(
             "cbr_trading.earnings"
