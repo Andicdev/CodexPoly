@@ -27,8 +27,10 @@ services:
       EARNINGS_HEARTBEAT_SEC: "60"
       SEC_API_KEY_FILE: /run/secrets/SEC_API_KEY
     secrets:
-      - database_app_password
-      - sec_api_key
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+      - source: sec_api_key
+        target: SEC_API_KEY
     networks:
       - backend
     read_only: true
@@ -69,7 +71,8 @@ services:
       RESOLUTION_ORCHESTRATOR_NO_PROFILES_SEC: "30"
       RESOLUTION_SUPERVISION_ENABLED: "0"
     secrets:
-      - database_app_password
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
     networks:
       - backend
     read_only: true

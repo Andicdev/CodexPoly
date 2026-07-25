@@ -21,8 +21,10 @@ services:
       CBR_LIVE_MAX_TOTAL_NOTIONAL: "${CBR_LIVE_MAX_TOTAL_NOTIONAL:?set the aggregate notional cap}"
       CBR_LIVE_POST_ONLY: "${CBR_LIVE_POST_ONLY:-0}"
     secrets:
-      - accounts_master_key
-      - encrypted_private_key
+      - source: accounts_master_key
+        target: ACCOUNTS_MASTER_KEY
+      - source: encrypted_private_key
+        target: TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
 
 secrets:
   accounts_master_key:

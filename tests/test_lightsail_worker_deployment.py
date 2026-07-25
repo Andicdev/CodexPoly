@@ -67,6 +67,11 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
                 '"cbr_trading.resolution_hosted"]',
                 text,
             )
+            self.assertIn(
+                "target: DATABASE_APP_PASSWORD",
+                text,
+            )
+            self.assertIn("target: SEC_API_KEY", text)
 
     def test_production_overlay_is_the_only_trading_mount(self) -> None:
         text = (
@@ -94,6 +99,11 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
         self.assertIn(
             "/run/secrets/"
             "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
+            text,
+        )
+        self.assertIn("target: ACCOUNTS_MASTER_KEY", text)
+        self.assertIn(
+            "target: TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
             text,
         )
         self.assertIn(
