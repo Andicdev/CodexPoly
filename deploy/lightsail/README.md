@@ -149,8 +149,10 @@ the database network:
   the two trading account secrets.
 
 No worker publishes a port. Production account metadata selects the single
-account `abccbaq` with venue `polymarket_clob` and signature type `2`.
-There is no production `trading_accounts` row for this account.
+account `abccbaq` with venue `polymarket_clob` and signature type `2`. It is
+stored in the additive `trading_account_metadata` table. There is no
+production legacy `trading_accounts` row for this account, and no private key
+is stored in the metadata table.
 
 See `deploy/lightsail/workers/README.md` and the Compose sources in the same
 directory.

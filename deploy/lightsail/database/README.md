@@ -65,7 +65,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 remote command. It cannot be used to upload environment files, private keys,
 or arbitrary release artifacts.
 
-After migrations `001` through `006`, the isolated staging database can be
+After migrations `001` through `007`, the isolated staging database can be
 initialized with the reviewed non-secret earnings configuration:
 
 ```powershell
@@ -74,9 +74,9 @@ initialized with the reviewed non-secret earnings configuration:
   -RemoteCommand @('/opt/codexpoly/config/codexpoly-staging-migrate')
 ```
 
-The seed is idempotent. It copies no runtime history and no trading-account
-row. Its three execution profiles use account name `abccbaq` and remain
-`DISABLED`.
+The seed is idempotent. It copies no runtime history, legacy trading-account
+row, or secret. It stores only public metadata for `abccbaq`; its three
+execution profiles use that account name and remain `DISABLED`.
 
 Verify the initial staging invariants without returning database rows:
 

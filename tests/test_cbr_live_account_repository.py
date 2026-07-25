@@ -7,11 +7,45 @@ from unittest.mock import patch
 
 from cbr_trading.live.account_repository import (
     RuntimeSecretTradingAccountRepository,
+    SqlAlchemyRuntimeSecretTradingAccountRepository,
     SqlAlchemyTradingAccountRepository,
     TradingAccountLoadError,
     build_trading_account_repository,
     normalize_account_rows,
 )
+
+
+class _MappingsResult:
+    def __init__(self, rows: list[dict[str, object]]):
+        self._rows = rows
+
+    def mappings(self) -> "_MappingsResult":
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        return self._rows
+
+
+class _MetadataSession:
+    def __init__(self, rows: list[dict[str, object]]):
+        self.rows = rows
+        self.statements: list[tuple[str, object]] = []
+
+    def __enter__(self) -> "_MetadataSession":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(
+        self,
+        statement: str,
+        params: object = None,
+    ) -> _MappingsResult:
+        self.statements.append((statement, params))
+        return _MappingsResult(
+            self.rows if "FROM trading_account_metadata" in statement else []
+        )
 
 
 def _row(**overrides: object) -> dict[str, object]:
@@ -188,6 +222,86 @@ class RuntimeSecretTradingAccountRepositoryTests(unittest.TestCase):
         self.assertIs(repository, from_env.return_value)
         from_env.assert_called_once_with(
             {"TRADING_ACCOUNT_SOURCE": "single_secret"}
+        )
+
+    def test_database_metadata_provider_combines_public_row_and_secret(
+        self,
+    ) -> None:
+        session = _MetadataSession(
+            [
+                {
+                    "name": "abccbaq",
+                    "wallet_address": (
+                        "0x343FDd2bf9272Bd12cffBFE510f3969F57E36Df2"
+                    ),
+                    "venue": "polymarket_clob",
+                    "is_active": True,
+                    "signature_type": 2,
+                }
+            ]
+        )
+        repository = SqlAlchemyRuntimeSecretTradingAccountRepository(
+            database_url="postgresql://unused",
+            configured_name="abccbaq",
+            encrypted_private_key=b"encrypted-private-key",
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        account = repository.load_active("ABCCBAQ")
+
+        self.assertEqual(account.name, "abccbaq")
+        self.assertEqual(
+            account.wallet_address,
+            "0x343FDd2bf9272Bd12cffBFE510f3969F57E36Df2",
+        )
+        self.assertEqual(account.signature_type, 2)
+        self.assertEqual(
+            account.encrypted_private_key,
+            b"encrypted-private-key",
+        )
+        self.assertEqual(
+            session.statements[0][0],
+            "SET TRANSACTION READ ONLY",
+        )
+        self.assertNotIn("encrypted-private-key", repr(repository))
+
+    def test_database_metadata_provider_rejects_wrong_account(self) -> None:
+        repository = SqlAlchemyRuntimeSecretTradingAccountRepository(
+            database_url="postgresql://unused",
+            configured_name="abccbaq",
+            encrypted_private_key=b"encrypted-private-key",
+        )
+
+        with self.assertRaisesRegex(
+            TradingAccountLoadError,
+            "not found",
+        ):
+            repository.load_active("another")
+
+    def test_factory_selects_database_metadata_secret_provider(
+        self,
+    ) -> None:
+        with patch.object(
+            SqlAlchemyRuntimeSecretTradingAccountRepository,
+            "from_env",
+            return_value=object(),
+        ) as from_env:
+            repository = build_trading_account_repository(
+                database_url="postgresql://unused",
+                environ={
+                    "TRADING_ACCOUNT_SOURCE": (
+                        "database_metadata_secret"
+                    )
+                },
+            )
+
+        self.assertIs(repository, from_env.return_value)
+        from_env.assert_called_once_with(
+            database_url="postgresql://unused",
+            environ={
+                "TRADING_ACCOUNT_SOURCE": "database_metadata_secret"
+            },
         )
 
     def test_factory_rejects_unknown_source(self) -> None:

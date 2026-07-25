@@ -94,18 +94,11 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
 
         self.assertNotIn("\n    ports:", text)
         self.assertIn(
-            "TRADING_ACCOUNT_SOURCE: single_secret",
+            "TRADING_ACCOUNT_SOURCE: database_metadata_secret",
             text,
         )
         self.assertIn("TRADING_ACCOUNT_NAME: abccbaq", text)
-        self.assertIn(
-            "TRADING_ACCOUNT_VENUE: polymarket_clob",
-            text,
-        )
-        self.assertIn(
-            'TRADING_ACCOUNT_SIGNATURE_TYPE: "2"',
-            text,
-        )
+        self.assertNotIn("TRADING_ACCOUNT_WALLET_ADDRESS", text)
         self.assertIn(
             "/run/secrets/ACCOUNTS_MASTER_KEY",
             text,

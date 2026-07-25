@@ -21,6 +21,18 @@ WHERE lower(name) = lower(:account_name)
 ORDER BY name
 """.strip()
 
+_SELECT_ACCOUNT_METADATA_SQL = """
+SELECT
+    account_name AS name,
+    wallet_address,
+    venue,
+    is_active,
+    signature_type
+FROM trading_account_metadata
+WHERE lower(account_name) = lower(:account_name)
+ORDER BY account_name
+""".strip()
+
 
 class TradingAccountLoadError(RuntimeError):
     """Safe error raised when a trading account cannot be loaded."""
@@ -211,6 +223,144 @@ class RuntimeSecretTradingAccountRepository:
         return None
 
 
+class SqlAlchemyRuntimeSecretTradingAccountRepository:
+    """Combine public database metadata with one encrypted file-secret."""
+
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        configured_name: str,
+        encrypted_private_key: bytes,
+        session_factory: Callable[[], Any] | None = None,
+        text_factory: Callable[[str], Any] | None = None,
+    ):
+        self._database_url = str(database_url or "").strip()
+        self._configured_name = _clean(configured_name)
+        self._encrypted_private_key = bytes(encrypted_private_key)
+        self._session_factory = session_factory
+        self._text_factory = text_factory
+        self._engine: Any | None = None
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        database_url: str,
+        environ: Mapping[str, str] | None = None,
+    ) -> "SqlAlchemyRuntimeSecretTradingAccountRepository":
+        env = environ if environ is not None else os.environ
+        normalized_database_url = str(database_url or "").strip()
+        if not normalized_database_url:
+            raise TradingAccountLoadError(
+                "Trading metadata database URL is not configured"
+            )
+        name = _clean(env.get("TRADING_ACCOUNT_NAME"))
+        if not name:
+            raise TradingAccountLoadError(
+                "Configured trading account name is empty"
+            )
+        encrypted_key = read_runtime_secret(
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
+            environ=env,
+        )
+        if encrypted_key is None:
+            raise TradingAccountLoadError(
+                f"Trading account has no encrypted private key: {name!r}"
+            )
+        return cls(
+            database_url=normalized_database_url,
+            configured_name=name,
+            encrypted_private_key=str(encrypted_key).encode("utf-8"),
+        )
+
+    def load_active(self, account_name: str) -> TradingAccountRecord:
+        requested = _clean(account_name)
+        if not requested:
+            raise TradingAccountLoadError("Trading account name is empty")
+        if requested.casefold() != self._configured_name.casefold():
+            raise TradingAccountLoadError(
+                f"Trading account not found: {requested!r}"
+            )
+
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                session.execute(text_factory(_SET_READ_ONLY_SQL))
+                result = session.execute(
+                    text_factory(_SELECT_ACCOUNT_METADATA_SQL),
+                    {"account_name": self._configured_name},
+                )
+                metadata_rows = result.mappings().all()
+        except TradingAccountLoadError:
+            raise
+        except Exception as exc:
+            raise TradingAccountLoadError(
+                "Failed to load trading account metadata: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+        rows = [
+            {
+                **dict(row),
+                "pk_enc": self._encrypted_private_key,
+            }
+            for row in metadata_rows
+        ]
+        return normalize_account_rows(
+            rows,
+            requested=self._configured_name,
+        )
+
+    def _resolve_dependencies(
+        self,
+    ) -> tuple[Callable[[], Any], Callable[[str], Any]]:
+        session_factory = self._session_factory
+        text_factory = self._text_factory
+        if session_factory is None:
+            try:
+                from sqlalchemy import create_engine
+                from sqlalchemy.orm import sessionmaker
+            except ImportError as exc:
+                raise TradingAccountLoadError(
+                    "Account loading requires SQLAlchemy and a "
+                    "PostgreSQL driver"
+                ) from exc
+            try:
+                self._engine = create_engine(
+                    _normalize_database_url(self._database_url),
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                    pool_reset_on_return="rollback",
+                    hide_parameters=True,
+                )
+                session_factory = sessionmaker(
+                    bind=self._engine,
+                    expire_on_commit=False,
+                )
+            except Exception as exc:
+                raise TradingAccountLoadError(
+                    "Failed to initialize account database connection: "
+                    f"{type(exc).__name__}"
+                ) from exc
+            self._session_factory = session_factory
+        if text_factory is None:
+            try:
+                from sqlalchemy import text
+            except ImportError as exc:
+                raise TradingAccountLoadError(
+                    "Account loading requires SQLAlchemy"
+                ) from exc
+            text_factory = text
+            self._text_factory = text_factory
+        return session_factory, text_factory
+
+    def close(self) -> None:
+        if self._engine is not None:
+            self._engine.dispose()
+            self._engine = None
+
+
 def build_trading_account_repository(
     *,
     database_url: str = "",
@@ -229,6 +379,11 @@ def build_trading_account_repository(
         )
     if source == "single_secret":
         return RuntimeSecretTradingAccountRepository.from_env(env)
+    if source == "database_metadata_secret":
+        return SqlAlchemyRuntimeSecretTradingAccountRepository.from_env(
+            database_url=database_url,
+            environ=env,
+        )
     raise TradingAccountLoadError(
         f"Unsupported trading account source: {source!r}"
     )

@@ -1,8 +1,34 @@
 -- Initial non-secret earnings configuration for the isolated Lightsail DB.
--- Runtime events, execution claims, orders, and trading account rows are not
--- copied. Execution profiles are deliberately kept DISABLED.
+-- Runtime events, execution claims, orders, legacy trading-account rows, and
+-- secrets are not copied. Public account metadata is safe to persist.
+-- Execution profiles are deliberately kept DISABLED.
 
 BEGIN;
+
+INSERT INTO trading_account_metadata (
+    account_name,
+    wallet_address,
+    venue,
+    signature_type,
+    is_active,
+    metadata
+)
+VALUES (
+    'abccbaq',
+    '0x343FDd2bf9272Bd12cffBFE510f3969F57E36Df2',
+    'polymarket_clob',
+    2,
+    true,
+    '{"credential_source": "production_secret_store"}'::jsonb
+)
+ON CONFLICT (account_name) DO UPDATE
+SET
+    wallet_address = EXCLUDED.wallet_address,
+    venue = EXCLUDED.venue,
+    signature_type = EXCLUDED.signature_type,
+    is_active = EXCLUDED.is_active,
+    metadata = EXCLUDED.metadata,
+    updated_at = now();
 
 INSERT INTO earnings_market_rules (
     rule_key,

@@ -38,8 +38,13 @@ class LightsailEarningsSeedTests(unittest.TestCase):
         ):
             self.assertIn(profile_key, text)
 
-        self.assertEqual(text.count("'abccbaq'"), 3)
+        self.assertEqual(text.count("'abccbaq'"), 4)
         self.assertEqual(text.count("'DISABLED'"), 4)
+        self.assertIn("trading_account_metadata", text)
+        self.assertIn(
+            "0x343FDd2bf9272Bd12cffBFE510f3969F57E36Df2",
+            text,
+        )
         self.assertIn('"ticker": "BBBY"', text)
         self.assertIn("0.999", text)
         self.assertIn("reprice_on_tick_change", text)
@@ -66,6 +71,7 @@ class LightsailEarningsSeedTests(unittest.TestCase):
         self.assertIn("earnings_source_events", text)
         self.assertIn("earnings_fact_candidates", text)
         self.assertIn("resolution_execution_claims", text)
+        self.assertIn("trading_account_metadata", text)
         self.assertIn("provider_event_id NOT LIKE 'staging-smoke-%'", text)
         self.assertIn("fact.status <> 'SUPERSEDED'", text)
         self.assertNotIn("INSERT INTO", text)

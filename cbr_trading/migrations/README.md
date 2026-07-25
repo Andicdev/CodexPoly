@@ -40,6 +40,11 @@ YES/NO desired price `0.999`, quantity `50`, and the `0.01 -> 0.001`
 single-reprice policy. `ON CONFLICT DO NOTHING` preserves later operator
 edits, and existing execution profiles are never changed.
 
+`007_add_trading_account_metadata.sql` creates only
+`trading_account_metadata`. It stores public account name, proxy wallet,
+venue, signature type, and active status. Encrypted private keys and master
+keys remain outside PostgreSQL in the production secret store.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

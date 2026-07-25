@@ -14,8 +14,22 @@ BEGIN
         OR to_regclass('resolution_execution_profiles') IS NULL
         OR to_regclass('resolution_profile_templates') IS NULL
         OR to_regclass('resolution_execution_claims') IS NULL
+        OR to_regclass('trading_account_metadata') IS NULL
     THEN
         RAISE EXCEPTION 'required staging schema is incomplete';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM trading_account_metadata
+        WHERE account_name = 'abccbaq'
+          AND wallet_address =
+              '0x343FDd2bf9272Bd12cffBFE510f3969F57E36Df2'
+          AND venue = 'polymarket_clob'
+          AND signature_type = 2
+          AND is_active = true
+    ) THEN
+        RAISE EXCEPTION 'trading account metadata does not match';
     END IF;
 
     IF EXISTS (

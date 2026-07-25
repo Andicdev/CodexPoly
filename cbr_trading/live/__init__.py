@@ -2,6 +2,7 @@
 
 from cbr_trading.live.account_repository import (
     RuntimeSecretTradingAccountRepository,
+    SqlAlchemyRuntimeSecretTradingAccountRepository,
     SqlAlchemyTradingAccountRepository,
     TradingAccountRepository,
     TradingAccountLoadError,
@@ -61,6 +62,7 @@ __all__ = [
     "PolymarketSupervisionGatewayError",
     "PolymarketSupervisionOrderGateway",
     "RuntimeSecretTradingAccountRepository",
+    "SqlAlchemyRuntimeSecretTradingAccountRepository",
     "SqlAlchemyOrderGroupRepository",
     "SqlAlchemyResolutionExecutionLedger",
     "SqlAlchemyTradingAccountRepository",

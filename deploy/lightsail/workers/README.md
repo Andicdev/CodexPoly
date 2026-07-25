@@ -47,16 +47,16 @@ secret values.
 The trading overlay additionally requires:
 
 ```text
-TRADING_ACCOUNT_WALLET_ADDRESS
 CBR_LIVE_MAX_ORDER_QTY
 CBR_LIVE_MAX_NOTIONAL
 CBR_LIVE_MAX_TOTAL_NOTIONAL
 ```
 
-The wallet is the existing proxy wallet for `abccbaq`; the account venue is
-`polymarket_clob` and its signature type is `2`. Keep the wallet in
-operator-controlled non-secret deployment configuration. Do not put a private
-key, master key, database password, or API token in that configuration.
+The public account metadata table binds `abccbaq` to its proxy wallet, venue
+`polymarket_clob`, signature type `2`, and active status. The overlay reads
+that metadata from PostgreSQL and combines it with the encrypted private-key
+file-secret. No private key, master key, database password, or API token is
+stored in the metadata table or deployment configuration.
 
 The overlay defaults to:
 
@@ -72,7 +72,8 @@ Live mode therefore requires explicit values for all three guards, including
 
 ## Account secret installation
 
-The production account has no `trading_accounts` row. An infrastructure
+The production account has no legacy `trading_accounts` row. Its public
+metadata is stored in `trading_account_metadata`. An infrastructure
 administrator installs a fresh encryption key and encrypted private key
 together:
 
