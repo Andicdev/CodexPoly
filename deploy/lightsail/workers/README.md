@@ -119,6 +119,12 @@ Only one live resolution worker may exist across Northflank and Lightsail. The
 two databases do not share execution claims, so simultaneous live workers are
 not protected from one another by idempotency.
 
+For the first authenticated NVTS preflight, use the guarded SQL files in
+`deploy/lightsail/preflight` in numeric order. The first file refuses to run
+when any profile is already enabled, the second verifies exactly one
+in-window profile in a read-only transaction, and the third restores the
+checked-in NVTS window and returns every profile to `DISABLED`.
+
 The staging synthetic path is explicitly non-submitting and does not need a
 trading-account secret:
 
