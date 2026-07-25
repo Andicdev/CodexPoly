@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from cbr_trading.domain import (
+    ExecutionHandle,
     ExecutionStatus,
     OrderExecutionResult,
+    PlacedOrder,
 )
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
@@ -94,6 +96,60 @@ class _Executor:
         return None
 
 
+class _LiveExecutor(_Executor):
+    def __init__(self, **kwargs: object):
+        super().__init__(**kwargs)
+        self.cleanup_calls: list[dict] = []
+
+    def execute(self, intents: object, *, signal: object) -> tuple:
+        results = []
+        for intent in intents:
+            placed = PlacedOrder(
+                order_id="nvts-live-order-1",
+                asset_id="yes-token",
+                effective_price=intent.desired_price,
+                quantity=intent.quantity,
+            )
+            handle = ExecutionHandle(
+                order_group_id="nvts-live-group-1",
+                intent_id=intent.intent_id,
+                signal_id=intent.signal_id,
+                template_id=intent.template_id,
+                strategy_id=intent.strategy_id,
+                account_name=intent.account_name,
+                condition_id=intent.condition_id,
+                outcome=intent.outcome,
+                side=intent.side,
+                asset_id=placed.asset_id,
+                desired_price=intent.desired_price,
+                quantity=intent.quantity,
+                live_order_ids=(placed.order_id,),
+            )
+            results.append(
+                OrderExecutionResult(
+                    intent=intent,
+                    status=ExecutionStatus.SUBMITTED,
+                    attempted=True,
+                    orders=(placed,),
+                    handle=handle,
+                )
+            )
+        return tuple(results)
+
+    def record_cleanup(
+        self,
+        *,
+        template_id: str,
+        cleanup: object,
+    ) -> None:
+        self.cleanup_calls.append(
+            {
+                "template_id": template_id,
+                "cleanup": cleanup,
+            }
+        )
+
+
 class EarningsResolutionSimulationTests(unittest.TestCase):
     def test_runs_real_source_strategy_and_executor_for_yes(self) -> None:
         exit_code, payload = self._run(
@@ -144,6 +200,120 @@ class EarningsResolutionSimulationTests(unittest.TestCase):
             payload["resolution"]["selected_outcome"],
             "NO",
         )
+
+    def test_live_test_submits_selected_outcome_and_cleans_exact_id(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        safety = LiveSafetySettings(
+            trading_enabled=True,
+            post_only=True,
+            allowed_account="test-account",
+            max_order_quantity=Decimal("5"),
+            max_notional=Decimal("0.50"),
+            max_total_notional=Decimal("1.00"),
+            accounts_master_key="present",
+        )
+        live = _LiveExecutor()
+        with (
+            patch.object(
+                simulation,
+                "resolve_database_selection",
+                return_value=SimpleNamespace(
+                    url="postgresql://unused",
+                    target="server_ext",
+                    error=None,
+                ),
+            ),
+            patch.object(
+                simulation,
+                "SqlAlchemyEarningsStore",
+                side_effect=_Store,
+            ),
+            patch.object(
+                simulation.LiveSafetySettings,
+                "from_env",
+                return_value=safety,
+            ),
+            patch.object(
+                simulation,
+                "PolymarketPreparedExecutor",
+                return_value=live,
+            ),
+            patch.object(
+                simulation,
+                "cleanup_exact_order",
+                return_value={
+                    "required": True,
+                    "attempted": True,
+                    "order_id": "nvts-live-order-1",
+                    "cancel_requested": True,
+                    "cancel_acknowledged": True,
+                    "initial_state": "OPEN",
+                    "final_state": "CANCELLED",
+                    "confirmed_terminal": True,
+                    "error": None,
+                },
+            ) as cleanup,
+            patch("sys.stdout", output),
+        ):
+            exit_code = simulation.main(
+                [
+                    "--eps=-0.03",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.10",
+                    "--run-id",
+                    "test-live-001",
+                    "--live-test",
+                    "--expected-outcome",
+                    "YES",
+                    "--confirm-live-order",
+                    "--cancel-after-test",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["order_submitted"])
+        self.assertEqual(
+            payload["mode"],
+            "earnings_resolution_live_test",
+        )
+        self.assertEqual(
+            payload["resolution"]["selected_outcome"],
+            "YES",
+        )
+        cleanup.assert_called_once()
+        self.assertEqual(len(live.cleanup_calls), 1)
+        self.assertTrue(payload["cleanup"]["confirmed_terminal"])
+        self.assertTrue(payload["cleanup"]["audit_recorded"])
+
+    def test_live_test_requires_every_explicit_guard(self) -> None:
+        error = io.StringIO()
+        with patch("sys.stderr", error):
+            exit_code = simulation.main(
+                [
+                    "--eps=-0.03",
+                    "--quantity",
+                    "5",
+                    "--limit-price",
+                    "0.10",
+                    "--run-id",
+                    "test-live-002",
+                    "--live-test",
+                    "--expected-outcome",
+                    "YES",
+                    "--cancel-after-test",
+                ]
+            )
+
+        payload = json.loads(error.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertIn("--confirm-live-order", payload["error"])
 
     def _run(
         self,

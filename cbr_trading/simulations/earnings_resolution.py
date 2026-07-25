@@ -33,9 +33,11 @@ from cbr_trading.earnings import (
     SqlAlchemyEarningsStore,
 )
 from cbr_trading.execution import (
+    PolymarketPreparedExecutor,
     PolymarketPreflightPreparedExecutor,
     PreparationContext,
 )
+from cbr_trading.live.exact_cleanup import cleanup_exact_order
 from cbr_trading.live.safety import LiveSafetySettings
 from cbr_trading.secret_guard import redact_exception
 from cbr_trading.sources.earnings import (
@@ -94,7 +96,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     validation_error = _validate_args(args)
     if validation_error is not None:
         _print_json(
-            _error_payload(validation_error),
+            _error_payload(
+                validation_error,
+                live_test=args.live_test,
+            ),
             stream=sys.stderr,
         )
         return 2
@@ -104,7 +109,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_json(
             _error_payload(
                 database.error
-                or "Primary database URL is not configured"
+                or "Primary database URL is not configured",
+                live_test=args.live_test,
             ),
             stream=sys.stderr,
         )
@@ -133,6 +139,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         now = datetime.now(timezone.utc)
         normalized_eps = _round(args.eps, rule.rounding_places)
+        expected_outcome = _expected_outcome(
+            value=normalized_eps,
+            operation=rule.comparison_op,
+            strike=_round(rule.strike, rule.rounding_places),
+        )
+        if (
+            args.live_test
+            and expected_outcome.value != args.expected_outcome
+        ):
+            raise ValueError(
+                "synthetic EPS selected an unexpected outcome; "
+                "no order was submitted"
+            )
+        if args.live_test and not safety.post_only:
+            raise ValueError(
+                "controlled live test requires post_only safety"
+            )
+        quantity = args.quantity or Decimal("5")
+        limit_price = args.limit_price or Decimal("0.10")
         candidate = _synthetic_fact(
             rule=rule,
             raw_eps=args.eps,
@@ -156,8 +181,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         yes_template, no_template = _order_templates(
             rule=rule,
             account_name=account_name,
-            quantity=args.quantity,
-            limit_price=args.limit_price,
+            quantity=quantity,
+            limit_price=limit_price,
         )
         strategy = NumericThresholdStrategy(
             (
@@ -185,9 +210,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "run_id": run_id,
             },
         )
-        executor = PolymarketPreflightPreparedExecutor(
-            database_url=database.url,
-            safety=safety,
+        executor = (
+            PolymarketPreparedExecutor(
+                database_url=database.url,
+                safety=safety,
+            )
+            if args.live_test
+            else PolymarketPreflightPreparedExecutor(
+                database_url=database.url,
+                safety=safety,
+            )
         )
         coordinator = ResolutionTradingCoordinator(
             source=source,
@@ -201,20 +233,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             if preparation.ready
             else None
         )
-        payload = _result_payload(
-            database_target=database.target,
-            rule=rule,
-            run_id=run_id,
-            raw_eps=args.eps,
-            normalized_eps=normalized_eps,
-            safety=safety,
-            preparation=preparation,
-            outcome=outcome,
-            executor=executor,
+        payload = (
+            _live_result_payload(
+                database_url=database.url,
+                database_target=database.target,
+                rule=rule,
+                run_id=run_id,
+                raw_eps=args.eps,
+                normalized_eps=normalized_eps,
+                safety=safety,
+                preparation=preparation,
+                outcome=outcome,
+                executor=executor,
+            )
+            if args.live_test
+            else _result_payload(
+                database_target=database.target,
+                rule=rule,
+                run_id=run_id,
+                raw_eps=args.eps,
+                normalized_eps=normalized_eps,
+                safety=safety,
+                preparation=preparation,
+                outcome=outcome,
+                executor=executor,
+            )
         )
     except Exception as exc:
         _print_json(
-            _error_payload(redact_exception(exc)),
+            _error_payload(
+                redact_exception(exc),
+                live_test=args.live_test,
+            ),
             stream=sys.stderr,
         )
         return 5
@@ -253,18 +303,42 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--quantity",
         type=Decimal,
-        default=Decimal("5"),
-        help="Share quantity used only for executor preflight.",
+        help=(
+            "Share quantity; defaults to 5 for preflight and is required "
+            "explicitly for a live test."
+        ),
     )
     parser.add_argument(
         "--limit-price",
         type=Decimal,
-        default=Decimal("0.10"),
-        help="Post-only candidate price used only for executor preflight.",
+        help=(
+            "Candidate price; defaults to 0.10 for preflight and is "
+            "required explicitly for a live test."
+        ),
     )
     parser.add_argument(
         "--run-id",
         help="Unique synthetic run id; generated automatically when omitted.",
+    )
+    parser.add_argument(
+        "--live-test",
+        action="store_true",
+        help="Submit one controlled order and immediately clean up its ID.",
+    )
+    parser.add_argument(
+        "--expected-outcome",
+        choices=("YES", "NO"),
+        help="Required live guard for the expected threshold result.",
+    )
+    parser.add_argument(
+        "--confirm-live-order",
+        action="store_true",
+        help="Required acknowledgement for --live-test.",
+    )
+    parser.add_argument(
+        "--cancel-after-test",
+        action="store_true",
+        help="Required exact-order cleanup opt-in for --live-test.",
     )
     return parser
 
@@ -274,12 +348,37 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         return "fiscal quarter must be between 1 and 4"
     if not args.eps.is_finite():
         return "EPS must be finite"
-    if args.quantity <= 0:
+    if args.quantity is not None and args.quantity <= 0:
         return "quantity must be positive"
-    if args.limit_price <= 0 or args.limit_price >= 1:
+    if args.limit_price is not None and (
+        args.limit_price <= 0 or args.limit_price >= 1
+    ):
         return "limit price must be greater than 0 and less than 1"
     if args.run_id and not _RUN_ID_PATTERN.fullmatch(args.run_id):
         return "run id must be 3-64 safe characters"
+    live_values_present = any(
+        (
+            args.expected_outcome,
+            args.confirm_live_order,
+            args.cancel_after_test,
+        )
+    )
+    if not args.live_test:
+        if live_values_present:
+            return "live-test guards require --live-test"
+        return None
+    if not args.run_id:
+        return "--live-test requires an explicit unique --run-id"
+    if args.quantity is None:
+        return "--live-test requires explicit --quantity"
+    if args.limit_price is None:
+        return "--live-test requires explicit --limit-price"
+    if not args.expected_outcome:
+        return "--live-test requires --expected-outcome"
+    if not args.confirm_live_order:
+        return "--live-test requires --confirm-live-order"
+    if not args.cancel_after_test:
+        return "--live-test requires --cancel-after-test"
     return None
 
 
@@ -583,10 +682,150 @@ def _result_payload(
     }
 
 
-def _error_payload(error: str) -> dict[str, Any]:
+def _live_result_payload(
+    *,
+    database_url: str,
+    database_target: str,
+    rule: EarningsMarketRule,
+    run_id: str,
+    raw_eps: Decimal,
+    normalized_eps: Decimal,
+    safety: LiveSafetySettings,
+    preparation: Any,
+    outcome: Any,
+    executor: PolymarketPreparedExecutor,
+) -> dict[str, Any]:
+    completed = (
+        outcome is not None
+        and outcome.status is CoordinationStatus.COMPLETED
+    )
+    results = (
+        tuple(outcome.order_results)
+        if completed
+        else ()
+    )
+    result = results[0] if len(results) == 1 else None
+    known_orders = (
+        tuple(result.orders)
+        if result is not None
+        else ()
+    )
+    cleanup: dict[str, Any] = {
+        "required": True,
+        "attempted": False,
+        "order_id": None,
+        "cancel_requested": False,
+        "cancel_acknowledged": False,
+        "initial_state": None,
+        "final_state": None,
+        "confirmed_terminal": False,
+        "audit_recorded": False,
+        "audit_error": None,
+        "error": None,
+    }
+    if len(known_orders) == 1 and result is not None:
+        order = known_orders[0]
+        try:
+            cleanup = {
+                **cleanup_exact_order(
+                    database_url=database_url,
+                    safety=safety,
+                    account_name=result.intent.account_name,
+                    order_id=order.order_id,
+                ),
+                "audit_recorded": False,
+                "audit_error": None,
+            }
+        except Exception as exc:
+            cleanup = {
+                **cleanup,
+                "attempted": True,
+                "order_id": order.order_id,
+                "error": redact_exception(exc),
+            }
+        try:
+            executor.record_cleanup(
+                template_id=result.intent.template_id,
+                cleanup={
+                    key: value
+                    for key, value in cleanup.items()
+                    if not key.startswith("audit_")
+                },
+            )
+            cleanup["audit_recorded"] = True
+        except Exception as exc:
+            cleanup["audit_error"] = redact_exception(exc)
+    elif result is not None and result.status.value == "REJECTED":
+        cleanup["confirmed_terminal"] = True
+    elif len(known_orders) > 1:
+        cleanup["error"] = (
+            "Controlled live test returned more than one order"
+        )
+    else:
+        cleanup["error"] = (
+            "No exact order ID is available to confirm cleanup"
+        )
+
+    submitted = (
+        result is not None
+        and result.status.value == "SUBMITTED"
+        and len(known_orders) == 1
+    )
+    succeeded = (
+        preparation.ready
+        and completed
+        and submitted
+        and cleanup["confirmed_terminal"] is True
+        and cleanup["audit_recorded"] is True
+    )
+    payload = _result_payload(
+        database_target=database_target,
+        rule=rule,
+        run_id=run_id,
+        raw_eps=raw_eps,
+        normalized_eps=normalized_eps,
+        safety=safety,
+        preparation=preparation,
+        outcome=outcome,
+        executor=executor,
+    )
+    payload.update(
+        {
+            "ok": succeeded,
+            "mode": "earnings_resolution_live_test",
+            "order_submitted": bool(known_orders),
+            "cleanup": cleanup,
+        }
+    )
+    payload["resolution"]["results"] = [
+        {
+            "template_id": item.intent.template_id,
+            "outcome": item.intent.outcome.value,
+            "status": item.status.value,
+            "attempted": item.attempted,
+            "order_ids": [
+                order.order_id
+                for order in item.orders
+            ],
+            "error": item.error,
+        }
+        for item in results
+    ]
+    return payload
+
+
+def _error_payload(
+    error: str,
+    *,
+    live_test: bool = False,
+) -> dict[str, Any]:
     return {
         "ok": False,
-        "mode": "earnings_resolution_preflight",
+        "mode": (
+            "earnings_resolution_live_test"
+            if live_test
+            else "earnings_resolution_preflight"
+        ),
         "parser_bypassed": True,
         "synthetic_fact_persisted": False,
         "order_submitted": False,

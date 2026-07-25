@@ -119,3 +119,22 @@ simulator prepares and pre-signs both market outcomes, then returns one
 The injected fact is kept only in memory: no source event or fact candidate is
 stored. Every run also uses a unique synthetic signal scope, leaving the real
 `earnings:NVTS:2026Q2` idempotency scope untouched for Monday.
+
+A controlled live smoke additionally requires every explicit guard, an armed
+live environment, and post-only safety:
+
+```text
+python -m cbr_trading.simulations.earnings_resolution \
+  --eps=-0.03 \
+  --quantity 5 \
+  --limit-price 0.10 \
+  --run-id <unique-run-id> \
+  --live-test \
+  --expected-outcome YES \
+  --confirm-live-order \
+  --cancel-after-test
+```
+
+It submits only the selected outcome and immediately inspects and cancels only
+the exact returned order ID. The command succeeds only after terminal cleanup
+is confirmed and recorded in the resolution execution claim.
