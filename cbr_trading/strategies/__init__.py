@@ -12,6 +12,12 @@ from cbr_trading.strategies.fixed_outcome import (
     FixedOutcomeConfigurationError,
     FixedOutcomeStrategy,
 )
+from cbr_trading.strategies.numeric_threshold import (
+    NUMERIC_THRESHOLD_STRATEGY_ID,
+    NumericThresholdConfigurationError,
+    NumericThresholdRule,
+    NumericThresholdStrategy,
+)
 
 __all__ = [
     "CBR_RATE_DECISION_STRATEGY_ID",
@@ -21,5 +27,9 @@ __all__ = [
     "FIXED_OUTCOME_STRATEGY_ID",
     "FixedOutcomeConfigurationError",
     "FixedOutcomeStrategy",
+    "NUMERIC_THRESHOLD_STRATEGY_ID",
+    "NumericThresholdConfigurationError",
+    "NumericThresholdRule",
+    "NumericThresholdStrategy",
     "Strategy",
 ]

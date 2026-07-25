@@ -22,6 +22,10 @@ from cbr_trading.earnings.contracts import (
 
 NAVITAS_CIK = "1821769"
 NAVITAS_TICKER = "NVTS"
+NAVITAS_Q2_2026_CONDITION_ID = (
+    "0xa9397ae270be6e9dec1cdd1d89b3e122"
+    "b2a60647271261cda138bced069f7d9d"
+)
 NAVITAS_PARSER_NAME = "navitas_reconciliation_eps"
 NAVITAS_PARSER_VERSION = "1"
 _ROW_SEPARATOR = "__NAVITAS_ROW__"
@@ -174,6 +178,7 @@ def nvts_q2_2026_shadow_rule() -> EarningsMarketRule:
             "nvts-quarterly-earnings-nongaap-eps-"
             "07-27-2026-neg0pt04"
         ),
+        condition_id=NAVITAS_Q2_2026_CONDITION_ID,
         source_policy={
             "primary_authority": "official_company",
             "initial_release_only": True,

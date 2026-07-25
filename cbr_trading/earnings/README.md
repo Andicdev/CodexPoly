@@ -100,3 +100,22 @@ documents:
 ```text
 python -m scripts.replay_navitas_earnings
 ```
+
+## End-to-end synthetic resolution
+
+Before the real release, inject a normalized EPS fact after the parser and run
+the real source, numeric threshold strategy, and authenticated executor
+preflight:
+
+```text
+python -m cbr_trading.simulations.earnings_resolution --eps -0.03
+python -m cbr_trading.simulations.earnings_resolution --eps -0.04
+```
+
+For the NVTS rule these cases must select `YES` and `NO`, respectively. The
+simulator prepares and pre-signs both market outcomes, then returns one
+`DRY_RUN` result for the selected outcome. It never submits an order.
+
+The injected fact is kept only in memory: no source event or fact candidate is
+stored. Every run also uses a unique synthetic signal scope, leaving the real
+`earnings:NVTS:2026Q2` idempotency scope untouched for Monday.
