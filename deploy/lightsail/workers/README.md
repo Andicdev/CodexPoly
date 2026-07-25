@@ -165,6 +165,6 @@ docker compose --file compose.yml \
   up --detach --force-recreate resolution-worker
 ```
 
-The infrastructure administrator performs production Docker commands.
-`codexdeploy` can validate staging and apply approved database migrations but
-does not control the production Docker daemon.
+`codexdeploy` performs production Docker operations through `sudo -n`.
+Production secret values remain outside the normal workflow: use only the
+reviewed install scripts, name-only checks, and least-privilege Compose mounts.

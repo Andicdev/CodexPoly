@@ -86,11 +86,11 @@ Verify the initial staging invariants without returning database rows:
   -RemoteCommand @('/opt/codexpoly/config/codexpoly-staging-migrate')
 ```
 
-The production sudo rule permits only the second wrapper. It does not grant an
-interactive root shell, arbitrary sudo commands, the system Docker socket, or
-the database administrator password. Both wrappers execute SQL as
-`codexpoly_admin`, stop on the first error, and suppress raw PostgreSQL output
-so query results or error details cannot leak data.
+`codexdeploy` has broader production administration through `sudo -n`, but
+reviewed SQL must still use the production wrapper. Both wrappers execute SQL
+as `codexpoly_admin`, stop on the first error, and suppress raw PostgreSQL
+output so query results or error details cannot leak data. The wrapper does
+not reveal the database administrator password.
 
 The wrapper rejects empty SQL, input larger than 5 MiB, and psql meta-commands.
 It intentionally does not restrict PostgreSQL DDL or DML: the development task

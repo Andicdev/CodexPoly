@@ -12,11 +12,11 @@
 - Secret store: `/opt/codexpoly/secrets`
 - Name-only manifest: `/opt/codexpoly/config/secret-manifest.json`
 
-`codexdeploy` is not a member of the host Docker group and has no general
-`sudo` access. Its only production privilege is the exact root-owned
-`/usr/local/sbin/codexpoly-production-migrate` command. The host Docker daemon,
-production deployments, secrets, backups, and every other root operation
-remain under the infrastructure administrator's control.
+`codexdeploy` has non-interactive production administration through
+`sudo -n`, including Docker, deployment, and migration operations. This is an
+operational trust boundary, not permission to reveal credentials. Production
+secret values must still be handled only through the existing install and
+name-only check mechanisms and must never be read or printed.
 
 ## Secret model
 
@@ -62,9 +62,8 @@ derived hash.
 Any application process that is granted a secret can technically read that
 secret. "Use by name" prevents accidental exposure in development chats and
 deployment configuration; it cannot make a value unreadable to arbitrary code
-that receives it. For this reason, only reviewed production images are promoted
-by the infrastructure administrator, and `codexdeploy` cannot control the
-production Docker daemon.
+that receives it. For this reason, only reviewed immutable production images
+are promoted, and every service receives only the secret names it requires.
 
 The presence checker reports names only:
 
@@ -127,11 +126,11 @@ complete migrations through fixed stdin-only runners:
 sudo /usr/local/sbin/codexpoly-production-migrate < migration.sql
 ```
 
-The production runner is the only allowed sudo command. It runs SQL as
+The production runner remains the required path for reviewed SQL even though
+`codexdeploy` has broader production administration. It runs SQL as
 `codexpoly_admin`, stops on the first error, and never displays raw PostgreSQL
 output. It does not expose `POSTGRES_PASSWORD`. The SQL file or migration
-framework controls its own transaction. Production secret changes and restores
-remain in this infrastructure task.
+framework controls its own transaction.
 
 The installed PostgreSQL layout, application connection settings, migration
 boundary, and backup locations are documented in
@@ -162,6 +161,8 @@ directory.
 The development task may:
 
 - connect as `codexdeploy`;
+- use `sudo -n` for production deployment, Docker, migration, and recovery
+  operations;
 - use
   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/codexpoly_ssh.ps1`
   from the repository;
@@ -176,8 +177,7 @@ The development task may:
 It must not:
 
 - request or display secret values;
-- request any additional `sudo` access or membership in the host Docker group;
 - open public database or application ports;
-- modify `/opt/codexpoly/production` or `/opt/codexpoly/secrets`;
-- use any sudo command except the exact production migration runner;
+- bypass the existing secret install and name-only validation mechanisms;
+- mount a production secret into a service that does not require it;
 - rotate `ACCOUNTS_MASTER_KEY`.
