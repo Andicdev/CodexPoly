@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
 
 COPY cbr_trading cbr_trading
 COPY scripts scripts
+COPY deploy deploy
 COPY tests tests
 
 RUN python scripts/check_no_secrets.py
