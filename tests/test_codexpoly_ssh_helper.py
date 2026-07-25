@@ -25,6 +25,14 @@ class CodexPolySshHelperTests(unittest.TestCase):
             text,
         )
         self.assertIn(
+            "Position = 0",
+            text,
+        )
+        self.assertIn(
+            "ValueFromRemainingArguments = $true",
+            text,
+        )
+        self.assertIn(
             "Get-Content -LiteralPath $resolvedSqlFile -Raw",
             text,
         )

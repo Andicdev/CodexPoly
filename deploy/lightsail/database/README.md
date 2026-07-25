@@ -55,15 +55,36 @@ sudo /usr/local/sbin/codexpoly-production-migrate < migration.sql
 From the local CodexPoly workspace, use the SSH helper's SQL-only stdin mode:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File scripts/codexpoly_ssh.ps1 `
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+& scripts/codexpoly_ssh.ps1 `
   -StdinSqlFile cbr_trading/migrations/001_add_order_supervision_tables.sql `
-  /opt/codexpoly/config/codexpoly-staging-migrate
+  -RemoteCommand @('/opt/codexpoly/config/codexpoly-staging-migrate')
 ```
 
 `-StdinSqlFile` accepts only an existing `.sql` file and requires an explicit
 remote command. It cannot be used to upload environment files, private keys,
 or arbitrary release artifacts.
+
+After migrations `001` through `006`, the isolated staging database can be
+initialized with the reviewed non-secret earnings configuration:
+
+```powershell
+& scripts/codexpoly_ssh.ps1 `
+  -StdinSqlFile deploy/lightsail/seeds/001_initial_earnings_configuration.sql `
+  -RemoteCommand @('/opt/codexpoly/config/codexpoly-staging-migrate')
+```
+
+The seed is idempotent. It copies no runtime history and no trading-account
+row. Its three execution profiles use account name `abccbaq` and remain
+`DISABLED`.
+
+Verify the initial staging invariants without returning database rows:
+
+```powershell
+& scripts/codexpoly_ssh.ps1 `
+  -StdinSqlFile deploy/lightsail/checks/verify_initial_earnings_configuration.sql `
+  -RemoteCommand @('/opt/codexpoly/config/codexpoly-staging-migrate')
+```
 
 The production sudo rule permits only the second wrapper. It does not grant an
 interactive root shell, arbitrary sudo commands, the system Docker socket, or

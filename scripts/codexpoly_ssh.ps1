@@ -1,10 +1,13 @@
 [CmdletBinding()]
 param(
-    [Parameter()]
-    [string]$StdinSqlFile,
+    [Parameter(
+        Position = 0,
+        ValueFromRemainingArguments = $true
+    )]
+    [string[]]$RemoteCommand,
 
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$RemoteCommand
+    [Parameter()]
+    [string]$StdinSqlFile
 )
 
 $ErrorActionPreference = "Stop"
