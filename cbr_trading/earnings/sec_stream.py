@@ -22,6 +22,18 @@ SEC_STREAM_ENDPOINT = "wss://stream.sec-api.io"
 class SecStreamTransportError(RuntimeError):
     """Sanitized SEC transport failure that cannot reveal its credential."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_code: str | None = None,
+    ):
+        super().__init__(message)
+        self.diagnostic_code = (
+            str(diagnostic_code or "").strip()
+            or type(self).__name__
+        )
+
 
 class _AsyncWebSocket(Protocol):
     def __aiter__(self) -> AsyncIterator[object]: ...
@@ -177,9 +189,11 @@ class SecStreamEarningsTransport:
         except SecStreamTransportError:
             raise
         except Exception as exc:
+            diagnostic_code = _stream_error_code(exc)
             raise SecStreamTransportError(
                 "SEC earnings stream failed: "
-                f"{type(exc).__name__}"
+                f"{diagnostic_code}",
+                diagnostic_code=diagnostic_code,
             ) from None
         finally:
             uri = ""
@@ -324,6 +338,20 @@ def _default_connect_factory() -> ConnectFactory:
             "SEC stream support requires the websockets package"
         ) from exc
     return connect
+
+
+def _stream_error_code(exc: BaseException) -> str:
+    error_type = type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    if (
+        isinstance(status, int)
+        and 100 <= status <= 599
+    ):
+        return f"{error_type}:http_{status}"
+    return error_type
 
 
 def _normalized_items(value: object) -> tuple[str, ...]:

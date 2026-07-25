@@ -20,6 +20,7 @@ from cbr_trading.earnings.repository import SqlAlchemyEarningsStore
 from cbr_trading.earnings.sec_stream import (
     SecEarningsWatch,
     SecStreamEarningsTransport,
+    SecStreamTransportError,
 )
 from cbr_trading.earnings.settings import EarningsWorkerSettings
 from cbr_trading.secret_guard import redact_exception
@@ -110,12 +111,15 @@ class EarningsHostedShadowWorker:
                 except Exception as exc:
                     self._connected = False
                     self._error_count += 1
+                    error_code = (
+                        exc.diagnostic_code
+                        if isinstance(exc, SecStreamTransportError)
+                        else type(exc).__name__
+                    )
                     self._logger.warning(
                         "SEC earnings stream cycle failed; "
-                        "reconnecting error=%s",
-                        redact_exception(
-                            RuntimeError(type(exc).__name__)
-                        ),
+                        "reconnecting error_code=%s",
+                        error_code,
                     )
                 await asyncio.sleep(delay)
                 delay = min(

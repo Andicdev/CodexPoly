@@ -8,6 +8,7 @@ from cbr_trading.earnings.sec_stream import (
     SecEarningsWatch,
     SecStreamEarningsTransport,
     SecStreamTransportError,
+    _stream_error_code,
     decode_sec_stream_message,
     evaluate_sec_earnings_filing,
 )
@@ -63,6 +64,22 @@ def _filing(**changes: object) -> dict[str, object]:
 
 
 class SecEarningsFilterTests(unittest.TestCase):
+    def test_handshake_diagnostic_includes_only_http_status(self) -> None:
+        class _Response:
+            status_code = 401
+
+        class _HandshakeFailure(RuntimeError):
+            response = _Response()
+
+        error = _HandshakeFailure(
+            "sensitive response details must not be used"
+        )
+
+        self.assertEqual(
+            _stream_error_code(error),
+            "_HandshakeFailure:http_401",
+        )
+
     def test_accepts_only_strict_initial_earnings_exhibit(self) -> None:
         decision = evaluate_sec_earnings_filing(
             _filing(),
@@ -254,6 +271,10 @@ class SecEarningsTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn(credential, str(caught.exception))
         self.assertNotIn(credential, repr(transport))
+        self.assertEqual(
+            caught.exception.diagnostic_code,
+            "RuntimeError",
+        )
 
 
 if __name__ == "__main__":
