@@ -215,7 +215,8 @@ earnings shadow source service.
 - instances: exactly 1;
 - networking: no public ports;
 - command: `python -u -m cbr_trading.resolution_hosted`;
-- schema behavior: readiness checks only; it never applies migration 005;
+- schema behavior: readiness checks only; it never applies migrations 005
+  or 006;
 - initial mode: `shadow`.
 
 Safe initial values:
@@ -238,7 +239,7 @@ trading secret group containing `ACCOUNTS_MASTER_KEY`, and the ordinary
 
 The promotion sequence is:
 
-1. apply migration 005 explicitly while the new service is stopped;
+1. apply migrations 005 and 006 explicitly while the new service is stopped;
 2. configure NVTS, WWD, and BBBY profiles; they remain `DISABLED`;
 3. switch the service to `preflight`, attach the trading secret group, and
    enable one in-window profile at a time;

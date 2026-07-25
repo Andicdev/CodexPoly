@@ -8,11 +8,51 @@ from typing import Any, Mapping
 
 from cbr_trading.domain.intents import (
     KeepOpenPolicy,
+    OrderLifecyclePolicy,
     OrderSide,
     OrderTemplate,
     Outcome,
     RepriceOnTickChange,
 )
+
+
+@dataclass(frozen=True)
+class ResolutionProfileTemplate:
+    """Database-backed defaults copied into future execution profiles."""
+
+    template_key: str
+    yes_desired_price: Decimal
+    no_desired_price: Decimal
+    quantity: Decimal
+    lifecycle_policy: OrderLifecyclePolicy
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        template_key = str(self.template_key or "").strip()
+        if not template_key:
+            raise ValueError("template_key is required")
+        object.__setattr__(self, "template_key", template_key)
+        for name in ("yes_desired_price", "no_desired_price"):
+            object.__setattr__(
+                self,
+                name,
+                _profile_price(getattr(self, name), name),
+            )
+        object.__setattr__(
+            self,
+            "quantity",
+            _profile_quantity(self.quantity),
+        )
+        if not isinstance(
+            self.lifecycle_policy,
+            (KeepOpenPolicy, RepriceOnTickChange),
+        ):
+            raise TypeError("unsupported lifecycle_policy")
+        object.__setattr__(
+            self,
+            "metadata",
+            MappingProxyType(dict(self.metadata)),
+        )
 
 
 @dataclass(frozen=True)
@@ -51,16 +91,16 @@ class ResolutionExecutionProfile:
         if not self.source_reference.lower().startswith("https://"):
             raise ValueError("source_reference must use https")
         for name in ("yes_desired_price", "no_desired_price"):
-            price = Decimal(str(getattr(self, name)))
-            if not price.is_finite() or price <= 0 or price >= 1:
-                raise ValueError(
-                    f"{name} must be finite and between 0 and 1"
-                )
-            object.__setattr__(self, name, price)
-        quantity = Decimal(str(self.quantity))
-        if not quantity.is_finite() or quantity <= 0:
-            raise ValueError("quantity must be finite and positive")
-        object.__setattr__(self, "quantity", quantity)
+            object.__setattr__(
+                self,
+                name,
+                _profile_price(getattr(self, name), name),
+            )
+        object.__setattr__(
+            self,
+            "quantity",
+            _profile_quantity(self.quantity),
+        )
         prepare_from = _as_utc(self.prepare_from, "prepare_from")
         expires_at = _as_utc(self.expires_at, "expires_at")
         if expires_at <= prepare_from:
@@ -87,6 +127,22 @@ def _as_utc(value: datetime, name: str) -> datetime:
     ):
         raise ValueError(f"{name} must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _profile_price(value: Decimal, name: str) -> Decimal:
+    price = Decimal(str(value))
+    if not price.is_finite() or price <= 0 or price >= 1:
+        raise ValueError(
+            f"{name} must be finite and between 0 and 1"
+        )
+    return price
+
+
+def _profile_quantity(value: Decimal) -> Decimal:
+    quantity = Decimal(str(value))
+    if not quantity.is_finite() or quantity <= 0:
+        raise ValueError("quantity must be finite and positive")
+    return quantity
 
 
 def order_templates_from_profile(

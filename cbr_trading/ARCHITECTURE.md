@@ -377,6 +377,13 @@ window. Both templates must prepare successfully before facts are polled. A
 condition mismatch with the earnings source rule fails before authentication
 or execution.
 
+`resolution_profile_templates` is a separate additive configuration table.
+The `default` row is copied when an execution profile is created or updated;
+editing it never mutates existing profiles. Per-profile overrides remain
+available for exceptional markets. The seeded default uses desired price
+`0.999` for either outcome, share quantity `50`, and the `0.01 -> 0.001`
+single-reprice policy.
+
 The hosted service defaults to `shadow`, where the complete decision path
 ends at a non-submitting executor. `preflight` authenticates and pre-signs
 both alternatives without creating execution claims. `live` uses

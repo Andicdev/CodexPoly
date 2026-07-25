@@ -14,13 +14,18 @@ from cbr_trading.domain.intents import (
 )
 from cbr_trading.orchestration.contracts import (
     ResolutionExecutionProfile,
+    ResolutionProfileTemplate,
 )
 
 
-_MIGRATION_PATH = (
+_MIGRATION_PATHS = tuple(
     Path(__file__).resolve().parents[1]
     / "migrations"
-    / "005_add_resolution_execution_profiles.sql"
+    / name
+    for name in (
+        "005_add_resolution_execution_profiles.sql",
+        "006_add_resolution_profile_templates.sql",
+    )
 )
 
 _SCHEMA_READY_SQL = """
@@ -33,6 +38,14 @@ SELECT
         WHERE table_schema = current_schema()
           AND table_name = 'resolution_execution_profiles'
     ) AS profiles_columns,
+    to_regclass('resolution_profile_templates') IS NOT NULL
+        AS templates_table,
+    (
+        SELECT count(*) = 12
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'resolution_profile_templates'
+    ) AS templates_columns,
     EXISTS (
         SELECT 1
         FROM pg_index
@@ -48,7 +61,15 @@ SELECT
             'ux_resolution_execution_profiles_scope'
         )
           AND indisunique
-    ) AS profile_scope_index
+    ) AS profile_scope_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_index
+        WHERE indexrelid = to_regclass(
+            'ux_resolution_profile_templates_key'
+        )
+          AND indisunique
+    ) AS template_key_index
 """.strip()
 
 _UPSERT_SQL = """
@@ -148,6 +169,58 @@ WHERE profile_key = :profile_key
 RETURNING id
 """.strip()
 
+_LOAD_TEMPLATE_SQL = """
+SELECT
+    template_key,
+    yes_desired_price,
+    no_desired_price,
+    quantity,
+    lifecycle_kind,
+    old_tick,
+    new_tick,
+    max_reprices,
+    metadata
+FROM resolution_profile_templates
+WHERE template_key = :template_key
+""".strip()
+
+_UPSERT_TEMPLATE_SQL = """
+INSERT INTO resolution_profile_templates (
+    template_key,
+    yes_desired_price,
+    no_desired_price,
+    quantity,
+    lifecycle_kind,
+    old_tick,
+    new_tick,
+    max_reprices,
+    metadata
+)
+VALUES (
+    :template_key,
+    :yes_desired_price,
+    :no_desired_price,
+    :quantity,
+    :lifecycle_kind,
+    :old_tick,
+    :new_tick,
+    :max_reprices,
+    CAST(:metadata AS jsonb)
+)
+ON CONFLICT (template_key) DO UPDATE
+SET
+    yes_desired_price = EXCLUDED.yes_desired_price,
+    no_desired_price = EXCLUDED.no_desired_price,
+    quantity = EXCLUDED.quantity,
+    lifecycle_kind = EXCLUDED.lifecycle_kind,
+    old_tick = EXCLUDED.old_tick,
+    new_tick = EXCLUDED.new_tick,
+    max_reprices = EXCLUDED.max_reprices,
+    metadata = EXCLUDED.metadata,
+    updated_at = now()
+RETURNING id
+""".strip()
+
 
 class ResolutionProfileStoreError(RuntimeError):
     """Sanitized persistence failure for execution profiles."""
@@ -177,11 +250,12 @@ class SqlAlchemyResolutionProfileStore:
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
-                session.execute(
-                    text_factory(
-                        _MIGRATION_PATH.read_text(encoding="utf-8")
+                for migration_path in _MIGRATION_PATHS:
+                    session.execute(
+                        text_factory(
+                            migration_path.read_text(encoding="utf-8")
+                        )
                     )
-                )
                 session.commit()
         except Exception as exc:
             raise ResolutionProfileStoreError(
@@ -206,13 +280,61 @@ class SqlAlchemyResolutionProfileStore:
             for name in (
                 "profiles_table",
                 "profiles_columns",
+                "templates_table",
+                "templates_columns",
                 "profile_key_index",
                 "profile_scope_index",
+                "template_key_index",
             )
         ):
             raise ResolutionProfileStoreError(
-                "Resolution execution profile table is not ready"
+                "Resolution profile schema is not ready"
             )
+
+    def load_template(
+        self,
+        template_key: str = "default",
+    ) -> ResolutionProfileTemplate:
+        normalized_key = str(template_key or "").strip()
+        if not normalized_key:
+            raise ValueError("template_key is required")
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_LOAD_TEMPLATE_SQL),
+                    {"template_key": normalized_key},
+                ).mappings().one_or_none()
+        except Exception as exc:
+            raise ResolutionProfileStoreError(
+                "Failed to load resolution profile template: "
+                f"{type(exc).__name__}"
+            ) from None
+        if row is None:
+            raise ResolutionProfileStoreError(
+                "Resolution profile template does not exist"
+            )
+        return _template_from_row(row)
+
+    def save_template(
+        self,
+        template: ResolutionProfileTemplate,
+    ) -> StoredResolutionProfile:
+        params = _template_params(template)
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_UPSERT_TEMPLATE_SQL),
+                    params,
+                ).mappings().one()
+                session.commit()
+        except Exception as exc:
+            raise ResolutionProfileStoreError(
+                "Failed to save resolution profile template: "
+                f"{type(exc).__name__}"
+            ) from None
+        return StoredResolutionProfile(row_id=int(row["id"]))
 
     def save(
         self,
@@ -383,6 +505,33 @@ def _profile_params(
     }
 
 
+def _template_params(
+    template: ResolutionProfileTemplate,
+) -> dict[str, Any]:
+    policy = template.lifecycle_policy
+    if isinstance(policy, RepriceOnTickChange):
+        lifecycle_kind = policy.kind
+        old_tick: Decimal | None = policy.old_tick
+        new_tick: Decimal | None = policy.new_tick
+        max_reprices: int | None = policy.max_reprices
+    else:
+        lifecycle_kind = policy.kind
+        old_tick = None
+        new_tick = None
+        max_reprices = None
+    return {
+        "template_key": template.template_key,
+        "yes_desired_price": template.yes_desired_price,
+        "no_desired_price": template.no_desired_price,
+        "quantity": template.quantity,
+        "lifecycle_kind": lifecycle_kind,
+        "old_tick": old_tick,
+        "new_tick": new_tick,
+        "max_reprices": max_reprices,
+        "metadata": _json_dumps(template.metadata),
+    }
+
+
 def _profile_from_row(row: Mapping[str, Any]) -> ResolutionExecutionProfile:
     kind = str(row["lifecycle_kind"])
     if kind == "keep_open":
@@ -411,6 +560,36 @@ def _profile_from_row(row: Mapping[str, Any]) -> ResolutionExecutionProfile:
         expires_at=row["expires_at"],
         lifecycle_policy=policy,
         metadata=_json_mapping(row.get("metadata")),
+    )
+
+
+def _template_from_row(
+    row: Mapping[str, Any],
+) -> ResolutionProfileTemplate:
+    return ResolutionProfileTemplate(
+        template_key=str(row["template_key"]),
+        yes_desired_price=Decimal(str(row["yes_desired_price"])),
+        no_desired_price=Decimal(str(row["no_desired_price"])),
+        quantity=Decimal(str(row["quantity"])),
+        lifecycle_policy=_lifecycle_policy_from_row(row),
+        metadata=_json_mapping(row.get("metadata")),
+    )
+
+
+def _lifecycle_policy_from_row(
+    row: Mapping[str, Any],
+) -> KeepOpenPolicy | RepriceOnTickChange:
+    kind = str(row["lifecycle_kind"])
+    if kind == "keep_open":
+        return KeepOpenPolicy()
+    if kind == "reprice_on_tick_change":
+        return RepriceOnTickChange(
+            old_tick=Decimal(str(row["old_tick"])),
+            new_tick=Decimal(str(row["new_tick"])),
+            max_reprices=int(row["max_reprices"]),
+        )
+    raise ResolutionProfileStoreError(
+        "Stored resolution profile has unsupported lifecycle policy"
     )
 
 

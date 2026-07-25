@@ -2,6 +2,7 @@
 
 from cbr_trading.orchestration.contracts import (
     ResolutionExecutionProfile,
+    ResolutionProfileTemplate,
     order_templates_from_profile,
 )
 from cbr_trading.orchestration.repository import (
@@ -11,6 +12,7 @@ from cbr_trading.orchestration.repository import (
 
 __all__ = [
     "ResolutionExecutionProfile",
+    "ResolutionProfileTemplate",
     "ResolutionProfileStoreError",
     "SqlAlchemyResolutionProfileStore",
     "order_templates_from_profile",

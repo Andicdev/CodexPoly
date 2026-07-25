@@ -34,6 +34,12 @@ executor, and migration 004 does not seed an armed trading rule.
 parameters and defaults every profile to `DISABLED`; it does not arm an
 executor or submit an order.
 
+`006_add_resolution_profile_templates.sql` creates only
+`resolution_profile_templates` and idempotently seeds the `default` row with
+YES/NO desired price `0.999`, quantity `50`, and the `0.01 -> 0.001`
+single-reprice policy. `ON CONFLICT DO NOTHING` preserves later operator
+edits, and existing execution profiles are never changed.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

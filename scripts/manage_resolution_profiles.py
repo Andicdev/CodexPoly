@@ -16,6 +16,7 @@ from cbr_trading.earnings import (
 )
 from cbr_trading.orchestration import (
     ResolutionExecutionProfile,
+    ResolutionProfileTemplate,
     SqlAlchemyResolutionProfileStore,
 )
 from cbr_trading.secret_guard import redact_exception
@@ -53,6 +54,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "schema_ready": True,
             "migration_applied": bool(args.apply),
         }
+        if args.show_template:
+            template = profile_store.load_template(
+                args.show_template
+            )
+            payload["template"] = _template_payload(template)
+        if args.set_template:
+            current_template = profile_store.load_template(
+                args.set_template
+            )
+            template = _template_from_args(
+                current_template,
+                args=args,
+            )
+            stored = profile_store.save_template(template)
+            payload["template_updated"] = {
+                **_template_payload(template),
+                "row_id": stored.row_id,
+            }
         if args.configure_earnings:
             earnings_store = SqlAlchemyEarningsStore(
                 database_url=database.url
@@ -62,7 +81,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 earnings_store.load_active_rules(),
                 ticker=args.configure_earnings,
             )
-            profile = _profile_from_args(rule, args=args)
+            template = profile_store.load_template(
+                args.template_key
+            )
+            profile = _profile_from_args(
+                rule,
+                args=args,
+                template=template,
+            )
             stored = profile_store.save(profile)
             payload["configured"] = {
                 "profile_key": profile.profile_key,
@@ -70,6 +96,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "ticker": rule.ticker,
                 "row_id": stored.row_id,
                 "status": "DISABLED",
+                "template_key": template.template_key,
+                "yes_desired_price": profile.yes_desired_price,
+                "no_desired_price": profile.no_desired_price,
+                "quantity": profile.quantity,
             }
         if args.enable_profile or args.disable_profile:
             profile_key = (
@@ -108,21 +138,42 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Explicitly manage additive source-neutral "
-            "resolution execution profiles."
+            "resolution execution profiles and templates."
         )
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Explicitly apply additive migration 005.",
+        help="Explicitly apply additive migrations 005 and 006.",
     )
-    parser.add_argument(
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument(
         "--configure-earnings",
         metavar="TICKER",
         help=(
             "Create or update one disabled profile from an active "
             "earnings source rule."
         ),
+    )
+    action.add_argument(
+        "--show-template",
+        metavar="TEMPLATE_KEY",
+        help="Show one non-secret resolution profile template.",
+    )
+    action.add_argument(
+        "--set-template",
+        metavar="TEMPLATE_KEY",
+        help=(
+            "Update one existing template. Omitted values retain "
+            "their stored settings."
+        ),
+    )
+    action.add_argument("--enable-profile", metavar="PROFILE_KEY")
+    action.add_argument("--disable-profile", metavar="PROFILE_KEY")
+    parser.add_argument(
+        "--template-key",
+        default="default",
+        help="Stored template used by --configure-earnings.",
     )
     parser.add_argument("--account-name")
     parser.add_argument("--yes-price", type=Decimal)
@@ -141,26 +192,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lifecycle",
         choices=("reprice_on_tick_change", "keep_open"),
-        default="reprice_on_tick_change",
     )
     parser.add_argument(
         "--old-tick",
         type=Decimal,
-        default=Decimal("0.01"),
     )
     parser.add_argument(
         "--new-tick",
         type=Decimal,
-        default=Decimal("0.001"),
     )
     parser.add_argument(
         "--max-reprices",
         type=int,
-        default=1,
     )
-    status = parser.add_mutually_exclusive_group()
-    status.add_argument("--enable-profile", metavar="PROFILE_KEY")
-    status.add_argument("--disable-profile", metavar="PROFILE_KEY")
     return parser
 
 
@@ -168,12 +212,10 @@ def _profile_from_args(
     rule: EarningsMarketRule,
     *,
     args: argparse.Namespace,
+    template: ResolutionProfileTemplate,
 ) -> ResolutionExecutionProfile:
     required = {
         "--account-name": args.account_name,
-        "--yes-price": args.yes_price,
-        "--no-price": args.no_price,
-        "--quantity": args.quantity,
         "--prepare-from": args.prepare_from,
         "--expires-at": args.expires_at,
     }
@@ -191,14 +233,10 @@ def _profile_from_args(
         raise ValueError(
             "earnings source rule has no Polymarket identity"
         )
-    if args.lifecycle == "keep_open":
-        policy = KeepOpenPolicy()
-    else:
-        policy = RepriceOnTickChange(
-            old_tick=args.old_tick,
-            new_tick=args.new_tick,
-            max_reprices=args.max_reprices,
-        )
+    policy = _policy_from_args(
+        args,
+        fallback=template.lifecycle_policy,
+    )
     return ResolutionExecutionProfile(
         profile_key=(
             f"earnings-{rule.ticker.lower()}-"
@@ -211,17 +249,138 @@ def _profile_from_args(
         ),
         account_name=args.account_name,
         condition_id=rule.condition_id,
-        yes_desired_price=args.yes_price,
-        no_desired_price=args.no_price,
-        quantity=args.quantity,
+        yes_desired_price=(
+            args.yes_price
+            if args.yes_price is not None
+            else template.yes_desired_price
+        ),
+        no_desired_price=(
+            args.no_price
+            if args.no_price is not None
+            else template.no_desired_price
+        ),
+        quantity=(
+            args.quantity
+            if args.quantity is not None
+            else template.quantity
+        ),
         prepare_from=args.prepare_from,
         expires_at=args.expires_at,
         lifecycle_policy=policy,
         metadata={
             "rule_key": rule.rule_key,
             "ticker": rule.ticker,
+            "profile_template_key": template.template_key,
         },
     )
+
+
+def _template_from_args(
+    current: ResolutionProfileTemplate,
+    *,
+    args: argparse.Namespace,
+) -> ResolutionProfileTemplate:
+    return ResolutionProfileTemplate(
+        template_key=current.template_key,
+        yes_desired_price=(
+            args.yes_price
+            if args.yes_price is not None
+            else current.yes_desired_price
+        ),
+        no_desired_price=(
+            args.no_price
+            if args.no_price is not None
+            else current.no_desired_price
+        ),
+        quantity=(
+            args.quantity
+            if args.quantity is not None
+            else current.quantity
+        ),
+        lifecycle_policy=_policy_from_args(
+            args,
+            fallback=current.lifecycle_policy,
+        ),
+        metadata=current.metadata,
+    )
+
+
+def _policy_from_args(
+    args: argparse.Namespace,
+    *,
+    fallback: KeepOpenPolicy | RepriceOnTickChange,
+) -> KeepOpenPolicy | RepriceOnTickChange:
+    requested_kind = args.lifecycle or fallback.kind
+    tick_overridden = any(
+        value is not None
+        for value in (
+            args.old_tick,
+            args.new_tick,
+            args.max_reprices,
+        )
+    )
+    if requested_kind == "keep_open":
+        if tick_overridden:
+            raise ValueError(
+                "tick settings require reprice_on_tick_change"
+            )
+        return KeepOpenPolicy()
+    if isinstance(fallback, RepriceOnTickChange):
+        old_tick = (
+            args.old_tick
+            if args.old_tick is not None
+            else fallback.old_tick
+        )
+        new_tick = (
+            args.new_tick
+            if args.new_tick is not None
+            else fallback.new_tick
+        )
+        max_reprices = (
+            args.max_reprices
+            if args.max_reprices is not None
+            else fallback.max_reprices
+        )
+    else:
+        old_tick = args.old_tick
+        new_tick = args.new_tick
+        max_reprices = args.max_reprices
+    if (
+        old_tick is None
+        or new_tick is None
+        or max_reprices is None
+    ):
+        raise ValueError(
+            "reprice_on_tick_change requires old tick, new tick, "
+            "and max reprices"
+        )
+    return RepriceOnTickChange(
+        old_tick=old_tick,
+        new_tick=new_tick,
+        max_reprices=max_reprices,
+    )
+
+
+def _template_payload(
+    template: ResolutionProfileTemplate,
+) -> dict[str, object]:
+    policy = template.lifecycle_policy
+    payload: dict[str, object] = {
+        "template_key": template.template_key,
+        "yes_desired_price": template.yes_desired_price,
+        "no_desired_price": template.no_desired_price,
+        "quantity": template.quantity,
+        "lifecycle": policy.kind,
+    }
+    if isinstance(policy, RepriceOnTickChange):
+        payload.update(
+            {
+                "old_tick": policy.old_tick,
+                "new_tick": policy.new_tick,
+                "max_reprices": policy.max_reprices,
+            }
+        )
+    return payload
 
 
 def _select_rule(
