@@ -176,7 +176,11 @@ EARNINGS_HEARTBEAT_SEC=60
 ```
 
 Set `EARNINGS_HTTP_USER_AGENT` to an operator-approved SEC identification
-string. It is sent only to public SEC exhibit URLs and is not logged.
+string. For every accepted exhibit, the worker races the public SEC URL
+against the SEC-API Download API and parses the first validated response.
+The identification string is sent only on the direct SEC route and is not
+logged. The SEC-API credential is sent to `archive.sec-api.io` in the
+`Authorization` header; it is never placed in the document URL.
 
 Create a restricted Secret Group for this service and enter manually:
 

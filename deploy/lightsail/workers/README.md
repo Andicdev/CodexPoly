@@ -33,7 +33,10 @@ Secret presence is checked against `resolution-worker` for the base stack and
 
 Compose requires `CODEXPOLY_IMAGE_REF` to identify the reviewed image. Use an
 immutable digest for production. `EARNINGS_HTTP_USER_AGENT` must contain the
-operator-approved SEC identity. These values are deployment configuration, not
+operator-approved SEC identity. It is used only by the direct SEC side of the
+parallel document fetch; the SEC-API archive side authenticates through a
+header. Aggregate route latency and the winner are logged without URLs,
+documents, or credentials. These values are deployment configuration, not
 secret values.
 
 The trading overlay additionally requires:

@@ -18,7 +18,7 @@ class EarningsWorkerSettings:
     database_source: str = "DATABASE_URL_SERVER_EXT"
     database_error: str | None = None
     sec_api_key: str | None = field(default=None, repr=False)
-    http_user_agent: str = "CodexPoly/1.0 earnings-source"
+    http_user_agent: str = field(default="", repr=False)
     fetch_timeout: float = 15.0
     max_document_bytes: int = 8 * 1024 * 1024
     max_fetch_attempts: int = 3
@@ -64,7 +64,6 @@ class EarningsWorkerSettings:
             ),
             http_user_agent=(
                 _clean(env.get("EARNINGS_HTTP_USER_AGENT"))
-                or "CodexPoly/1.0 earnings-source"
             ),
             fetch_timeout=float(
                 _clean(env.get("EARNINGS_FETCH_TIMEOUT_SEC"))

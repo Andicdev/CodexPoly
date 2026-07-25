@@ -48,8 +48,14 @@ def _source(rule) -> EarningsDocumentCandidate:
         form_type="8-K",
         items=("Item 2.02", "Item 9.01"),
         document_type="EX-99.1",
-        source_url="https://www.sec.gov/exhibit991.htm",
-        filing_url="https://www.sec.gov/filing.htm",
+        source_url=(
+            "https://www.sec.gov/Archives/edgar/data/"
+            "1821769/000000000026000001/exhibit991.htm"
+        ),
+        filing_url=(
+            "https://www.sec.gov/Archives/edgar/data/"
+            "1821769/000000000026000001/filing.htm"
+        ),
         filed_at=_DETECTED,
         received_at=_DETECTED,
         authority=SourceAuthority.OFFICIAL_COMPANY,

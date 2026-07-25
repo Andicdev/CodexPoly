@@ -148,9 +148,11 @@ class EarningsHostedShadowWorker:
             )
 
         fetcher = SecDocumentFetcher(
+            api_key=self._settings.sec_api_key or "",
             user_agent=self._settings.http_user_agent,
             timeout=self._settings.fetch_timeout,
             max_bytes=self._settings.max_document_bytes,
+            logger=self._logger,
         )
         processor = EarningsShadowProcessor(
             store=self._store,

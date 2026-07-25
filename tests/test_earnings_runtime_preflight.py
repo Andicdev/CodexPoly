@@ -49,6 +49,9 @@ class EarningsRuntimePreflightTests(unittest.TestCase):
                 environ={
                     "CBR_DATABASE_URL": database_url,
                     "SEC_API_KEY": sec_key,
+                    "EARNINGS_HTTP_USER_AGENT": (
+                        "CodexPoly test@example.com"
+                    ),
                 },
                 store_factory=factory,
             )
@@ -79,6 +82,9 @@ class EarningsRuntimePreflightTests(unittest.TestCase):
             exit_code = main(
                 environ={
                     "CBR_DATABASE_URL": "postgresql://configured",
+                    "EARNINGS_HTTP_USER_AGENT": (
+                        "CodexPoly test@example.com"
+                    ),
                 },
                 store_factory=factory,
             )
@@ -104,6 +110,9 @@ class EarningsRuntimePreflightTests(unittest.TestCase):
                 environ={
                     "CBR_DATABASE_URL": "postgresql://configured",
                     "SEC_API_KEY": "configured",
+                    "EARNINGS_HTTP_USER_AGENT": (
+                        "CodexPoly test@example.com"
+                    ),
                 },
                 store_factory=factory,
             )

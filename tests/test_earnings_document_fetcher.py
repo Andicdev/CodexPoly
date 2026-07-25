@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+import threading
 import unittest
+from dataclasses import replace
 
 from cbr_trading.earnings.document_fetcher import (
     SecDocumentFetchError,
@@ -22,7 +25,7 @@ class _Response:
         self,
         document: bytes,
         *,
-        url: str = "https://www.sec.gov/exhibit991.htm",
+        url: str,
         content_type: str = "text/html",
     ):
         self._document = document
@@ -43,77 +46,203 @@ class _Response:
 
 
 class SecDocumentFetcherTests(unittest.TestCase):
-    def test_fetches_bounded_public_sec_document_without_auth(self) -> None:
-        requests = []
+    def test_direct_route_can_win_without_forwarding_auth(self) -> None:
+        direct_requests = []
+        archive_requests = []
+        archive_started = threading.Event()
+        release_archive = threading.Event()
 
-        def opener(request, *, timeout: float):
-            requests.append((request, timeout))
-            return _Response(b"<html>earnings</html>")
+        def direct_opener(request, *, timeout: float):
+            direct_requests.append((request, timeout))
+            if not archive_started.wait(1):
+                raise AssertionError("archive route did not start")
+            return _Response(
+                b"<html>direct</html>",
+                url=request.full_url,
+            )
+
+        def archive_opener(request, *, timeout: float):
+            archive_requests.append((request, timeout))
+            archive_started.set()
+            release_archive.wait(1)
+            return _Response(
+                b"<html>archive</html>",
+                url=request.full_url,
+            )
 
         fetcher = SecDocumentFetcher(
-            user_agent="CodexPoly test agent",
+            api_key="test-api-key",
+            user_agent="CodexPoly test@example.com",
             timeout=7,
             max_bytes=4096,
-            opener=opener,
+            direct_opener=direct_opener,
+            archive_opener=archive_opener,
         )
-        document = fetcher.fetch(
-            _source(nvts_q2_2026_shadow_rule())
-        )
+        try:
+            document = fetcher.fetch(
+                _source(nvts_q2_2026_shadow_rule())
+            )
+        finally:
+            release_archive.set()
 
-        self.assertEqual(document, b"<html>earnings</html>")
-        request, timeout = requests[0]
+        self.assertEqual(document, b"<html>direct</html>")
+        request, timeout = direct_requests[0]
         self.assertEqual(timeout, 7)
         self.assertEqual(
             request.get_header("User-agent"),
-            "CodexPoly test agent",
+            "CodexPoly test@example.com",
         )
         self.assertIsNone(request.get_header("Authorization"))
+        archive_request, _ = archive_requests[0]
+        self.assertEqual(
+            archive_request.full_url,
+            (
+                "https://archive.sec-api.io/1821769/"
+                "000000000026000001/exhibit991.htm"
+            ),
+        )
+        self.assertEqual(
+            archive_request.get_header("Authorization"),
+            "test-api-key",
+        )
+        self.assertNotIn("test-api-key", archive_request.full_url)
 
-    def test_rejects_non_sec_redirect_and_oversized_document(self) -> None:
+    def test_archive_route_can_win_without_waiting_for_direct(self) -> None:
+        release_direct = threading.Event()
+
+        def direct_opener(request, *, timeout: float):
+            release_direct.wait(1)
+            return _Response(
+                b"<html>direct</html>",
+                url=request.full_url,
+            )
+
+        def archive_opener(request, *, timeout: float):
+            return _Response(
+                b"<html>archive</html>",
+                url=request.full_url,
+            )
+
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="CodexPoly test@example.com",
+            timeout=5,
+            max_bytes=4096,
+            direct_opener=direct_opener,
+            archive_opener=archive_opener,
+        )
+        try:
+            document = fetcher.fetch(
+                _source(nvts_q2_2026_shadow_rule())
+            )
+        finally:
+            release_direct.set()
+
+        self.assertEqual(document, b"<html>archive</html>")
+
+    def test_rejects_invalid_redirects_and_oversized_documents(self) -> None:
         redirected = SecDocumentFetcher(
+            api_key="test-api-key",
             user_agent="test",
             timeout=5,
             max_bytes=4096,
-            opener=lambda *_args, **_kwargs: _Response(
+            direct_opener=lambda *_args, **_kwargs: _Response(
+                b"document",
+                url="https://example.com/document",
+            ),
+            archive_opener=lambda *_args, **_kwargs: _Response(
                 b"document",
                 url="https://example.com/document",
             ),
         )
         with self.assertRaisesRegex(
             SecDocumentFetchError,
-            "SEC domain",
+            "all configured routes",
         ):
             redirected.fetch(
                 _source(nvts_q2_2026_shadow_rule())
             )
 
         oversized = SecDocumentFetcher(
+            api_key="test-api-key",
             user_agent="test",
             timeout=5,
             max_bytes=1024,
-            opener=lambda *_args, **_kwargs: _Response(
-                b"x" * 1025
+            direct_opener=lambda request, **_kwargs: _Response(
+                b"x" * 1025,
+                url=request.full_url,
+            ),
+            archive_opener=lambda request, **_kwargs: _Response(
+                b"x" * 1025,
+                url=request.full_url,
             ),
         )
         with self.assertRaisesRegex(
             SecDocumentFetchError,
-            "size limit",
+            "all configured routes",
         ):
             oversized.fetch(
                 _source(nvts_q2_2026_shadow_rule())
             )
 
-    def test_network_exception_is_sanitized_to_type(self) -> None:
+    def test_inline_viewer_url_is_normalized_for_both_routes(self) -> None:
+        requests = []
+        both_routes_started = threading.Barrier(2)
+
+        def opener(request, *, timeout: float):
+            requests.append(request)
+            both_routes_started.wait(1)
+            return _Response(b"document", url=request.full_url)
+
+        candidate = replace(
+            _source(nvts_q2_2026_shadow_rule()),
+            source_url=(
+                "https://www.sec.gov/ix?doc=/Archives/edgar/data/"
+                "1821769/000000000026000001/exhibit991.htm"
+            ),
+        )
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="test",
+            timeout=5,
+            max_bytes=1024,
+            direct_opener=opener,
+            archive_opener=opener,
+        )
+
+        self.assertEqual(fetcher.fetch(candidate), b"document")
+        requested_urls = {request.full_url for request in requests}
+        self.assertIn(
+            (
+                "https://www.sec.gov/Archives/edgar/data/"
+                "1821769/000000000026000001/exhibit991.htm"
+            ),
+            requested_urls,
+        )
+        self.assertIn(
+            (
+                "https://archive.sec-api.io/1821769/"
+                "000000000026000001/exhibit991.htm"
+            ),
+            requested_urls,
+        )
+
+    def test_failures_and_repr_do_not_reveal_credentials(self) -> None:
         sensitive_detail = "credential-that-must-not-leak"
+        logger = logging.getLogger("test.sec-fetch")
+        logger.disabled = True
 
         def opener(*_args, **_kwargs):
             raise RuntimeError(sensitive_detail)
 
         fetcher = SecDocumentFetcher(
+            api_key=sensitive_detail,
             user_agent="test",
             timeout=5,
             max_bytes=1024,
-            opener=opener,
+            direct_opener=opener,
+            archive_opener=opener,
+            logger=logger,
         )
         with self.assertRaises(SecDocumentFetchError) as caught:
             fetcher.fetch(
@@ -121,7 +250,37 @@ class SecDocumentFetcherTests(unittest.TestCase):
             )
 
         self.assertNotIn(sensitive_detail, str(caught.exception))
-        self.assertIn("RuntimeError", str(caught.exception))
+        self.assertNotIn(sensitive_detail, repr(fetcher))
+
+    def test_sec_access_control_page_does_not_beat_archive(self) -> None:
+        def direct_opener(request, *, timeout: float):
+            return _Response(
+                (
+                    b"<html>Your Request Originates from an "
+                    b"Undeclared Automated Tool</html>"
+                ),
+                url=request.full_url,
+            )
+
+        def archive_opener(request, *, timeout: float):
+            return _Response(
+                b"<html>valid earnings release</html>",
+                url=request.full_url,
+            )
+
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="CodexPoly test@example.com",
+            timeout=5,
+            max_bytes=4096,
+            direct_opener=direct_opener,
+            archive_opener=archive_opener,
+        )
+
+        self.assertEqual(
+            fetcher.fetch(_source(nvts_q2_2026_shadow_rule())),
+            b"<html>valid earnings release</html>",
+        )
 
 
 if __name__ == "__main__":

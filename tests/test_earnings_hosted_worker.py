@@ -33,6 +33,7 @@ def _settings() -> EarningsWorkerSettings:
     return EarningsWorkerSettings(
         database_url="postgresql://configured",
         sec_api_key="configured",
+        http_user_agent="CodexPoly test@example.com",
         heartbeat_interval=3600,
     )
 
@@ -120,6 +121,9 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 "CBR_DATABASE_URL": database_url,
                 "SEC_API_KEY": sec_key,
                 "EARNINGS_WORKER_MODE": "shadow",
+                "EARNINGS_HTTP_USER_AGENT": (
+                    "CodexPoly test@example.com"
+                ),
             }
         )
 
@@ -135,12 +139,30 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                     "CBR_DATABASE_URL": "postgresql://configured",
                     "SEC_API_KEY": "configured",
                     "EARNINGS_WORKER_MODE": "live",
+                    "EARNINGS_HTTP_USER_AGENT": (
+                        "CodexPoly test@example.com"
+                    ),
                 }
             )
         with self.assertRaisesRegex(ValueError, "SEC_API_KEY"):
             EarningsWorkerSettings.from_env(
                 {
                     "CBR_DATABASE_URL": "postgresql://configured",
+                    "EARNINGS_HTTP_USER_AGENT": (
+                        "CodexPoly test@example.com"
+                    ),
+                }
+            )
+
+    def test_missing_sec_user_agent_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "EARNINGS_HTTP_USER_AGENT",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    "CBR_DATABASE_URL": "postgresql://configured",
+                    "SEC_API_KEY": "configured",
                 }
             )
 
@@ -149,6 +171,9 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
             {
                 "CBR_DATABASE_URL": "postgresql://configured",
                 "SEC_API_STREAM_KEY": "configured",
+                "EARNINGS_HTTP_USER_AGENT": (
+                    "CodexPoly test@example.com"
+                ),
             }
         )
 
