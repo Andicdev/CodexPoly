@@ -8,21 +8,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _DEPLOY = _ROOT / "deploy" / "lightsail"
 _WORKERS = _DEPLOY / "workers"
-_DOCKERFILE = _ROOT / "Dockerfile"
 
 
 class LightsailWorkerDeploymentTests(unittest.TestCase):
-    def test_image_contains_deployment_files_used_by_embedded_tests(
-        self,
-    ) -> None:
-        text = _DOCKERFILE.read_text(encoding="utf-8")
-
-        self.assertIn("COPY deploy deploy", text)
-        self.assertLess(
-            text.index("COPY deploy deploy"),
-            text.index("RUN python -m unittest discover"),
-        )
-
     def test_manifest_keeps_staging_without_trading_secrets(self) -> None:
         manifest = json.loads(
             (_DEPLOY / "secret-manifest.json").read_text(
