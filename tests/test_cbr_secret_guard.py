@@ -58,6 +58,19 @@ class SecretGuardTests(unittest.TestCase):
             "SEC_API_STREAM_KEY=[REDACTED]",
         )
 
+    def test_redacts_encrypted_trading_key_assignment(self) -> None:
+        secret = "encrypted-private-key"
+
+        result = redact_sensitive_text(
+            f"TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED={secret}"
+        )
+
+        self.assertNotIn(secret, result)
+        self.assertEqual(
+            result,
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED=[REDACTED]",
+        )
+
     def test_presence_report_contains_names_only(self) -> None:
         values = {
             "DATABASE_URL_SERVER_EXT": "database-secret",

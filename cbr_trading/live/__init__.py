@@ -1,9 +1,12 @@
 """Live execution, supervision, and persistence adapters."""
 
 from cbr_trading.live.account_repository import (
+    RuntimeSecretTradingAccountRepository,
     SqlAlchemyTradingAccountRepository,
+    TradingAccountRepository,
     TradingAccountLoadError,
     TradingAccountRecord,
+    build_trading_account_repository,
 )
 from cbr_trading.live.exact_cleanup import cleanup_exact_order
 from cbr_trading.live.market import (
@@ -57,11 +60,14 @@ __all__ = [
     "PolymarketTickObservationAdapter",
     "PolymarketSupervisionGatewayError",
     "PolymarketSupervisionOrderGateway",
+    "RuntimeSecretTradingAccountRepository",
     "SqlAlchemyOrderGroupRepository",
     "SqlAlchemyResolutionExecutionLedger",
     "SqlAlchemyTradingAccountRepository",
+    "TradingAccountRepository",
     "TradingAccountLoadError",
     "TradingAccountRecord",
+    "build_trading_account_repository",
     "build_live_order_plan",
     "cleanup_exact_order",
     "make_resolution_idempotency_key",

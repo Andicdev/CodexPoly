@@ -42,7 +42,8 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
         DATABASE_URL(?:_LOCAL|_SERVER_EXT|_SERVER_INT)?|
         POLYMARKET_PRIVATE_KEY|
         PRIVATE_KEY|
-        TG_BOT_TOKEN
+        TG_BOT_TOKEN|
+        TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
     )
     ["']?\s*[:=]\s*
     (?P<value>.+?)\s*$

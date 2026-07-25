@@ -154,7 +154,7 @@ class IsolatedOrderOverrideCliTests(unittest.TestCase):
             ),
             patch.object(
                 cli,
-                "SqlAlchemyTradingAccountRepository",
+                "build_trading_account_repository",
                 return_value=account_repository,
             ),
             patch.object(

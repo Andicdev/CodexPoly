@@ -7,8 +7,8 @@ from typing import Any, Callable, Mapping, Sequence
 from cbr_trading.client import DiscoveryResult
 from cbr_trading.domain.intents import OrderSide
 from cbr_trading.live.account_repository import (
-    SqlAlchemyTradingAccountRepository,
     TradingAccountRecord,
+    build_trading_account_repository,
 )
 from cbr_trading.live.executor import (
     decrypt_private_key,
@@ -641,10 +641,8 @@ class WarmLiveOrderExecutor:
 
     def _resolve_dependencies(self) -> None:
         if self._account_repository is None:
-            self._account_repository = (
-                SqlAlchemyTradingAccountRepository(
-                    database_url=self._database_url
-                )
+            self._account_repository = build_trading_account_repository(
+                database_url=self._database_url
             )
         if self._market_gateway is None:
             self._market_gateway = PolymarketMarketGateway()

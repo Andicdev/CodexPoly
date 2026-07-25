@@ -13,8 +13,8 @@ from cbr_trading.client import DiscoveryResult
 from cbr_trading.db_config import resolve_database_selection
 from cbr_trading.execution import RemoteOrderState
 from cbr_trading.live.account_repository import (
-    SqlAlchemyTradingAccountRepository,
     TradingAccountLoadError,
+    build_trading_account_repository,
 )
 from cbr_trading.live.executor import (
     LiveOrderError,
@@ -94,7 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rule_repository = SqlAlchemyRuleRepository(
         database_url=database.url
     )
-    account_repository = SqlAlchemyTradingAccountRepository(
+    account_repository = build_trading_account_repository(
         database_url=database.url
     )
     try:

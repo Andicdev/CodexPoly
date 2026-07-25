@@ -13,8 +13,8 @@ from cbr_trading.execution.supervision_gateway import (
     ReplacementOrderRequest,
 )
 from cbr_trading.live.account_repository import (
-    SqlAlchemyTradingAccountRepository,
     TradingAccountRecord,
+    build_trading_account_repository,
 )
 from cbr_trading.live.executor import (
     decrypt_private_key,
@@ -239,10 +239,8 @@ class PolymarketSupervisionOrderGateway:
                 raise PolymarketSupervisionGatewayError(
                     "Trading database URL is not configured"
                 )
-            self._account_repository = (
-                SqlAlchemyTradingAccountRepository(
-                    database_url=self._database_url
-                )
+            self._account_repository = build_trading_account_repository(
+                database_url=self._database_url
             )
         try:
             account: TradingAccountRecord = (

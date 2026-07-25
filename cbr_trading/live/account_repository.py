@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
+
+from cbr_trading.runtime_secrets import read_runtime_secret
 
 
 _SET_READ_ONLY_SQL = "SET TRANSACTION READ ONLY"
@@ -21,6 +24,14 @@ ORDER BY name
 
 class TradingAccountLoadError(RuntimeError):
     """Safe error raised when a trading account cannot be loaded."""
+
+
+class TradingAccountRepository(Protocol):
+    def load_active(self, account_name: str) -> "TradingAccountRecord":
+        ...
+
+    def close(self) -> None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,91 @@ class SqlAlchemyTradingAccountRepository:
             self._engine = None
 
 
+class RuntimeSecretTradingAccountRepository:
+    """Load one configured account without a trading_accounts row."""
+
+    def __init__(self, account: TradingAccountRecord):
+        self._account = account
+
+    @classmethod
+    def from_env(
+        cls,
+        environ: Mapping[str, str] | None = None,
+    ) -> "RuntimeSecretTradingAccountRepository":
+        env = environ if environ is not None else os.environ
+        name = _clean(env.get("TRADING_ACCOUNT_NAME"))
+        if not name:
+            raise TradingAccountLoadError(
+                "Configured trading account name is empty"
+            )
+        wallet = _clean(env.get("TRADING_ACCOUNT_WALLET_ADDRESS"))
+        venue = (
+            _clean(env.get("TRADING_ACCOUNT_VENUE"))
+            or "polymarket_clob"
+        )
+        signature_type = _clean(
+            env.get("TRADING_ACCOUNT_SIGNATURE_TYPE")
+        )
+        encrypted_key = read_runtime_secret(
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
+            environ=env,
+        )
+        account = normalize_account_rows(
+            [
+                {
+                    "name": name,
+                    "wallet_address": wallet,
+                    "venue": venue,
+                    "is_active": True,
+                    "pk_enc": (
+                        str(encrypted_key).encode("utf-8")
+                        if encrypted_key is not None
+                        else None
+                    ),
+                    "signature_type": signature_type,
+                }
+            ],
+            requested=name,
+        )
+        return cls(account)
+
+    def load_active(self, account_name: str) -> TradingAccountRecord:
+        requested = _clean(account_name)
+        if not requested:
+            raise TradingAccountLoadError("Trading account name is empty")
+        if requested.casefold() != self._account.name.casefold():
+            raise TradingAccountLoadError(
+                f"Trading account not found: {requested!r}"
+            )
+        return self._account
+
+    def close(self) -> None:
+        return None
+
+
+def build_trading_account_repository(
+    *,
+    database_url: str = "",
+    environ: Mapping[str, str] | None = None,
+) -> TradingAccountRepository:
+    """Select the legacy database or single-secret account provider."""
+
+    env = environ if environ is not None else os.environ
+    source = (
+        _clean(env.get("TRADING_ACCOUNT_SOURCE"))
+        or "database"
+    ).lower()
+    if source == "database":
+        return SqlAlchemyTradingAccountRepository(
+            database_url=database_url
+        )
+    if source == "single_secret":
+        return RuntimeSecretTradingAccountRepository.from_env(env)
+    raise TradingAccountLoadError(
+        f"Unsupported trading account source: {source!r}"
+    )
+
+
 def normalize_account_rows(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -207,3 +303,14 @@ def _normalize_database_url(value: str) -> str:
     if url.startswith("postgres://"):
         return "postgresql://" + url[len("postgres://"):]
     return url
+
+
+def _clean(value: object | None) -> str:
+    cleaned = str(value or "").strip().rstrip("\\").strip()
+    if (
+        len(cleaned) >= 2
+        and cleaned[0] == cleaned[-1]
+        and cleaned[0] in {"'", '"'}
+    ):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned

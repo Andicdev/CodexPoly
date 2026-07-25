@@ -7,6 +7,7 @@ from typing import Mapping
 
 from cbr_trading.live.account_repository import TradingAccountRecord
 from cbr_trading.live.market import MarketSnapshot
+from cbr_trading.runtime_secrets import read_runtime_secret
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,13 @@ class LiveSafetySettings:
                 env.get("CBR_LIVE_MAX_TOTAL_NOTIONAL")
             ),
             accounts_master_key=(
-                _clean(env.get("ACCOUNTS_MASTER_KEY")) or None
+                _clean(
+                    read_runtime_secret(
+                        "ACCOUNTS_MASTER_KEY",
+                        environ=env,
+                    )
+                )
+                or None
             ),
         )
 

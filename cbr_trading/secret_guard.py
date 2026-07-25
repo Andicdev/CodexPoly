@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from cbr_trading.runtime_secrets import runtime_secret_present
+
 
 PROTECTED_RUNTIME_KEYS: tuple[str, ...] = (
     "DATABASE_URL_SERVER_EXT",
@@ -28,16 +30,19 @@ SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "CLOB_API_KEY",
         "CLOB_API_SECRET",
         "DATABASE_URL",
+        "DATABASE_APP_PASSWORD",
         "DATABASE_URL_LOCAL",
         "DATABASE_URL_SERVER_EXT",
         "DATABASE_URL_SERVER_INT",
         "POLYMARKET_PRIVATE_KEY",
+        "POSTGRES_PASSWORD",
         "PRIVATE_KEY",
         "SEC_API_KEY",
         "SEC_API_IO_KEY",
         "SEC_API_STREAM_KEY",
         "TELEGRAM_INGEST_CHAT_ID",
         "TG_BOT_TOKEN",
+        "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
     }
 )
 
@@ -140,7 +145,7 @@ def secret_presence(
     present = tuple(
         key
         for key in required
-        if bool(str(environ.get(key) or "").strip())
+        if runtime_secret_present(key, environ=environ)
     )
     missing = tuple(key for key in required if key not in present)
     return SecretPresenceReport(

@@ -28,8 +28,8 @@ from cbr_trading.execution.supervision_gateway import (
     replacement_price_for_tick,
 )
 from cbr_trading.live.account_repository import (
-    SqlAlchemyTradingAccountRepository,
     TradingAccountRecord,
+    build_trading_account_repository,
 )
 from cbr_trading.live.executor import LiveOrderExecutor
 from cbr_trading.live.market import PolymarketMarketGateway
@@ -313,10 +313,8 @@ class PolymarketPreflightPreparedExecutor:
 
     def _resolve_dependencies(self) -> None:
         if self._account_repository is None:
-            self._account_repository = (
-                SqlAlchemyTradingAccountRepository(
-                    database_url=self._database_url
-                )
+            self._account_repository = build_trading_account_repository(
+                database_url=self._database_url
             )
         if self._market_gateway is None:
             self._market_gateway = PolymarketMarketGateway()
