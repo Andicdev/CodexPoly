@@ -165,6 +165,36 @@ the real hosted source, numeric strategy, intent binding, and
 the fact `SUPERSEDED`. The command reports only aggregate evidence and never
 submits an order.
 
+The MSTR equivalent retains its synthetic fact because the MSTR audit is
+append-only. Its unique scope is not present in production rules:
+
+```bash
+docker run --rm \
+  --network codexpoly-staging-backend \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --mount type=bind,src=/home/codexdeploy/.config/codexpoly/secrets/staging/DATABASE_APP_PASSWORD,dst=/run/secrets/DATABASE_APP_PASSWORD,readonly \
+  --env CODEXPOLY_ENVIRONMENT=staging \
+  --env PRIMARY_DB_TARGET=server_int \
+  --env DATABASE_HOST=postgres \
+  --env DATABASE_PORT=5432 \
+  --env DATABASE_NAME=codexpoly \
+  --env DATABASE_USER=codexpoly_app \
+  --env DATABASE_APP_PASSWORD_FILE=/run/secrets/DATABASE_APP_PASSWORD \
+  --env RESOLUTION_ORCHESTRATOR_MODE=shadow \
+  --env RESOLUTION_SUPERVISION_ENABLED=0 \
+  --env CBR_LIVE_TRADING_ENABLED=0 \
+  CODEXPOLY_IMAGE_REF \
+  python -u -m cbr_trading.simulations.staging_mstr_btc_shadow \
+  --confirm STAGING_MSTR_SHADOW
+```
+
+The smoke temporarily enables only `staging-mstr-smoke-*` profiles, expects
+three hosted decisions, requires every result to be unattempted `DRY_RUN`,
+and disables all temporary profiles before returning.
+
 To remove trading-secret access after a preflight, recreate the service from
 the base production file alone:
 

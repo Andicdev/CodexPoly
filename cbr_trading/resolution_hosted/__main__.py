@@ -6,11 +6,15 @@ import os
 import sys
 
 from cbr_trading.earnings import SqlAlchemyEarningsStore
+from cbr_trading.mstr_btc import SqlAlchemyMstrBtcAuditStore
 from cbr_trading.orchestration import (
     SqlAlchemyResolutionProfileStore,
 )
 from cbr_trading.resolution_hosted.earnings import (
     EarningsHostedResolutionWorker,
+)
+from cbr_trading.resolution_hosted.mstr_btc import (
+    MstrBtcHostedResolutionWorker,
 )
 from cbr_trading.resolution_hosted.settings import (
     HostedResolutionSettings,
@@ -33,21 +37,41 @@ def main() -> int:
         ),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    logger = logging.getLogger("cbr_trading.resolution_hosted")
     earnings_store = SqlAlchemyEarningsStore(
         database_url=settings.database_url
     )
-    profile_store = SqlAlchemyResolutionProfileStore(
+    earnings_profile_store = SqlAlchemyResolutionProfileStore(
         database_url=settings.database_url
     )
-    worker = EarningsHostedResolutionWorker(
+    mstr_audit_store = SqlAlchemyMstrBtcAuditStore(
+        database_url=settings.database_url
+    )
+    mstr_profile_store = SqlAlchemyResolutionProfileStore(
+        database_url=settings.database_url
+    )
+    earnings_worker = EarningsHostedResolutionWorker(
         settings=settings,
         earnings_store=earnings_store,
-        profile_store=profile_store,
-        logger=logger,
+        profile_store=earnings_profile_store,
+        logger=logging.getLogger(
+            "cbr_trading.resolution_hosted.earnings"
+        ),
+    )
+    mstr_worker = MstrBtcHostedResolutionWorker(
+        settings=settings,
+        audit_store=mstr_audit_store,
+        profile_store=mstr_profile_store,
+        logger=logging.getLogger(
+            "cbr_trading.resolution_hosted.mstr_btc"
+        ),
     )
     try:
-        asyncio.run(worker.run_forever())
+        asyncio.run(
+            _run_workers(
+                earnings_worker,
+                mstr_worker,
+            )
+        )
     except KeyboardInterrupt:
         logger.info("Hosted resolution worker stopped")
         return 130
@@ -61,11 +85,22 @@ def main() -> int:
         return 5
     finally:
         try:
-            worker.close()
+            earnings_worker.close()
         finally:
-            profile_store.close()
-            earnings_store.close()
+            try:
+                mstr_worker.close()
+            finally:
+                mstr_profile_store.close()
+                mstr_audit_store.close()
+                earnings_profile_store.close()
+                earnings_store.close()
     return 0
+
+
+async def _run_workers(*workers: object) -> None:
+    await asyncio.gather(
+        *(worker.run_forever() for worker in workers)
+    )
 
 
 def _load_dotenv_if_available() -> None:

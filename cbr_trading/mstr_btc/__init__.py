@@ -40,6 +40,8 @@ from cbr_trading.mstr_btc.resolution_rules import (
     MSTR_PURCHASE_ANY_SIGNAL_ID,
     MSTR_PURCHASE_OVER_1000_SIGNAL_ID,
     MSTR_SALE_ANY_SIGNAL_ID,
+    MstrBtcMarketBinding,
+    mstr_jul21_27_market_bindings,
     mstr_jul21_27_resolution_rules,
 )
 from cbr_trading.mstr_btc.sec_router import (
@@ -73,6 +75,7 @@ __all__ = [
     "MstrBtcHoldingsObservation",
     "MstrBtcHoldingsStoreError",
     "MstrBtcHoldingsValidationStatus",
+    "MstrBtcMarketBinding",
     "MstrBtcFilingDecision",
     "MstrBtcParseResult",
     "MstrBtcParseStatus",
@@ -90,6 +93,7 @@ __all__ = [
     "StoredMstrBtcTerminalResult",
     "StoredMstrBtcHoldingsState",
     "evaluate_mstr_btc_filing",
+    "mstr_jul21_27_market_bindings",
     "mstr_jul21_27_shadow_watch",
     "mstr_jul21_27_resolution_rules",
 ]
