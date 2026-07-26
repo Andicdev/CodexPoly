@@ -32,8 +32,9 @@ ResolutionTradingCoordinator
 3. A `PreparedExecutor` prepares templates before polling. A stable
    `PreparationContext` binds that work to the expected source publication.
    Preparation may resolve accounts, assets, tick metadata, neg-risk,
-   idempotency claims, and signatures. Execution accepts only selected
-   intents whose signal and parameters match that prepared scope.
+   and signatures. Execution accepts only selected intents whose signal and
+   parameters match that prepared scope, then atomically reserves persistent
+   idempotency claims immediately before the first submission call.
 4. A successful execution returns an `ExecutionHandle`. Its
    `order_group_id` is the ownership boundary for every later cancellation.
 5. `OrderSupervisor` handles post-submission lifecycle. A
@@ -392,8 +393,12 @@ persistent supervisor and market channel before preparation.
 
 Only `VALIDATED` official facts enter the source. Facts for all scopes are
 loaded in one polling snapshot, then each prepared event coordinator consumes
-only its own scope. The executor posts the selected pre-signed alternative
-before terminal result persistence. The unselected alternative is marked
-`EXPIRED`. If the profile time window closes first, every still-pending claim
-is explicitly expired and that coordinator closes without consuming a late
-fact.
+only its own scope. Warm preparation does not create a claim, so a process can
+restart safely before a signal. After a matching signal selects an intent, the
+executor atomically claims every prepared alternative immediately before it
+posts the selected pre-signed order. The unselected alternative is marked
+`EXPIRED`, while the selected claim stores the terminal submission result. A
+duplicate worker loses the claim race and cannot call the order endpoint. If
+the process stops before a signal, there is no claim to clean up. A crash
+after reservation remains deliberately fail-closed because submission may be
+ambiguous.

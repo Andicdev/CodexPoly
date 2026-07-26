@@ -287,29 +287,6 @@ class PolymarketPreparedExecutor:
                     "Prepared templates exceed aggregate notional cap"
                 )
 
-            claims = tuple(
-                self._ledger.reserve_many(
-                    context=context,
-                    templates=tuple(
-                        item.template for item in prepared.values()
-                    ),
-                    effective_prices={
-                        template_id: item.plan.limit_price
-                        for template_id, item in prepared.items()
-                    },
-                )
-            )
-            if len(claims) != len(prepared):
-                raise PolymarketPreparedExecutionError(
-                    "Resolution claim reservation count mismatch"
-                )
-            claim_by_template = {
-                claim.template_id: claim for claim in claims
-            }
-            if set(claim_by_template) != set(prepared):
-                raise PolymarketPreparedExecutionError(
-                    "Resolution claim reservation identity mismatch"
-                )
         except Exception as exc:
             self._prepared = {}
             self._claims = {}
@@ -322,7 +299,7 @@ class PolymarketPreparedExecutor:
             )
 
         self._prepared = prepared
-        self._claims = claim_by_template
+        self._claims = {}
         self._details = tuple(details)
         self._maximum_notional = maximum_notional
         return PreparationSummary(
@@ -375,7 +352,7 @@ class PolymarketPreparedExecutor:
         results: list[OrderExecutionResult | None] = [
             None
         ] * len(intent_rows)
-        selected: list[_SelectedOrder] = []
+        validated: list[tuple[int, OrderIntent, _PreparedOrder]] = []
         selected_template_ids: set[str] = set()
         for index, intent in enumerate(intent_rows):
             prepared = self._prepared.get(intent.template_id)
@@ -393,6 +370,28 @@ class PolymarketPreparedExecutor:
                     error="polymarket_intent_not_prepared",
                 )
                 continue
+            selected_template_ids.add(intent.template_id)
+            validated.append((index, intent, prepared))
+
+        if validated:
+            try:
+                self._reserve_execution_claims()
+            except Exception as exc:
+                error = (
+                    "resolution_execution_claim_unavailable: "
+                    f"{redact_exception(exc)}"
+                )
+                for index, intent, _prepared in validated:
+                    results[index] = OrderExecutionResult(
+                        intent=intent,
+                        status=ExecutionStatus.SKIPPED,
+                        attempted=False,
+                        error=error,
+                    )
+                return _complete_results(intent_rows, results)
+
+        selected: list[_SelectedOrder] = []
+        for index, intent, prepared in validated:
             claim = self._claims.get(intent.template_id)
             if claim is None:
                 results[index] = OrderExecutionResult(
@@ -402,7 +401,6 @@ class PolymarketPreparedExecutor:
                     error="resolution_execution_claim_missing",
                 )
                 continue
-            selected_template_ids.add(intent.template_id)
             selected.append(
                 _SelectedOrder(
                     index=index,
@@ -423,17 +421,7 @@ class PolymarketPreparedExecutor:
         self._complete_selected(selected, results=results)
         self._expire_unselected(selected_template_ids)
 
-        return tuple(
-            result
-            if result is not None
-            else OrderExecutionResult(
-                intent=intent_rows[index],
-                status=ExecutionStatus.SKIPPED,
-                attempted=False,
-                error="polymarket_batch_result_missing",
-            )
-            for index, result in enumerate(results)
-        )
+        return _complete_results(intent_rows, results)
 
     def close(self) -> None:
         if self._closed:
@@ -477,7 +465,7 @@ class PolymarketPreparedExecutor:
         *,
         reason: str = "preparation_window_expired",
     ) -> None:
-        """Expire every unsubmitted claim after an explicit hard cutoff."""
+        """Expire claims reserved after a signal but not yet submitted."""
 
         if self._execution_started or not self._claims:
             return
@@ -529,6 +517,40 @@ class PolymarketPreparedExecutor:
             self._ledger = SqlAlchemyResolutionExecutionLedger(
                 database_url=self._database_url
             )
+
+    def _reserve_execution_claims(self) -> None:
+        if self._context is None:
+            raise PolymarketPreparedExecutionError(
+                "Preparation context is unavailable"
+            )
+        if self._claims:
+            raise PolymarketPreparedExecutionError(
+                "Resolution claims are already reserved"
+            )
+        claims = tuple(
+            self._ledger.reserve_many(
+                context=self._context,
+                templates=tuple(
+                    item.template for item in self._prepared.values()
+                ),
+                effective_prices={
+                    template_id: item.plan.limit_price
+                    for template_id, item in self._prepared.items()
+                },
+            )
+        )
+        if len(claims) != len(self._prepared):
+            raise PolymarketPreparedExecutionError(
+                "Resolution claim reservation count mismatch"
+            )
+        claim_by_template = {
+            claim.template_id: claim for claim in claims
+        }
+        if set(claim_by_template) != set(self._prepared):
+            raise PolymarketPreparedExecutionError(
+                "Resolution claim reservation identity mismatch"
+            )
+        self._claims = claim_by_template
 
     def _load_warm_account(
         self,
@@ -806,6 +828,23 @@ class PolymarketPreparedExecutor:
                 )
             except Exception:
                 pass
+
+
+def _complete_results(
+    intents: Sequence[OrderIntent],
+    results: Sequence[OrderExecutionResult | None],
+) -> tuple[OrderExecutionResult, ...]:
+    return tuple(
+        result
+        if result is not None
+        else OrderExecutionResult(
+            intent=intents[index],
+            status=ExecutionStatus.SKIPPED,
+            attempted=False,
+            error="polymarket_batch_result_missing",
+        )
+        for index, result in enumerate(results)
+    )
 
 
 def _balance_decimal(client: Any) -> Decimal:

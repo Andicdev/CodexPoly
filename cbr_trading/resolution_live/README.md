@@ -42,8 +42,9 @@ python -m cbr_trading.resolution_live `
 
 The quantity and price are one-shot overrides; the database rule remains
 unchanged. Before polling, the executor authenticates, refreshes the market,
-pre-signs the order, and atomically reserves
-`scope_id + template_id` in `resolution_execution_claims`. A repeated
+and pre-signs the order without creating a claim. After the manual signal
+selects the intent, it atomically reserves `scope_id + template_id` in
+`resolution_execution_claims` immediately before submission. A repeated
 `test-run-id` cannot submit again.
 
 After a successful post, the command inspects only the returned order ID,

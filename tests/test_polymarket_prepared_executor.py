@@ -103,6 +103,7 @@ class _Ledger:
     ):
         self.reserve_error = reserve_error
         self.complete_error = complete_error
+        self.reserve_calls: list[dict] = []
         self.completions: list[dict] = []
         self.cleanups: list[dict] = []
 
@@ -110,6 +111,14 @@ class _Ledger:
         return None
 
     def reserve_many(self, *, context, templates, effective_prices):
+        template_rows = tuple(templates)
+        self.reserve_calls.append(
+            {
+                "context": context,
+                "templates": template_rows,
+                "effective_prices": effective_prices,
+            }
+        )
         if self.reserve_error is not None:
             raise self.reserve_error
         return tuple(
@@ -119,7 +128,7 @@ class _Ledger:
                 scope_id=context.scope_id,
                 template_id=template.template_id,
             )
-            for index, template in enumerate(templates)
+            for index, template in enumerate(template_rows)
         )
 
     def complete(self, claim_id: int, **kwargs: object) -> None:
@@ -234,7 +243,7 @@ def _run(
 
 
 class PolymarketPreparedExecutorTests(unittest.TestCase):
-    def test_explicit_window_expiry_closes_all_pending_claims(
+    def test_preparation_window_expiry_has_no_claims_to_close(
         self,
     ) -> None:
         ledger = _Ledger()
@@ -251,23 +260,9 @@ class PolymarketPreparedExecutorTests(unittest.TestCase):
         self.assertTrue(preparation.ready)
         self.assertIsNone(outcome)
         self.assertEqual(client.posts, [])
-        self.assertEqual(
-            len(ledger.completions),
-            len(executor.details),
-        )
-        self.assertTrue(
-            all(
-                completion["status"] == "EXPIRED"
-                for completion in ledger.completions
-            )
-        )
-        self.assertTrue(
-            all(
-                completion["result"]["reason"]
-                == "preparation_window_expired"
-                for completion in ledger.completions
-            )
-        )
+        self.assertEqual(len(executor.details), 1)
+        self.assertEqual(ledger.reserve_calls, [])
+        self.assertEqual(ledger.completions, [])
 
     def test_submits_selected_template_and_completes_claim(self) -> None:
         ledger = _Ledger()
@@ -285,6 +280,7 @@ class PolymarketPreparedExecutorTests(unittest.TestCase):
         self.assertEqual(result.orders[0].order_id, "order-1")
         self.assertEqual(result.handle.live_order_ids, ("order-1",))
         self.assertEqual(len(client.posts), 1)
+        self.assertEqual(len(ledger.reserve_calls), 1)
         self.assertEqual(
             ledger.completions[0]["status"],
             "EXECUTED",
@@ -297,7 +293,7 @@ class PolymarketPreparedExecutorTests(unittest.TestCase):
         )
         self.assertTrue(client.closed)
 
-    def test_duplicate_claim_blocks_before_source_polling(self) -> None:
+    def test_duplicate_claim_blocks_before_order_submission(self) -> None:
         ledger = _Ledger(
             reserve_error=RuntimeError("duplicate")
         )
@@ -308,9 +304,41 @@ class PolymarketPreparedExecutorTests(unittest.TestCase):
         )
         coordinator.close()
 
-        self.assertFalse(preparation.ready)
-        self.assertIsNone(outcome)
+        self.assertTrue(preparation.ready)
+        self.assertEqual(outcome.status, CoordinationStatus.COMPLETED)
+        self.assertEqual(
+            outcome.order_results[0].status,
+            ExecutionStatus.SKIPPED,
+        )
+        self.assertFalse(outcome.order_results[0].attempted)
         self.assertEqual(client.posts, [])
+
+    def test_restart_before_signal_does_not_leave_execution_claims(
+        self,
+    ) -> None:
+        ledger = _Ledger()
+        first_client = _Client()
+        _executor, first, preparation, _outcome = _run(
+            ledger=ledger,
+            client=first_client,
+            poll=False,
+        )
+        first.close()
+
+        second_client = _Client()
+        _executor, second, repeated, _outcome = _run(
+            ledger=ledger,
+            client=second_client,
+            poll=False,
+        )
+        second.close()
+
+        self.assertTrue(preparation.ready)
+        self.assertTrue(repeated.ready)
+        self.assertEqual(ledger.reserve_calls, [])
+        self.assertEqual(ledger.completions, [])
+        self.assertEqual(first_client.posts, [])
+        self.assertEqual(second_client.posts, [])
 
     def test_submission_exception_is_ambiguous_and_audited(self) -> None:
         ledger = _Ledger()

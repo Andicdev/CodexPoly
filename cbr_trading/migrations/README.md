@@ -16,8 +16,11 @@ or any legacy object.
 
 `003_add_resolution_execution_claims.sql` creates only
 `resolution_execution_claims`. It atomically reserves each source-neutral
-`scope_id` plus `template_id` before polling can submit an order, and stores
-the terminal submission and controlled-test cleanup result.
+`scope_id` plus `template_id` after a signal selects an intent and immediately
+before the executor can submit an order. It stores the terminal submission and
+controlled-test cleanup result. Warm preparation creates no claim, so a
+pre-signal process restart is safe; a post-reservation ambiguity remains
+fail-closed.
 
 `004_add_earnings_source_tables.sql` creates only:
 
