@@ -45,6 +45,13 @@ edits, and existing execution profiles are never changed.
 venue, signature type, and active status. Encrypted private keys and master
 keys remain outside PostgreSQL in the production secret store.
 
+`008_add_mstr_btc_holdings_state.sql` creates only the append-only
+`mstr_btc_holdings_state` table. It stores validated or quarantined holdings
+observations from official SEC and Strategy ledger sources. A database trigger
+rejects updates and deletes. Baseline selection requires both `as_of` and
+`observed_at` to precede the requested window boundary, so a late backdated
+observation cannot change a baseline that should already have been pinned.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in
