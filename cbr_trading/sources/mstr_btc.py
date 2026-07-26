@@ -23,6 +23,27 @@ MSTR_BTC_ACQUIRED_METRIC = "company.mstr.bitcoin.acquired"
 MSTR_BTC_SOLD_METRIC = "company.mstr.bitcoin.sold"
 
 
+def mstr_btc_signal_subject(weekly_scope_id: str) -> str:
+    """Return the stable source-neutral subject for one MSTR week."""
+
+    normalized = str(weekly_scope_id or "").strip()
+    if not normalized:
+        raise ValueError("weekly_scope_id is required")
+    return f"company:{MSTR_TICKER}:bitcoin:{normalized}"
+
+
+def mstr_btc_signal_metric(activity: MstrBtcActivity) -> str:
+    """Map a market activity to the metric emitted by this source."""
+
+    if not isinstance(activity, MstrBtcActivity):
+        raise TypeError("activity must be MstrBtcActivity")
+    return (
+        MSTR_BTC_ACQUIRED_METRIC
+        if activity is MstrBtcActivity.ACQUIRED
+        else MSTR_BTC_SOLD_METRIC
+    )
+
+
 class MstrBtcResolutionSource:
     """Fan one canonical weekly holdings fact into market-scoped signals."""
 
@@ -114,11 +135,7 @@ def resolution_signal_from_mstr_btc_fact(
     if isinstance(activity, str):
         return activity
     value, derivation = activity
-    metric = (
-        MSTR_BTC_ACQUIRED_METRIC
-        if rule.activity is MstrBtcActivity.ACQUIRED
-        else MSTR_BTC_SOLD_METRIC
-    )
+    metric = mstr_btc_signal_metric(rule.activity)
     excerpt = (
         candidate.evidence_excerpts[0]
         if candidate.evidence_excerpts
@@ -127,7 +144,7 @@ def resolution_signal_from_mstr_btc_fact(
     return ResolutionSignal(
         signal_id=rule.signal_id,
         source=MSTR_BTC_SOURCE_NAME,
-        subject=f"company:{MSTR_TICKER}:bitcoin:{candidate.scope_id}",
+        subject=mstr_btc_signal_subject(candidate.scope_id),
         metric=metric,
         value=Decimal(value),
         unit="BTC",

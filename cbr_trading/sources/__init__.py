@@ -21,6 +21,8 @@ from cbr_trading.sources.mstr_btc import (
     MSTR_BTC_SOLD_METRIC,
     MSTR_BTC_SOURCE_NAME,
     MstrBtcResolutionSource,
+    mstr_btc_signal_metric,
+    mstr_btc_signal_subject,
     resolution_signal_from_mstr_btc_fact,
 )
 
@@ -42,4 +44,6 @@ __all__ = [
     "resolution_signal_from_discovery",
     "resolution_signal_from_earnings_fact",
     "resolution_signal_from_mstr_btc_fact",
+    "mstr_btc_signal_metric",
+    "mstr_btc_signal_subject",
 ]
