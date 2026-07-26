@@ -37,6 +37,10 @@ class _MstrStore:
         )
 
 
+class _MstrAuditStore:
+    pass
+
+
 class _EmptyTransport:
     async def stream_once(self):
         if False:
@@ -80,6 +84,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
             ),
             store=_Store([]),
             mstr_store=_MstrStore(),
+            mstr_audit_store=_MstrAuditStore(),
             transport_builder=builder,
         )
 

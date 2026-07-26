@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -27,6 +28,76 @@ class MstrBtcValueDerivation(str, Enum):
 class MstrBtcHoldingsValidationStatus(str, Enum):
     VALIDATED = "VALIDATED"
     QUARANTINED = "QUARANTINED"
+
+
+class MstrBtcAuditStatus(str, Enum):
+    ACCEPTED = "ACCEPTED"
+    NO_MATCH = "NO_MATCH"
+    QUARANTINED = "QUARANTINED"
+    ERROR = "ERROR"
+
+
+class MstrBtcActivity(str, Enum):
+    ACQUIRED = "acquired"
+    SOLD = "sold"
+
+
+@dataclass(frozen=True)
+class MstrBtcResolutionRule:
+    """One market-scoped interpretation of a canonical weekly BTC fact."""
+
+    rule_key: str
+    signal_id: str
+    weekly_scope_id: str
+    activity: MstrBtcActivity
+    comparison_op: str
+    threshold_btc: Decimal
+    explicit_boundary_tolerance_btc: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "rule_key",
+            _required_text(self.rule_key, "rule_key"),
+        )
+        signal_id = _required_text(self.signal_id, "signal_id")
+        weekly_scope_id = _required_text(
+            self.weekly_scope_id,
+            "weekly_scope_id",
+        )
+        if not signal_id.startswith(f"{weekly_scope_id}:"):
+            raise ValueError(
+                "signal_id must be namespaced by weekly_scope_id"
+            )
+        object.__setattr__(self, "signal_id", signal_id)
+        object.__setattr__(
+            self,
+            "weekly_scope_id",
+            weekly_scope_id,
+        )
+        if not isinstance(self.activity, MstrBtcActivity):
+            raise TypeError("activity must be MstrBtcActivity")
+        if self.comparison_op != ">":
+            raise ValueError("MSTR BTC rules currently require strict '>'")
+        threshold = Decimal(str(self.threshold_btc))
+        if not threshold.is_finite() or threshold < 0:
+            raise ValueError(
+                "threshold_btc must be finite and non-negative"
+            )
+        object.__setattr__(self, "threshold_btc", threshold)
+        tolerance = self.explicit_boundary_tolerance_btc
+        if tolerance is not None:
+            if isinstance(tolerance, bool) or not isinstance(
+                tolerance,
+                int,
+            ):
+                raise TypeError(
+                    "explicit_boundary_tolerance_btc must be an integer"
+                )
+            if tolerance < 0:
+                raise ValueError(
+                    "explicit_boundary_tolerance_btc cannot be negative"
+                )
 
 
 @dataclass(frozen=True)

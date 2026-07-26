@@ -1,6 +1,8 @@
 """Strategy (MSTR) bitcoin holdings source contracts and parsing."""
 
 from cbr_trading.mstr_btc.contracts import (
+    MstrBtcActivity,
+    MstrBtcAuditStatus,
     MstrBtcDocumentCandidate,
     MstrBtcFactCandidate,
     MstrBtcHoldingsBaseline,
@@ -9,7 +11,14 @@ from cbr_trading.mstr_btc.contracts import (
     MstrBtcParseResult,
     MstrBtcParseStatus,
     MstrBtcProvider,
+    MstrBtcResolutionRule,
     MstrBtcValueDerivation,
+)
+from cbr_trading.mstr_btc.audit_repository import (
+    MstrBtcAuditStoreError,
+    SqlAlchemyMstrBtcAuditStore,
+    StoredMstrBtcAuditRecord,
+    StoredMstrBtcTerminalResult,
 )
 from cbr_trading.mstr_btc.parser import (
     MSTR_BTC_PARSER_NAME,
@@ -26,6 +35,12 @@ from cbr_trading.mstr_btc.repository import (
     MstrBtcHoldingsStoreError,
     SqlAlchemyMstrBtcHoldingsStore,
     StoredMstrBtcHoldingsState,
+)
+from cbr_trading.mstr_btc.resolution_rules import (
+    MSTR_PURCHASE_ANY_SIGNAL_ID,
+    MSTR_PURCHASE_OVER_1000_SIGNAL_ID,
+    MSTR_SALE_ANY_SIGNAL_ID,
+    mstr_jul21_27_resolution_rules,
 )
 from cbr_trading.mstr_btc.sec_router import (
     MSTR_JUL21_27_SCOPE_ID,
@@ -44,7 +59,13 @@ __all__ = [
     "MSTR_JUL21_27_SCOPE_ID",
     "MSTR_JUL21_27_WINDOW_END",
     "MSTR_JUL21_27_WINDOW_START",
+    "MSTR_PURCHASE_ANY_SIGNAL_ID",
+    "MSTR_PURCHASE_OVER_1000_SIGNAL_ID",
+    "MSTR_SALE_ANY_SIGNAL_ID",
     "MstrBtc8KParser",
+    "MstrBtcActivity",
+    "MstrBtcAuditStatus",
+    "MstrBtcAuditStoreError",
     "MstrBtcBaselineNotFound",
     "MstrBtcDocumentCandidate",
     "MstrBtcFactCandidate",
@@ -56,6 +77,7 @@ __all__ = [
     "MstrBtcParseResult",
     "MstrBtcParseStatus",
     "MstrBtcProvider",
+    "MstrBtcResolutionRule",
     "MstrBtcRouter",
     "MstrBtcSecWatch",
     "MstrBtcShadowProcessor",
@@ -63,7 +85,11 @@ __all__ = [
     "MstrBtcShadowStatus",
     "MstrBtcValueDerivation",
     "SqlAlchemyMstrBtcHoldingsStore",
+    "SqlAlchemyMstrBtcAuditStore",
+    "StoredMstrBtcAuditRecord",
+    "StoredMstrBtcTerminalResult",
     "StoredMstrBtcHoldingsState",
     "evaluate_mstr_btc_filing",
     "mstr_jul21_27_shadow_watch",
+    "mstr_jul21_27_resolution_rules",
 ]

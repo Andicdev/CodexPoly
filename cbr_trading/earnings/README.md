@@ -16,9 +16,27 @@ its issuer, form, document, and event-window rules.
 The MSTR branch is shadow-only. It selects the primary initial `8-K`, pins the
 validated holdings state that existed before the weekly window, downloads the
 document through the same bounded SEC/SEC-API fetcher, and runs the
-holdings-first parser. Unrelated MSTR `8-K` filings return `NO_MATCH`. This
-branch does not yet persist a canonical weekly fact, update holdings state,
-emit a `ResolutionSignal`, or reach a strategy or executor.
+holdings-first parser. Unrelated MSTR `8-K` filings return `NO_MATCH`.
+
+Migration 009 stores the routed event, canonical weekly fact, and processing
+results in three database-enforced append-only tables. A temporary `ERROR` can
+be retried; `ACCEPTED`, `NO_MATCH`, and `QUARANTINED` are terminal and
+idempotent. An accepted canonical fact fans out into the three current
+market-scoped shadow signals:
+
+- acquired BTC `> 0`;
+- acquired BTC `> 1000`;
+- sold BTC `> 0`.
+
+The strict 1000-BTC branch requires an explicit acquisition value when a
+holdings-derived quantity is within one BTC of the boundary. The other branch
+of a one-sided filing may resolve to zero only when the holdings equation
+cross-checks within the parser's one-BTC tolerance.
+
+These MSTR signals are persisted only as source facts and logged in the source
+worker. The branch does not yet update canonical holdings state, configure a
+resolution execution profile, call a strategy, create an `OrderIntent`, or
+reach an executor.
 
 The source service deliberately has no dependency on a strategy,
 `OrderIntent`, or `PreparedExecutor`. An earnings signal emitted here cannot
@@ -101,8 +119,8 @@ scope names, watch count, and missing parser names.
 
 It performs this loop:
 
-1. verifies migration 004 and, when MSTR shadow is enabled, migration 008,
-   without applying migrations;
+1. verifies migration 004 and, when MSTR shadow is enabled, migrations 008
+   and 009, without applying migrations;
 2. loads only `SHADOW` and `WATCHING` rules;
 3. opens one source-neutral SEC WebSocket connection;
 4. fans normalized envelopes out to the earnings and MSTR routers;
@@ -110,8 +128,8 @@ It performs this loop:
 6. runs the selected semantic parser;
 7. for earnings, persists a validated fact and logs a shadow
    `ResolutionSignal`;
-8. for MSTR, logs only the aggregate shadow parse result against the pinned
-   baseline.
+8. for MSTR, persists the append-only source audit and logs only aggregate
+   signal values against the pinned baseline.
 
 The worker rejects any mode except `shadow`. It does not import a strategy,
 account repository, Polymarket client, `OrderIntent`, or `PreparedExecutor`.

@@ -52,6 +52,20 @@ rejects updates and deletes. Baseline selection requires both `as_of` and
 `observed_at` to precede the requested window boundary, so a late backdated
 observation cannot change a baseline that should already have been pinned.
 
+`009_add_mstr_btc_source_audit.sql` creates only:
+
+- `mstr_btc_source_events`;
+- `mstr_btc_fact_candidates`;
+- `mstr_btc_processing_results`.
+
+All three tables are append-only and protected from updates and deletes by
+database triggers. The immutable event is deduplicated independently from its
+processing attempts. `ERROR` results may be followed by a later retry, while a
+partial unique index permits only one terminal `ACCEPTED`, `NO_MATCH`, or
+`QUARANTINED` result per event. Validated facts reference both the source event
+and the pre-window holdings state. Migration 009 does not create a resolution
+profile, execution claim, intent, or order.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

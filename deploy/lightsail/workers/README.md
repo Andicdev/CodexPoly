@@ -24,8 +24,9 @@ the application database password.
 
 `MSTR_BTC_SHADOW_ENABLED=true` enables only the checked-in, time-bounded MSTR
 source watch. The worker verifies the append-only holdings schema, pins the
-validated pre-window baseline, and logs aggregate parser output. It does not
-create an MSTR resolution profile, execution claim, order intent, or order.
+validated pre-window baseline, persists the append-only source audit, and logs
+aggregate parser/signal output. It does not create an MSTR resolution profile,
+execution claim, order intent, or order.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

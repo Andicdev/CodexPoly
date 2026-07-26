@@ -27,6 +27,9 @@ from cbr_trading.earnings.sec_stream import (
 )
 from cbr_trading.earnings.settings import EarningsWorkerSettings
 from cbr_trading.mstr_btc.contracts import MstrBtcDocumentCandidate
+from cbr_trading.mstr_btc.audit_repository import (
+    SqlAlchemyMstrBtcAuditStore,
+)
 from cbr_trading.mstr_btc.processor import (
     MstrBtcShadowProcessor,
     MstrBtcShadowStatus,
@@ -114,6 +117,7 @@ class EarningsHostedShadowWorker:
         settings: EarningsWorkerSettings,
         store: SqlAlchemyEarningsStore,
         mstr_store: SqlAlchemyMstrBtcHoldingsStore | None = None,
+        mstr_audit_store: SqlAlchemyMstrBtcAuditStore | None = None,
         mstr_watch: MstrBtcSecWatch | None = None,
         transport_builder: TransportBuilder | None = None,
         parsers: Mapping[str, object] | None = None,
@@ -131,9 +135,14 @@ class EarningsHostedShadowWorker:
             )
         )
         self._mstr_store = mstr_store
-        if self._mstr_watch is not None and self._mstr_store is None:
+        self._mstr_audit_store = mstr_audit_store
+        if self._mstr_watch is not None and (
+            self._mstr_store is None
+            or self._mstr_audit_store is None
+        ):
             raise ValueError(
-                "mstr_store is required when MSTR shadow is enabled"
+                "MSTR holdings and audit stores are required when "
+                "MSTR shadow is enabled"
             )
         self._transport_builder = (
             transport_builder
@@ -157,6 +166,10 @@ class EarningsHostedShadowWorker:
         await asyncio.to_thread(self._store.ensure_ready)
         if self._mstr_store is not None:
             await asyncio.to_thread(self._mstr_store.ensure_ready)
+        if self._mstr_audit_store is not None:
+            await asyncio.to_thread(
+                self._mstr_audit_store.ensure_ready
+            )
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
             "earnings=true mstr=%s",
@@ -261,6 +274,7 @@ class EarningsHostedShadowWorker:
         mstr_processor = (
             MstrBtcShadowProcessor(
                 store=self._mstr_store,
+                audit_store=self._mstr_audit_store,
                 watch=self._mstr_watch,
                 document_fetcher=fetcher,
                 max_fetch_attempts=self._settings.max_fetch_attempts,
@@ -268,6 +282,7 @@ class EarningsHostedShadowWorker:
             )
             if (
                 self._mstr_store is not None
+                and self._mstr_audit_store is not None
                 and self._mstr_watch is not None
             )
             else None
@@ -346,12 +361,22 @@ class EarningsHostedShadowWorker:
                     self._logger.info(
                         "MSTR BTC shadow document processed "
                         "scope=%s status=%s reason=%s baseline=%s "
+                        "event_id=%s fact_id=%s result_id=%s "
+                        "resolution_signals=%s signal_ids=%s "
                         "holdings_before=%s holdings_after=%s "
                         "acquired=%s sold=%s",
                         result.scope_id,
                         result.status.value,
                         result.reason,
                         result.baseline_state_id,
+                        result.source_event_id,
+                        result.fact_candidate_id,
+                        result.processing_result_id,
+                        len(result.signals),
+                        ",".join(
+                            signal.signal_id
+                            for signal in result.signals
+                        ),
                         (
                             fact.holdings_before_btc
                             if fact is not None
@@ -460,10 +485,18 @@ def main(
         if settings.mstr_btc_shadow_enabled
         else None
     )
+    mstr_audit_store = (
+        SqlAlchemyMstrBtcAuditStore(
+            database_url=settings.database_url
+        )
+        if settings.mstr_btc_shadow_enabled
+        else None
+    )
     worker = EarningsHostedShadowWorker(
         settings=settings,
         store=store,
         mstr_store=mstr_store,
+        mstr_audit_store=mstr_audit_store,
         logger=logger,
     )
     try:
@@ -483,6 +516,8 @@ def main(
         store.close()
         if mstr_store is not None:
             mstr_store.close()
+        if mstr_audit_store is not None:
+            mstr_audit_store.close()
     return 0
 
 
