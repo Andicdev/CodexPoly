@@ -34,6 +34,13 @@ class LightsailMstrBtcBaselineTests(unittest.TestCase):
         self.assertIn("as_of < TIMESTAMPTZ", text)
         self.assertIn("observed_at < TIMESTAMPTZ", text)
         self.assertIn("2026-07-21 04:00:00+00", text)
+        self.assertIn(
+            "trg_mstr_btc_holdings_state_append_only",
+            text,
+        )
+        self.assertIn("resolution_execution_profiles", text)
+        self.assertIn("resolution_execution_claims", text)
+        self.assertIn("scope_id LIKE 'mstr-btc:%'", text)
         self.assertNotIn("INSERT INTO", text)
         self.assertNotIn("UPDATE ", text)
         self.assertNotIn("DELETE FROM", text)

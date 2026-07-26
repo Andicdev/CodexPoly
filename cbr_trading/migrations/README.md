@@ -112,3 +112,18 @@ before/after checkpoint confirmed:
 Additional company rules use the same additive tables and can be upserted
 without another migration through
 `python -m scripts.manage_earnings_schema --seed-checked-in-shadow`.
+
+On 2026-07-26, migration 008 was applied first to staging and then to
+production through the fixed stdin-only migration runners. The checked-in
+July 20 MSTR baseline was seeded in both environments:
+
+- holdings: `843775` BTC;
+- reported as of: July 19, 2026 with date-only precision;
+- SEC acceptance: July 20, 2026 at 12:00:16 UTC;
+- provider event: `0001193125-26-308369`.
+
+The staging seed was applied twice to prove operational idempotency. A
+read-only invariant in each environment confirmed that the baseline selected
+strictly before July 21, 2026 at 04:00 UTC is the seeded row, that the
+append-only trigger exists, and that no MSTR execution profile or claim was
+created.

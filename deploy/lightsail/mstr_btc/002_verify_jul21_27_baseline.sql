@@ -11,6 +11,16 @@ BEGIN
         RAISE EXCEPTION 'MSTR holdings schema is not ready';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgrelid = 'mstr_btc_holdings_state'::regclass
+          AND tgname = 'trg_mstr_btc_holdings_state_append_only'
+          AND NOT tgisinternal
+    ) THEN
+        RAISE EXCEPTION 'MSTR holdings append-only trigger is missing';
+    END IF;
+
     IF (
         SELECT count(*)
         FROM mstr_btc_holdings_state
@@ -61,6 +71,18 @@ BEGIN
           AND id = pinned_id
     ) THEN
         RAISE EXCEPTION 'late observation was selected as baseline';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM resolution_execution_profiles
+        WHERE scope_id LIKE 'mstr-btc:%'
+    ) OR EXISTS (
+        SELECT 1
+        FROM resolution_execution_claims
+        WHERE scope_id LIKE 'mstr-btc:%'
+    ) THEN
+        RAISE EXCEPTION 'MSTR execution state exists during baseline-only stage';
     END IF;
 END
 $verify$;
