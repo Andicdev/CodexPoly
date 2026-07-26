@@ -52,6 +52,9 @@ from cbr_trading.resolution_hosted.settings import (
     HostedResolutionMode,
     HostedResolutionSettings,
 )
+from cbr_trading.resolution_hosted.batch_safety import (
+    validate_profile_batch_notional,
+)
 from cbr_trading.secret_guard import redact_exception
 from cbr_trading.sources import (
     MSTR_BTC_SOURCE_NAME,
@@ -157,7 +160,7 @@ class MstrBtcHostedResolutionWorker:
             binding.signal_id: binding
             for binding in self._bindings
         }
-        if (
+        needs_supervision = (
             self._settings.mode is HostedResolutionMode.LIVE
             and any(
                 isinstance(
@@ -166,12 +169,23 @@ class MstrBtcHostedResolutionWorker:
                 )
                 for profile in profiles
             )
-        ):
+        )
+        if needs_supervision:
             if not self._settings.supervision_enabled:
                 raise ValueError(
                     "live reprice profiles require "
                     "RESOLUTION_SUPERVISION_ENABLED"
                 )
+        if self._settings.mode is not HostedResolutionMode.SHADOW:
+            enabled_batch = tuple(
+                self._profile_store.load_enabled()
+            )
+            validate_profile_batch_notional(
+                enabled_batch,
+                mode=self._settings.mode,
+                safety=LiveSafetySettings.from_env(),
+            )
+        if needs_supervision:
             self._start_supervision()
 
         results: list[HostedPreparation] = []

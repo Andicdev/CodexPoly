@@ -133,6 +133,25 @@ when any profile is already enabled, the second verifies exactly one
 in-window profile in a read-only transaction, and the third restores the
 checked-in NVTS window and returns every profile to `DISABLED`.
 
+The three MSTR markets use a stricter sequential preflight in
+`deploy/lightsail/mstr_btc/preflight`. Apply one enable file, run the
+one-shot module below through the production trading overlay, then apply the
+common restore and disabled-profile invariant before moving to the next
+enable file:
+
+```text
+python -u -m cbr_trading.simulations.production_mstr_btc_preflight \
+  --confirm PRODUCTION_MSTR_AUTHENTICATED_PREFLIGHT \
+  --profile-key PROFILE_KEY
+```
+
+Do not enable all three MSTR profiles with the `100` aggregate cap. The
+hosted preflight/live batch guard counts the worst selected outcome from
+every enabled profile and rejects the three-profile maximum of `149.85`.
+The sequential runner additionally requires exactly one enabled in-window
+MSTR profile and reports `order_submitted=false`,
+`source_fact_polled=false`, and `executor_execute_called=false`.
+
 The staging synthetic path is explicitly non-submitting and does not need a
 trading-account secret:
 
