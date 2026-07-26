@@ -32,31 +32,34 @@ tick reprice from `0.01` to `0.001`.
 
 ## Production authenticated preflight
 
-The production preflight is deliberately sequential. Exactly one of the
-three checked-in profiles is enabled, authenticated, and restored to
-`DISABLED` before the next profile is touched. The SQL files are in:
+The reviewed aggregate cap is `1000`, while maximum quantity and per-order
+notional remain `50`. All three checked-in profiles can therefore be
+authenticated together. The SQL files are in:
 
 ```text
 deploy/lightsail/mstr_btc/preflight
 ```
 
-For each profile:
+For the combined preflight:
 
-1. apply its guarded `00N_enable_*.sql`;
+1. apply `005_enable_all_aggregate_1000.sql`;
 2. run the immutable image with:
 
    ```text
    python -u -m cbr_trading.simulations.production_mstr_btc_preflight \
      --confirm PRODUCTION_MSTR_AUTHENTICATED_PREFLIGHT \
-     --profile-key PROFILE_KEY
+     --all-profiles
    ```
 
 3. apply `004_restore_all_disabled.sql` even when the runner fails;
 4. apply `005_verify_disabled_resolution_profiles.sql`.
 
+The individual `001` through `003` enable files and repeatable
+`--profile-key` option remain available for isolated diagnostics.
+
 The runner requires production internal PostgreSQL, preflight mode, disabled
 supervision and live trading, the `abccbaq` metadata-plus-secret account
-source, and exact limits `50 / 50 / 100`. It loads both outcome books,
+source, and exact limits `50 / 50 / 1000`. It loads both outcome books,
 calculates the tick-aligned price, checks current minimum size and collateral,
 and pre-signs both GTC alternatives. It never polls the MSTR source, calls
 executor `execute`, or submits an order. Its JSON output excludes token IDs,
@@ -65,10 +68,8 @@ signatures, wallet details, balances, and secret values.
 The hosted layer also enforces the aggregate limit across every enabled
 profile, including profiles owned by other source workers. At the configured
 desired price, three quantity-50 profiles have a conservative worst-case
-selected-outcome notional of `149.85`, so they cannot be enabled together
-under the reviewed cap of `100`. A later live transition therefore requires
-an explicit risk decision: reduce the profile set or quantity, or approve a
-larger aggregate cap.
+selected-outcome notional of `149.85`, which is within the reviewed cap of
+`1000`.
 
 ## Non-submitting end-to-end simulation
 

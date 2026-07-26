@@ -77,6 +77,34 @@ class LightsailMstrBtcPreflightSqlTests(unittest.TestCase):
         self.assertNotIn("DELETE FROM", text)
         self.assertNotIn("DROP TABLE", text)
 
+    def test_aggregate_1000_enable_requires_exact_three_profiles(
+        self,
+    ) -> None:
+        text = (
+            _PREFLIGHT / "005_enable_all_aggregate_1000.sql"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "another execution profile is already enabled",
+            text,
+        )
+        self.assertIn(
+            "an MSTR execution claim already exists",
+            text,
+        )
+        self.assertIn(
+            "MSTR profile set does not match safe baseline",
+            text,
+        )
+        self.assertIn("changed_rows <> 3", text)
+        self.assertIn(
+            "expected exactly three enabled profiles",
+            text,
+        )
+        self.assertNotIn("DELETE FROM", text)
+        self.assertNotIn("DROP TABLE", text)
+        self.assertNotIn("INSERT INTO", text)
+
 
 if __name__ == "__main__":
     unittest.main()

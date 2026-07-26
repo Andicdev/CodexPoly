@@ -16,7 +16,7 @@ release-time decision.
 - Quantity: `50`
 - Maximum order quantity: `50`
 - Maximum per-order notional: `50`
-- Maximum aggregate prepared notional: `100`
+- Maximum aggregate prepared notional: `1000`
 - Supervision: required in live mode
 - Northflank earnings source, earnings orchestrator, and legacy SEC ingest:
   paused and scaled to zero
@@ -98,7 +98,7 @@ RESOLUTION_SUPERVISION_ENABLED=0
 CBR_LIVE_TRADING_ENABLED=0
 CBR_LIVE_MAX_ORDER_QTY=50
 CBR_LIVE_MAX_NOTIONAL=50
-CBR_LIVE_MAX_TOTAL_NOTIONAL=100
+CBR_LIVE_MAX_TOTAL_NOTIONAL=1000
 ```
 
 Compose sources:

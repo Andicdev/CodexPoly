@@ -30,7 +30,8 @@ _NOW = datetime(2026, 7, 26, 20, tzinfo=timezone.utc)
 def _args(**overrides: object) -> argparse.Namespace:
     values = {
         "confirm": "PRODUCTION_MSTR_AUTHENTICATED_PREFLIGHT",
-        "profile_key": "mstr-jul21-27-purchase-any",
+        "profile_key": ["mstr-jul21-27-purchase-any"],
+        "all_profiles": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -57,7 +58,7 @@ def _safety(**overrides: object) -> LiveSafetySettings:
         "allowed_account": "abccbaq",
         "max_order_quantity": Decimal("50"),
         "max_notional": Decimal("50"),
-        "max_total_notional": Decimal("100"),
+        "max_total_notional": Decimal("1000"),
         "accounts_master_key": "present",
     }
     values.update(overrides)
@@ -131,7 +132,26 @@ class ProductionMstrBtcPreflightTests(unittest.TestCase):
 
         self.assertIsNone(error)
 
-    def test_guard_rejects_live_mode_multiple_profiles_and_larger_cap(
+    def test_guard_accepts_all_three_profiles_with_cap_1000(
+        self,
+    ) -> None:
+        profiles = tuple(
+            _profile(profile_key)
+            for profile_key in _expected_profiles()
+        )
+
+        error = _production_guard_error(
+            args=_args(profile_key=None, all_profiles=True),
+            settings=_settings(),
+            safety=_safety(),
+            profiles=profiles,
+            environ=_environment(),
+            now=_NOW,
+        )
+
+        self.assertIsNone(error)
+
+    def test_guard_rejects_live_mode_profile_set_and_cap_drift(
         self,
     ) -> None:
         self.assertIsNotNone(
@@ -209,9 +229,11 @@ class ProductionMstrBtcPreflightTests(unittest.TestCase):
         )
 
         payload = _success_payload(
-            profile=_profile(),
+            profiles=(_profile(),),
             preparations=(preparation,),
-            executor=executor,
+            executors={
+                "mstr-jul21-27-purchase-any": executor,
+            },
             safety=_safety(),
             database_target="server_int",
         )
@@ -222,9 +244,56 @@ class ProductionMstrBtcPreflightTests(unittest.TestCase):
         self.assertFalse(payload["source_fact_polled"])
         self.assertFalse(payload["executor_execute_called"])
         self.assertEqual(len(payload["market"]), 2)
+        self.assertEqual(
+            payload["preparation"]["maximum_selected_notional"],
+            "49.950",
+        )
         self.assertNotIn("sensitive-output-token", rendered)
         self.assertNotIn("token_id", rendered)
         self.assertNotIn("signature", rendered)
+
+    def test_combined_payload_covers_six_alternatives_under_cap(
+        self,
+    ) -> None:
+        profiles = tuple(
+            _profile(profile_key)
+            for profile_key in _expected_profiles()
+        )
+        executors = {
+            profile.profile_key: SimpleNamespace(
+                details=(_detail("YES"), _detail("NO")),
+                maximum_notional=Decimal("99.00"),
+            )
+            for profile in profiles
+        }
+        preparations = tuple(
+            SimpleNamespace(
+                profile_key=profile.profile_key,
+                ready=True,
+                template_count=2,
+            )
+            for profile in profiles
+        )
+
+        payload = _success_payload(
+            profiles=profiles,
+            preparations=preparations,
+            executors=executors,
+            safety=_safety(),
+            database_target="server_int",
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["enabled_profile_count"], 3)
+        self.assertEqual(len(payload["market"]), 6)
+        self.assertEqual(
+            payload["preparation"]["maximum_prepared_notional"],
+            "297.00",
+        )
+        self.assertEqual(
+            payload["preparation"]["maximum_selected_notional"],
+            "149.850",
+        )
 
 
 if __name__ == "__main__":

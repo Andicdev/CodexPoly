@@ -132,15 +132,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             executor_factory=executor_factory,
         )
         preparations = worker.prepare()
-        executor = executors.get(args.profile_key)
-        if executor is None:
+        requested_profile_keys = _requested_profile_keys(args)
+        if set(executors) != set(requested_profile_keys):
             raise RuntimeError(
-                "authenticated executor was not created"
+                "authenticated executors do not match requested profiles"
             )
         payload = _success_payload(
-            profile=profiles[0],
+            profiles=profiles,
             preparations=preparations,
-            executor=executor,
+            executors=executors,
             safety=safety,
             database_target=settings.database_target,
         )
@@ -163,7 +163,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             {
                 "ok": False,
                 "mode": "production_mstr_btc_authenticated_preflight",
-                "profile_key": args.profile_key,
+                "profile_keys": list(
+                    _requested_profile_keys(args)
+                ),
                 "order_submitted": False,
                 "source_fact_polled": False,
                 "error": failure or "preflight produced no result",
@@ -183,7 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Authenticate, load both outcome books, and pre-sign the two "
-            "alternatives for exactly one checked-in MSTR profile. The "
+            "alternatives for one or all checked-in MSTR profiles. The "
             "command never polls a source fact and never submits an order."
         )
     )
@@ -192,12 +194,28 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help=f"Required literal confirmation: {_CONFIRMATION}.",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument(
         "--profile-key",
-        required=True,
+        action="append",
         choices=sorted(_expected_profiles()),
+        help="Checked-in profile key. Repeat to select several profiles.",
+    )
+    selection.add_argument(
+        "--all-profiles",
+        action="store_true",
+        help="Require and authenticate all checked-in MSTR profiles.",
     )
     return parser
+
+
+def _requested_profile_keys(
+    args: argparse.Namespace,
+) -> tuple[str, ...]:
+    if bool(getattr(args, "all_profiles", False)):
+        return tuple(_expected_profiles())
+    requested = tuple(getattr(args, "profile_key", None) or ())
+    return requested
 
 
 def _production_guard_error(
@@ -229,8 +247,8 @@ def _production_guard_error(
         return "maximum order quantity must equal 50"
     if safety.max_notional != Decimal("50"):
         return "maximum per-order notional must equal 50"
-    if safety.max_total_notional != Decimal("100"):
-        return "maximum prepared notional must equal 100"
+    if safety.max_total_notional != Decimal("1000"):
+        return "maximum prepared notional must equal 1000"
     if not safety.accounts_master_key:
         return "account master key is not available"
     if (
@@ -260,60 +278,100 @@ def _production_guard_error(
         return "runner requires the internal production database"
     if now.tzinfo is None or now.utcoffset() is None:
         return "preflight clock must be timezone-aware"
-    expected = _expected_profiles().get(args.profile_key)
-    if expected is None:
-        return "profile key is not checked in"
-    if len(profiles) != 1:
-        return "exactly one MSTR profile must be enabled and in window"
-    profile = profiles[0]
-    if profile.profile_key != args.profile_key:
-        return "enabled MSTR profile does not match the requested profile"
-    if (
-        profile.scope_id != expected.scope_id
-        or profile.source_name != MSTR_BTC_SOURCE_NAME
-        or profile.source_reference != expected.source_reference
-        or profile.account_name.casefold() != _ACCOUNT_NAME
-        or profile.condition_id.casefold()
-        != expected.condition_id.casefold()
-        or profile.yes_desired_price != Decimal("0.999")
-        or profile.no_desired_price != Decimal("0.999")
-        or profile.quantity != Decimal("50")
-        or profile.expires_at != _CHECKED_IN_EXPIRES_AT
-        or profile.metadata.get("rule_key") != expected.rule_key
-    ):
-        return "enabled MSTR profile does not match the checked-in baseline"
-    policy = profile.lifecycle_policy
-    if (
-        not isinstance(policy, RepriceOnTickChange)
-        or policy.old_tick != Decimal("0.01")
-        or policy.new_tick != Decimal("0.001")
-        or policy.max_reprices != 1
-    ):
-        return "enabled MSTR lifecycle policy does not match"
     current = now.astimezone(timezone.utc)
-    if not profile.prepare_from <= current <= profile.expires_at:
-        return "enabled MSTR profile is outside its preparation window"
+    expected_profiles = _expected_profiles()
+    requested_keys = _requested_profile_keys(args)
+    if (
+        not requested_keys
+        or len(requested_keys) != len(set(requested_keys))
+        or any(key not in expected_profiles for key in requested_keys)
+    ):
+        return "requested MSTR profile set is invalid"
+    if (
+        len(profiles) != len(requested_keys)
+        or {profile.profile_key for profile in profiles}
+        != set(requested_keys)
+    ):
+        return "enabled MSTR profiles do not match the requested set"
+    for profile in profiles:
+        expected = expected_profiles[profile.profile_key]
+        if (
+            profile.scope_id != expected.scope_id
+            or profile.source_name != MSTR_BTC_SOURCE_NAME
+            or profile.source_reference != expected.source_reference
+            or profile.account_name.casefold() != _ACCOUNT_NAME
+            or profile.condition_id.casefold()
+            != expected.condition_id.casefold()
+            or profile.yes_desired_price != Decimal("0.999")
+            or profile.no_desired_price != Decimal("0.999")
+            or profile.quantity != Decimal("50")
+            or profile.expires_at != _CHECKED_IN_EXPIRES_AT
+            or profile.metadata.get("rule_key") != expected.rule_key
+        ):
+            return (
+                "enabled MSTR profile does not match "
+                "the checked-in baseline"
+            )
+        policy = profile.lifecycle_policy
+        if (
+            not isinstance(policy, RepriceOnTickChange)
+            or policy.old_tick != Decimal("0.01")
+            or policy.new_tick != Decimal("0.001")
+            or policy.max_reprices != 1
+        ):
+            return "enabled MSTR lifecycle policy does not match"
+        if not profile.prepare_from <= current <= profile.expires_at:
+            return (
+                "enabled MSTR profile is outside "
+                "its preparation window"
+            )
     return None
 
 
 def _success_payload(
     *,
-    profile: ResolutionExecutionProfile,
+    profiles: Sequence[ResolutionExecutionProfile],
     preparations: Sequence[Any],
-    executor: PolymarketPreflightPreparedExecutor,
+    executors: Mapping[
+        str,
+        PolymarketPreflightPreparedExecutor,
+    ],
     safety: LiveSafetySettings,
     database_target: str,
 ) -> dict[str, Any]:
-    details = tuple(executor.details)
+    profile_rows = tuple(profiles)
+    profile_keys = tuple(
+        profile.profile_key for profile in profile_rows
+    )
+    preparation_by_key = {
+        preparation.profile_key: preparation
+        for preparation in preparations
+    }
+    detail_rows = tuple(
+        (profile_key, detail)
+        for profile_key in profile_keys
+        for detail in executors[profile_key].details
+    )
     preparation_ready = (
-        len(preparations) == 1
-        and preparations[0].profile_key == profile.profile_key
-        and preparations[0].ready
-        and preparations[0].template_count == 2
+        len(preparations) == len(profile_rows)
+        and set(preparation_by_key) == set(profile_keys)
+        and all(
+            preparation_by_key[profile_key].ready
+            and preparation_by_key[profile_key].template_count == 2
+            for profile_key in profile_keys
+        )
     )
     market_ready = (
-        len(details) == 2
-        and {detail.outcome for detail in details} == {"YES", "NO"}
+        len(detail_rows) == len(profile_rows) * 2
+        and all(
+            {
+                detail.outcome
+                for key, detail in detail_rows
+                if key == profile_key
+            }
+            == {"YES", "NO"}
+            for profile_key in profile_keys
+        )
         and all(
             detail.quantity == Decimal("50")
             and detail.desired_price == Decimal("0.999")
@@ -330,34 +388,60 @@ def _success_payload(
             and detail.minimum_order_size <= detail.quantity
             and detail.order_presigned
             and detail.collateral_sufficient
-            for detail in details
+            for _profile_key, detail in detail_rows
         )
     )
+    maximum_prepared_notional = sum(
+        (
+            executors[profile_key].maximum_notional
+            for profile_key in profile_keys
+        ),
+        start=Decimal("0"),
+    )
+    maximum_selected_notional = sum(
+        (
+            profile.quantity
+            * max(
+                profile.yes_desired_price,
+                profile.no_desired_price,
+            )
+            for profile in profile_rows
+        ),
+        start=Decimal("0"),
+    )
     within_cap = (
-        executor.maximum_notional > 0
+        maximum_prepared_notional > 0
         and safety.max_total_notional is not None
-        and executor.maximum_notional <= safety.max_total_notional
+        and maximum_prepared_notional
+        <= safety.max_total_notional
+        and maximum_selected_notional
+        <= safety.max_total_notional
     )
     return {
         "ok": bool(preparation_ready and market_ready and within_cap),
         "mode": "production_mstr_btc_authenticated_preflight",
-        "profile_key": profile.profile_key,
+        "profile_keys": list(profile_keys),
         "database_target": database_target,
-        "enabled_profile_count": 1,
+        "enabled_profile_count": len(profile_rows),
         "order_submitted": False,
         "source_fact_polled": False,
         "executor_execute_called": False,
         "preparation": {
             "ready": preparation_ready,
-            "template_count": (
-                preparations[0].template_count
-                if len(preparations) == 1
-                else 0
+            "template_count": sum(
+                preparation.template_count
+                for preparation in preparations
             ),
-            "maximum_notional": str(executor.maximum_notional),
+            "maximum_prepared_notional": str(
+                maximum_prepared_notional
+            ),
+            "maximum_selected_notional": str(
+                maximum_selected_notional
+            ),
         },
         "market": [
             {
+                "profile_key": profile_key,
                 "outcome": detail.outcome,
                 "quantity": str(detail.quantity),
                 "desired_price": str(detail.desired_price),
@@ -373,7 +457,7 @@ def _success_payload(
                     detail.collateral_sufficient
                 ),
             }
-            for detail in details
+            for profile_key, detail in detail_rows
         ],
         "safety": {
             "live_trading_enabled": safety.trading_enabled,

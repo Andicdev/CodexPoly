@@ -117,9 +117,9 @@ production account.
 4. Verify both workers' aggregate heartbeats without inspecting secrets.
 5. Install the production account secrets through the human-only installer.
 6. Verify the `resolution-worker-trading` secret set by name only.
-7. Enable one in-window profile and recreate `resolution-worker` with the
-   production trading overlay in preflight mode.
-8. Return the profile to `DISABLED` after the authenticated preflight.
+7. Enable only the reviewed in-window profiles and recreate
+   `resolution-worker` with the production trading overlay in preflight mode.
+8. Return the profiles to `DISABLED` after the authenticated preflight.
 9. Enable live mode only after explicit approval and after the Northflank live
    resolution worker is stopped.
 
@@ -133,23 +133,22 @@ when any profile is already enabled, the second verifies exactly one
 in-window profile in a read-only transaction, and the third restores the
 checked-in NVTS window and returns every profile to `DISABLED`.
 
-The three MSTR markets use a stricter sequential preflight in
-`deploy/lightsail/mstr_btc/preflight`. Apply one enable file, run the
-one-shot module below through the production trading overlay, then apply the
-common restore and disabled-profile invariant before moving to the next
-enable file:
+The three MSTR markets use aggregate cap `1000`, with quantity and per-order
+caps still fixed at `50`. Apply
+`005_enable_all_aggregate_1000.sql`, run the one-shot module below through
+the production trading overlay, then apply the common restore and
+disabled-profile invariant:
 
 ```text
 python -u -m cbr_trading.simulations.production_mstr_btc_preflight \
   --confirm PRODUCTION_MSTR_AUTHENTICATED_PREFLIGHT \
-  --profile-key PROFILE_KEY
+  --all-profiles
 ```
 
-Do not enable all three MSTR profiles with the `100` aggregate cap. The
 hosted preflight/live batch guard counts the worst selected outcome from
-every enabled profile and rejects the three-profile maximum of `149.85`.
-The sequential runner additionally requires exactly one enabled in-window
-MSTR profile and reports `order_submitted=false`,
+every enabled profile. The three-profile maximum is `149.85`, within the
+reviewed cap of `1000`. The runner requires the enabled set to match the
+requested checked-in profiles and reports `order_submitted=false`,
 `source_fact_polled=false`, and `executor_execute_called=false`.
 
 The staging synthetic path is explicitly non-submitting and does not need a
