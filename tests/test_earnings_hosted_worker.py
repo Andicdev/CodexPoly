@@ -6,13 +6,20 @@ from dataclasses import replace
 from cbr_trading.earnings.hosted_worker import (
     EarningsHostedShadowWorker,
     WorkerCycleStatus,
+    _RoutedSecShadowTransport,
     _watches_from_rules,
 )
+from cbr_trading.earnings.sec_stream import SecEarningsWatch
 from cbr_trading.earnings.parsers import checked_in_shadow_rules
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.settings import EarningsWorkerSettings
+from cbr_trading.mstr_btc import (
+    MstrBtcDocumentCandidate,
+    mstr_jul21_27_shadow_watch,
+)
+from cbr_trading.sec_filings import normalize_sec_filing
 
 
 class _Store:
@@ -23,10 +30,28 @@ class _Store:
         return self.rules
 
 
+class _MstrStore:
+    def pin_baseline(self, *, before):
+        raise AssertionError(
+            f"no candidate should request a baseline before {before}"
+        )
+
+
 class _EmptyTransport:
     async def stream_once(self):
         if False:
             yield None
+
+
+class _EnvelopeTransport:
+    def __init__(self, envelopes):
+        self.envelopes = tuple(envelopes)
+        self.connection_count = 0
+
+    async def stream_once(self):
+        self.connection_count += 1
+        for envelope in self.envelopes:
+            yield envelope
 
 
 def _settings() -> EarningsWorkerSettings:
@@ -39,6 +64,112 @@ def _settings() -> EarningsWorkerSettings:
 
 
 class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mstr_watch_connects_without_earnings_rules(
+        self,
+    ) -> None:
+        captured = []
+
+        def builder(watches):
+            captured.extend(watches)
+            return _EmptyTransport()
+
+        worker = EarningsHostedShadowWorker(
+            settings=replace(
+                _settings(),
+                mstr_btc_shadow_enabled=True,
+            ),
+            store=_Store([]),
+            mstr_store=_MstrStore(),
+            transport_builder=builder,
+        )
+
+        result = await worker.run_connection_cycle()
+
+        self.assertEqual(result.status, WorkerCycleStatus.STREAM_CLOSED)
+        self.assertEqual(result.watch_count, 1)
+        self.assertEqual(captured[0].ticker, "MSTR")
+
+    async def test_one_source_connection_fans_out_to_both_routers(
+        self,
+    ) -> None:
+        now = mstr_jul21_27_shadow_watch().window_start.replace(
+            day=27,
+            hour=12,
+        )
+        raw_transport = _EnvelopeTransport(
+            (
+                normalize_sec_filing(
+                    {
+                        "ticker": "NVTS",
+                        "cik": "1821769",
+                        "accessionNo": "earnings-accession",
+                        "formType": "8-K",
+                        "filedAt": now.isoformat(),
+                        "items": ["Item 2.02"],
+                        "linkToFilingDetails": (
+                            "https://www.sec.gov/nvts-index.htm"
+                        ),
+                        "documentFormatFiles": [
+                            {
+                                "type": "EX-99.1",
+                                "documentUrl": (
+                                    "https://www.sec.gov/nvts-ex991.htm"
+                                ),
+                            }
+                        ],
+                    },
+                    received_at=now,
+                ),
+                normalize_sec_filing(
+                    {
+                        "ticker": "MSTR",
+                        "cik": "1050446",
+                        "accessionNo": "mstr-accession",
+                        "formType": "8-K",
+                        "filedAt": now.isoformat(),
+                        "items": ["Item 8.01"],
+                        "linkToFilingDetails": (
+                            "https://www.sec.gov/mstr-index.htm"
+                        ),
+                        "documentFormatFiles": [
+                            {
+                                "type": "8-K",
+                                "documentUrl": (
+                                    "https://www.sec.gov/mstr-8k.htm"
+                                ),
+                            }
+                        ],
+                    },
+                    received_at=now,
+                ),
+            )
+        )
+        routed = _RoutedSecShadowTransport(
+            transport=raw_transport,
+            earnings_watches=(
+                SecEarningsWatch(
+                    scope_id="earnings:NVTS:2026Q2",
+                    ticker="NVTS",
+                    cik="1821769",
+                ),
+            ),
+            mstr_watches=(mstr_jul21_27_shadow_watch(),),
+        )
+
+        found = [
+            candidate
+            async for candidate in routed.stream_once()
+        ]
+
+        self.assertEqual(raw_transport.connection_count, 1)
+        self.assertEqual(len(found), 2)
+        self.assertTrue(
+            any(
+                isinstance(candidate, MstrBtcDocumentCandidate)
+                for candidate in found
+            )
+        )
+
     async def test_connection_cycle_loads_shadow_watch(self) -> None:
         captured = []
 
@@ -178,6 +309,30 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(settings.sec_api_key)
+
+    def test_mstr_shadow_requires_explicit_boolean_enable(self) -> None:
+        disabled = EarningsWorkerSettings.from_env(
+            {
+                "CBR_DATABASE_URL": "postgresql://configured",
+                "SEC_API_KEY": "configured",
+                "EARNINGS_HTTP_USER_AGENT": (
+                    "CodexPoly test@example.com"
+                ),
+            }
+        )
+        enabled = EarningsWorkerSettings.from_env(
+            {
+                "CBR_DATABASE_URL": "postgresql://configured",
+                "SEC_API_KEY": "configured",
+                "EARNINGS_HTTP_USER_AGENT": (
+                    "CodexPoly test@example.com"
+                ),
+                "MSTR_BTC_SHADOW_ENABLED": "true",
+            }
+        )
+
+        self.assertFalse(disabled.mstr_btc_shadow_enabled)
+        self.assertTrue(enabled.mstr_btc_shadow_enabled)
 
 
 if __name__ == "__main__":

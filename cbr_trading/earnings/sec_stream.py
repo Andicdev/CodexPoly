@@ -1,56 +1,29 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
-from urllib.parse import quote
+from typing import Any
 
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
     EarningsProvider,
     SourceAuthority,
 )
-
-
-SEC_STREAM_ENDPOINT = "wss://stream.sec-api.io"
-
-
-class SecStreamTransportError(RuntimeError):
-    """Sanitized SEC transport failure that cannot reveal its credential."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        diagnostic_code: str | None = None,
-    ):
-        super().__init__(message)
-        self.diagnostic_code = (
-            str(diagnostic_code or "").strip()
-            or type(self).__name__
-        )
-
-
-class _AsyncWebSocket(Protocol):
-    def __aiter__(self) -> AsyncIterator[object]: ...
-
-
-class _AsyncConnection(Protocol):
-    async def __aenter__(self) -> _AsyncWebSocket: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: object | None,
-    ) -> bool | None: ...
-
-
-ConnectFactory = Callable[..., _AsyncConnection]
+from cbr_trading.sec_filings.contracts import (
+    SecDocumentReference,
+    SecFilingEnvelope,
+    normalize_sec_filing,
+)
+from cbr_trading.sec_filings.stream import (
+    SEC_STREAM_ENDPOINT,
+    ConnectFactory,
+    SecStreamTransport,
+    SecStreamTransportError,
+    _stream_error_code,
+    decode_sec_stream_message,
+)
 
 
 @dataclass(frozen=True)
@@ -91,7 +64,7 @@ class SecFilingDecision:
 
 
 class SecStreamFilingRouter:
-    """Strictly route initial earnings 8-K exhibits to watched event scopes."""
+    """Route normalized initial earnings 8-K exhibits to event scopes."""
 
     def __init__(self, watches: Sequence[SecEarningsWatch]):
         rows = tuple(watches)
@@ -104,38 +77,35 @@ class SecStreamFilingRouter:
 
     def route(
         self,
-        filing: Mapping[str, Any],
+        filing: Mapping[str, Any] | SecFilingEnvelope,
         *,
-        received_at: datetime,
+        received_at: datetime | None = None,
     ) -> tuple[SecFilingDecision, ...]:
-        ticker = str(
-            filing.get("ticker")
-            or filing.get("symbol")
-            or ""
-        ).strip().upper()
-        cik = _normalize_optional_cik(filing.get("cik"))
+        envelope = _as_envelope(filing, received_at=received_at)
         matching = tuple(
             watch
             for watch in self._watches
             if (
-                (ticker and ticker == watch.ticker)
-                or (cik and cik == watch.cik)
+                (
+                    envelope.ticker
+                    and envelope.ticker == watch.ticker
+                )
+                or (envelope.cik and envelope.cik == watch.cik)
             )
         )
         if not matching:
             return (SecFilingDecision(False, "unwatched_issuer"),)
         return tuple(
             evaluate_sec_earnings_filing(
-                filing,
+                envelope,
                 watch=watch,
-                received_at=received_at,
             )
             for watch in matching
         )
 
 
 class SecStreamEarningsTransport:
-    """Read one SEC WebSocket connection and emit only strict candidates."""
+    """Compatibility adapter over the source-neutral SEC transport."""
 
     def __init__(
         self,
@@ -145,180 +115,94 @@ class SecStreamEarningsTransport:
         connect_factory: ConnectFactory | None = None,
         clock: Callable[[], datetime] | None = None,
     ):
-        normalized_key = str(api_key or "").strip()
-        if not normalized_key:
-            raise ValueError("SEC API credential is required")
-        self._api_key = normalized_key
+        self._transport = SecStreamTransport(
+            api_key=api_key,
+            connect_factory=connect_factory,
+            clock=clock,
+        )
         self._router = SecStreamFilingRouter(watches)
-        self._connect_factory = connect_factory
-        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}("
-            "credential=[REDACTED], "
-            f"custom_connector={self._connect_factory is not None})"
+            "credential=[REDACTED], source_neutral=True)"
         )
 
-    async def stream_once(self) -> AsyncIterator[EarningsDocumentCandidate]:
-        """Consume one connection; reconnect policy belongs to the host worker."""
-
-        connector = self._connect_factory or _default_connect_factory()
-        uri = (
-            f"{SEC_STREAM_ENDPOINT}?apiKey="
-            f"{quote(self._api_key, safe='')}"
-        )
-        try:
-            async with connector(
-                uri,
-                open_timeout=20,
-                close_timeout=10,
-                max_size=8 * 1024 * 1024,
-            ) as websocket:
-                async for message in websocket:
-                    received_at = _as_utc(self._clock())
-                    for filing in decode_sec_stream_message(message):
-                        for decision in self._router.route(
-                            filing,
-                            received_at=received_at,
-                        ):
-                            if decision.candidate is not None:
-                                yield decision.candidate
-        except asyncio.CancelledError:
-            raise
-        except SecStreamTransportError:
-            raise
-        except Exception as exc:
-            diagnostic_code = _stream_error_code(exc)
-            raise SecStreamTransportError(
-                "SEC earnings stream failed: "
-                f"{diagnostic_code}",
-                diagnostic_code=diagnostic_code,
-            ) from None
-        finally:
-            uri = ""
-
-
-def decode_sec_stream_message(
-    message: object,
-) -> tuple[Mapping[str, Any], ...]:
-    if isinstance(message, bytes):
-        try:
-            message = message.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise SecStreamTransportError(
-                "SEC stream message is not valid UTF-8"
-            ) from exc
-    if not isinstance(message, str):
-        raise SecStreamTransportError(
-            "SEC stream message must be text or bytes"
-        )
-    try:
-        payload = json.loads(message)
-    except json.JSONDecodeError as exc:
-        raise SecStreamTransportError(
-            "SEC stream message is not valid JSON"
-        ) from exc
-    if not isinstance(payload, list):
-        raise SecStreamTransportError(
-            "SEC stream message must contain a JSON array"
-        )
-    if any(not isinstance(item, Mapping) for item in payload):
-        raise SecStreamTransportError(
-            "SEC stream array must contain only objects"
-        )
-    return tuple(payload)
+    async def stream_once(
+        self,
+    ) -> AsyncIterator[EarningsDocumentCandidate]:
+        async for envelope in self._transport.stream_once():
+            for decision in self._router.route(envelope):
+                if decision.candidate is not None:
+                    yield decision.candidate
 
 
 def evaluate_sec_earnings_filing(
-    filing: Mapping[str, Any],
+    filing: Mapping[str, Any] | SecFilingEnvelope,
     *,
     watch: SecEarningsWatch,
-    received_at: datetime,
+    received_at: datetime | None = None,
 ) -> SecFilingDecision:
-    ticker = str(
-        filing.get("ticker")
-        or filing.get("symbol")
-        or ""
-    ).strip().upper()
-    cik = _normalize_optional_cik(filing.get("cik"))
-    if not cik:
+    envelope = _as_envelope(filing, received_at=received_at)
+    if not envelope.cik:
         return SecFilingDecision(False, "cik_missing")
-    if ticker and ticker != watch.ticker:
+    if envelope.ticker and envelope.ticker != watch.ticker:
         return SecFilingDecision(False, "ticker_mismatch")
-    if cik != watch.cik:
+    if envelope.cik != watch.cik:
         return SecFilingDecision(False, "cik_mismatch")
 
-    form_type = str(filing.get("formType") or "").strip().upper()
-    if form_type != "8-K":
+    if envelope.form_type != "8-K":
         return SecFilingDecision(False, "not_initial_8k")
-
-    items = _normalized_items(filing.get("items"))
-    description = str(filing.get("description") or "")
-    if not _has_item_202(items, description):
+    if not _has_item_202(
+        envelope.items,
+        envelope.description or "",
+    ):
         return SecFilingDecision(False, "item_202_missing")
-
-    accession = str(filing.get("accessionNo") or "").strip()
-    if not accession:
+    if not envelope.accession:
         return SecFilingDecision(False, "accession_missing")
-
-    filing_url = str(
-        filing.get("linkToFilingDetails")
-        or ""
-    ).strip()
-    if not _is_https_url(filing_url):
+    if not _is_https_url(envelope.filing_url):
         return SecFilingDecision(False, "filing_url_missing")
 
-    exhibits = _press_release_exhibits(
-        filing.get("documentFormatFiles")
+    exhibits = tuple(
+        document
+        for document in envelope.documents
+        if document.document_type == "EX-99.1"
     )
     if not exhibits:
         return SecFilingDecision(False, "exhibit_991_missing")
     if len(exhibits) > 1:
         return SecFilingDecision(False, "exhibit_991_ambiguous")
     exhibit = exhibits[0]
-    source_url = str(exhibit.get("documentUrl") or "").strip()
-    if not _is_https_url(source_url):
+    if not _is_https_url(exhibit.document_url):
         return SecFilingDecision(False, "exhibit_url_missing")
-
-    filed_at = _parse_timestamp(filing.get("filedAt"))
-    if filed_at is None:
+    if envelope.filed_at is None:
         return SecFilingDecision(False, "filed_at_invalid")
 
     fingerprint = hashlib.sha256(
         (
             f"{EarningsProvider.SEC.value}|{watch.scope_id}|"
-            f"{accession}|{source_url}"
+            f"{envelope.accession}|{exhibit.document_url}"
         ).encode("utf-8")
     ).hexdigest()
     metadata = {
-        "company_name": str(
-            filing.get("companyName")
-            or ""
-        ).strip() or None,
-        "description": description.strip() or None,
-        "exhibit_description": str(
-            exhibit.get("description")
-            or ""
-        ).strip() or None,
-        "exhibit_sequence": str(
-            exhibit.get("sequence")
-            or ""
-        ).strip() or None,
+        "company_name": envelope.company_name,
+        "description": envelope.description,
+        "exhibit_description": exhibit.description,
+        "exhibit_sequence": exhibit.sequence,
     }
     candidate = EarningsDocumentCandidate(
         scope_id=watch.scope_id,
         provider=EarningsProvider.SEC,
-        provider_event_id=accession,
+        provider_event_id=envelope.accession,
         ticker=watch.ticker,
         cik=watch.cik,
-        form_type=form_type,
-        items=items,
+        form_type=envelope.form_type,
+        items=envelope.items,
         document_type="EX-99.1",
-        source_url=source_url,
-        filing_url=filing_url,
-        filed_at=filed_at,
-        received_at=_as_utc(received_at),
+        source_url=exhibit.document_url,
+        filing_url=envelope.filing_url or "",
+        filed_at=envelope.filed_at,
+        received_at=envelope.received_at,
         authority=SourceAuthority.OFFICIAL_COMPANY,
         transport_fingerprint=fingerprint,
         metadata={
@@ -327,44 +211,27 @@ def evaluate_sec_earnings_filing(
             if value is not None
         },
     )
-    return SecFilingDecision(True, "official_earnings_exhibit", candidate)
+    return SecFilingDecision(
+        True,
+        "official_earnings_exhibit",
+        candidate,
+    )
 
 
-def _default_connect_factory() -> ConnectFactory:
-    try:
-        from websockets.asyncio.client import connect
-    except ImportError as exc:
-        raise SecStreamTransportError(
-            "SEC stream support requires the websockets package"
-        ) from exc
-    return connect
-
-
-def _stream_error_code(exc: BaseException) -> str:
-    error_type = type(exc).__name__
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None)
-    if (
-        isinstance(status, int)
-        and 100 <= status <= 599
-    ):
-        return f"{error_type}:http_{status}"
-    return error_type
-
-
-def _normalized_items(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        values: Sequence[object] = (value,)
-    elif isinstance(value, Sequence):
-        values = value
-    else:
-        values = ()
-    return tuple(
-        normalized
-        for item in values
-        if (normalized := str(item or "").strip())
+def _as_envelope(
+    filing: Mapping[str, Any] | SecFilingEnvelope,
+    *,
+    received_at: datetime | None,
+) -> SecFilingEnvelope:
+    if isinstance(filing, SecFilingEnvelope):
+        return filing
+    if received_at is None:
+        raise ValueError(
+            "received_at is required for unnormalized SEC filings"
+        )
+    return normalize_sec_filing(
+        filing,
+        received_at=_as_utc(received_at),
     )
 
 
@@ -379,35 +246,6 @@ def _has_item_202(
     )
 
 
-def _press_release_exhibits(value: object) -> tuple[Mapping[str, Any], ...]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        return ()
-    matches: list[Mapping[str, Any]] = []
-    for item in value:
-        if not isinstance(item, Mapping):
-            continue
-        exhibit_type = str(item.get("type") or "").strip().upper()
-        if exhibit_type != "EX-99.1":
-            continue
-        matches.append(item)
-    return tuple(matches)
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return None
-    try:
-        parsed = datetime.fromisoformat(
-            normalized.replace("Z", "+00:00")
-        )
-    except ValueError:
-        return None
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return None
-    return parsed.astimezone(timezone.utc)
-
-
 def _normalize_cik(value: object) -> str:
     normalized = str(value or "").strip()
     if not normalized or not normalized.isdigit():
@@ -415,18 +253,25 @@ def _normalize_cik(value: object) -> str:
     return normalized.lstrip("0") or "0"
 
 
-def _normalize_optional_cik(value: object) -> str | None:
-    normalized = str(value or "").strip()
-    if not normalized or not normalized.isdigit():
-        return None
-    return normalized.lstrip("0") or "0"
-
-
-def _is_https_url(value: str) -> bool:
-    return value.lower().startswith("https://")
+def _is_https_url(value: str | None) -> bool:
+    return str(value or "").lower().startswith("https://")
 
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamp must be timezone-aware")
+        raise ValueError("received_at must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+__all__ = [
+    "SEC_STREAM_ENDPOINT",
+    "SecDocumentReference",
+    "SecEarningsWatch",
+    "SecFilingDecision",
+    "SecStreamEarningsTransport",
+    "SecStreamFilingRouter",
+    "SecStreamTransportError",
+    "_stream_error_code",
+    "decode_sec_stream_message",
+    "evaluate_sec_earnings_filing",
+]

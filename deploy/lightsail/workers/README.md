@@ -1,11 +1,13 @@
-# CodexPoly earnings workers on Lightsail
+# CodexPoly SEC and resolution workers on Lightsail
 
 ## Service boundary
 
 The worker stack contains exactly two private services built from the same
 reviewed CodexPoly image:
 
-- `earnings-worker` runs `python -u -m cbr_trading.earnings`;
+- `earnings-worker` retains its compatibility service name and runs
+  `python -u -m cbr_trading.earnings`; internally it owns one shared SEC
+  filing connection for earnings and MSTR shadow routers;
 - `resolution-worker` runs
   `python -u -m cbr_trading.resolution_hosted`.
 
@@ -19,6 +21,11 @@ systemd-resolved stub.
 `earnings-worker` receives the SEC credential but never receives a trading
 credential. The base `resolution-worker` starts in `shadow` and receives only
 the application database password.
+
+`MSTR_BTC_SHADOW_ENABLED=true` enables only the checked-in, time-bounded MSTR
+source watch. The worker verifies the append-only holdings schema, pins the
+validated pre-window baseline, and logs aggregate parser output. It does not
+create an MSTR resolution profile, execution claim, order intent, or order.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

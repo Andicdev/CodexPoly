@@ -4,12 +4,15 @@ import asyncio
 import logging
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from cbr_trading.earnings.contracts import EarningsMarketRule
+from cbr_trading.earnings.contracts import (
+    EarningsDocumentCandidate,
+    EarningsMarketRule,
+)
 from cbr_trading.earnings.document_fetcher import SecDocumentFetcher
 from cbr_trading.earnings.parsers import earnings_parser_registry
 from cbr_trading.earnings.processor import (
@@ -19,10 +22,24 @@ from cbr_trading.earnings.processor import (
 from cbr_trading.earnings.repository import SqlAlchemyEarningsStore
 from cbr_trading.earnings.sec_stream import (
     SecEarningsWatch,
-    SecStreamEarningsTransport,
+    SecStreamFilingRouter,
     SecStreamTransportError,
 )
 from cbr_trading.earnings.settings import EarningsWorkerSettings
+from cbr_trading.mstr_btc.contracts import MstrBtcDocumentCandidate
+from cbr_trading.mstr_btc.processor import (
+    MstrBtcShadowProcessor,
+    MstrBtcShadowStatus,
+)
+from cbr_trading.mstr_btc.repository import (
+    SqlAlchemyMstrBtcHoldingsStore,
+)
+from cbr_trading.mstr_btc.sec_router import (
+    MstrBtcRouter,
+    MstrBtcSecWatch,
+    mstr_jul21_27_shadow_watch,
+)
+from cbr_trading.sec_filings.stream import SecStreamTransport
 from cbr_trading.secret_guard import redact_exception
 
 
@@ -30,10 +47,8 @@ class StreamTransport(Protocol):
     def stream_once(self): ...
 
 
-TransportBuilder = Callable[
-    [Sequence[SecEarningsWatch]],
-    StreamTransport,
-]
+SecWatch = SecEarningsWatch | MstrBtcSecWatch
+TransportBuilder = Callable[[Sequence[SecWatch]], StreamTransport]
 
 
 class WorkerCycleStatus(str, Enum):
@@ -47,6 +62,47 @@ class WorkerCycleResult:
     watch_count: int
     processed_count: int = 0
     signal_count: int = 0
+    mstr_accepted_count: int = 0
+
+
+class _RoutedSecShadowTransport:
+    """Fan one source-neutral SEC connection out to semantic routers."""
+
+    def __init__(
+        self,
+        *,
+        transport: SecStreamTransport,
+        earnings_watches: Sequence[SecEarningsWatch],
+        mstr_watches: Sequence[MstrBtcSecWatch],
+    ):
+        self._transport = transport
+        self._earnings_router = (
+            SecStreamFilingRouter(earnings_watches)
+            if earnings_watches
+            else None
+        )
+        if len(mstr_watches) > 1:
+            raise ValueError("only one active MSTR BTC watch is supported")
+        self._mstr_router = (
+            MstrBtcRouter(mstr_watches[0])
+            if mstr_watches
+            else None
+        )
+
+    async def stream_once(
+        self,
+    ) -> AsyncIterator[
+        EarningsDocumentCandidate | MstrBtcDocumentCandidate
+    ]:
+        async for envelope in self._transport.stream_once():
+            if self._earnings_router is not None:
+                for decision in self._earnings_router.route(envelope):
+                    if decision.candidate is not None:
+                        yield decision.candidate
+            if self._mstr_router is not None:
+                decision = self._mstr_router.route(envelope)
+                if decision.candidate is not None:
+                    yield decision.candidate
 
 
 class EarningsHostedShadowWorker:
@@ -57,12 +113,28 @@ class EarningsHostedShadowWorker:
         *,
         settings: EarningsWorkerSettings,
         store: SqlAlchemyEarningsStore,
+        mstr_store: SqlAlchemyMstrBtcHoldingsStore | None = None,
+        mstr_watch: MstrBtcSecWatch | None = None,
         transport_builder: TransportBuilder | None = None,
         parsers: Mapping[str, object] | None = None,
         logger: logging.Logger | None = None,
     ):
         self._settings = settings
         self._store = store
+        self._mstr_watch = (
+            mstr_watch
+            if mstr_watch is not None
+            else (
+                mstr_jul21_27_shadow_watch()
+                if settings.mstr_btc_shadow_enabled
+                else None
+            )
+        )
+        self._mstr_store = mstr_store
+        if self._mstr_watch is not None and self._mstr_store is None:
+            raise ValueError(
+                "mstr_store is required when MSTR shadow is enabled"
+            )
         self._transport_builder = (
             transport_builder
             or self._default_transport_builder
@@ -78,12 +150,17 @@ class EarningsHostedShadowWorker:
         self._watch_count = 0
         self._processed_count = 0
         self._signal_count = 0
+        self._mstr_accepted_count = 0
         self._error_count = 0
 
     async def run_forever(self) -> None:
         await asyncio.to_thread(self._store.ensure_ready)
+        if self._mstr_store is not None:
+            await asyncio.to_thread(self._mstr_store.ensure_ready)
         self._logger.info(
-            "Earnings shadow worker schema ready mode=shadow"
+            "SEC shadow worker schema ready mode=shadow "
+            "earnings=true mstr=%s",
+            self._mstr_watch is not None,
         )
         heartbeat = asyncio.create_task(self._heartbeat_loop())
         delay = self._settings.reconnect_initial_delay
@@ -100,11 +177,13 @@ class EarningsHostedShadowWorker:
                         )
                         continue
                     self._logger.warning(
-                        "SEC earnings stream closed; reconnecting "
-                        "watches=%s processed=%s signals=%s",
+                        "SEC filing stream closed; reconnecting "
+                        "watches=%s processed=%s signals=%s "
+                        "mstr_accepted=%s",
                         cycle.watch_count,
                         cycle.processed_count,
                         cycle.signal_count,
+                        cycle.mstr_accepted_count,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -117,7 +196,7 @@ class EarningsHostedShadowWorker:
                         else type(exc).__name__
                     )
                     self._logger.warning(
-                        "SEC earnings stream cycle failed; "
+                        "SEC filing stream cycle failed; "
                         "reconnecting error_code=%s",
                         error_code,
                     )
@@ -140,7 +219,16 @@ class EarningsHostedShadowWorker:
                 self._store.load_active_rules
             )
         )
-        watches = _watches_from_rules(rules)
+        earnings_watches = _watches_from_rules(rules)
+        mstr_watches = (
+            (self._mstr_watch,)
+            if self._mstr_watch is not None
+            else ()
+        )
+        watches: tuple[SecWatch, ...] = (
+            *earnings_watches,
+            *mstr_watches,
+        )
         self._watch_count = len(watches)
         if not watches:
             self._logger.warning(
@@ -158,50 +246,138 @@ class EarningsHostedShadowWorker:
             max_bytes=self._settings.max_document_bytes,
             logger=self._logger,
         )
-        processor = EarningsShadowProcessor(
-            store=self._store,
-            rules=rules,
-            parsers=self._parsers,
-            document_fetcher=fetcher,
-            max_fetch_attempts=self._settings.max_fetch_attempts,
-            fetch_retry_delay=self._settings.fetch_retry_delay,
+        earnings_processor = (
+            EarningsShadowProcessor(
+                store=self._store,
+                rules=rules,
+                parsers=self._parsers,
+                document_fetcher=fetcher,
+                max_fetch_attempts=self._settings.max_fetch_attempts,
+                fetch_retry_delay=self._settings.fetch_retry_delay,
+            )
+            if earnings_watches
+            else None
+        )
+        mstr_processor = (
+            MstrBtcShadowProcessor(
+                store=self._mstr_store,
+                watch=self._mstr_watch,
+                document_fetcher=fetcher,
+                max_fetch_attempts=self._settings.max_fetch_attempts,
+                fetch_retry_delay=self._settings.fetch_retry_delay,
+            )
+            if (
+                self._mstr_store is not None
+                and self._mstr_watch is not None
+            )
+            else None
         )
         transport = self._transport_builder(watches)
         processed = 0
         signals = 0
+        mstr_accepted = 0
         self._connected = True
         self._logger.info(
-            "SEC earnings shadow stream connecting watches=%s",
+            "SEC shadow stream connecting watches=%s "
+            "earnings_watches=%s mstr_watches=%s",
             len(watches),
+            len(earnings_watches),
+            len(mstr_watches),
         )
         try:
             async for candidate in transport.stream_once():
-                result = await asyncio.to_thread(
-                    processor.process,
-                    candidate,
-                )
                 processed += 1
                 self._processed_count += 1
-                if result.status is ShadowProcessingStatus.SIGNAL:
-                    signals += 1
-                    self._signal_count += 1
-                if result.status is ShadowProcessingStatus.ERROR:
-                    self._error_count += 1
-                self._logger.info(
-                    "Earnings shadow document processed "
-                    "scope=%s ticker=%s status=%s reason=%s "
-                    "event_id=%s fact_id=%s value=%s",
-                    result.scope_id,
-                    candidate.ticker,
-                    result.status.value,
-                    result.reason,
-                    result.event_id,
-                    result.fact_id,
-                    (
-                        result.signal.value
-                        if result.signal is not None
-                        else None
-                    ),
+                if isinstance(candidate, EarningsDocumentCandidate):
+                    if earnings_processor is None:
+                        self._error_count += 1
+                        self._logger.warning(
+                            "Earnings SEC candidate has no processor "
+                            "scope=%s ticker=%s",
+                            candidate.scope_id,
+                            candidate.ticker,
+                        )
+                        continue
+                    result = await asyncio.to_thread(
+                        earnings_processor.process,
+                        candidate,
+                    )
+                    if result.status is ShadowProcessingStatus.SIGNAL:
+                        signals += 1
+                        self._signal_count += 1
+                    if result.status is ShadowProcessingStatus.ERROR:
+                        self._error_count += 1
+                    self._logger.info(
+                        "Earnings shadow document processed "
+                        "scope=%s ticker=%s status=%s reason=%s "
+                        "event_id=%s fact_id=%s value=%s",
+                        result.scope_id,
+                        candidate.ticker,
+                        result.status.value,
+                        result.reason,
+                        result.event_id,
+                        result.fact_id,
+                        (
+                            result.signal.value
+                            if result.signal is not None
+                            else None
+                        ),
+                    )
+                    continue
+                if isinstance(candidate, MstrBtcDocumentCandidate):
+                    if mstr_processor is None:
+                        self._error_count += 1
+                        self._logger.warning(
+                            "MSTR SEC candidate has no processor "
+                            "scope=%s",
+                            candidate.scope_id,
+                        )
+                        continue
+                    result = await asyncio.to_thread(
+                        mstr_processor.process,
+                        candidate,
+                    )
+                    if result.status is MstrBtcShadowStatus.ACCEPTED:
+                        mstr_accepted += 1
+                        self._mstr_accepted_count += 1
+                    if result.status is MstrBtcShadowStatus.ERROR:
+                        self._error_count += 1
+                    fact = result.fact
+                    self._logger.info(
+                        "MSTR BTC shadow document processed "
+                        "scope=%s status=%s reason=%s baseline=%s "
+                        "holdings_before=%s holdings_after=%s "
+                        "acquired=%s sold=%s",
+                        result.scope_id,
+                        result.status.value,
+                        result.reason,
+                        result.baseline_state_id,
+                        (
+                            fact.holdings_before_btc
+                            if fact is not None
+                            else None
+                        ),
+                        (
+                            fact.holdings_after_btc
+                            if fact is not None
+                            else None
+                        ),
+                        (
+                            fact.acquired_btc
+                            if fact is not None
+                            else None
+                        ),
+                        (
+                            fact.sold_btc
+                            if fact is not None
+                            else None
+                        ),
+                    )
+                    continue
+                self._error_count += 1
+                self._logger.warning(
+                    "SEC router emitted unsupported candidate type=%s",
+                    type(candidate).__name__,
                 )
         finally:
             self._connected = False
@@ -210,18 +386,30 @@ class EarningsHostedShadowWorker:
             watch_count=len(watches),
             processed_count=processed,
             signal_count=signals,
+            mstr_accepted_count=mstr_accepted,
         )
 
     def _default_transport_builder(
         self,
-        watches: Sequence[SecEarningsWatch],
-    ) -> SecStreamEarningsTransport:
+        watches: Sequence[SecWatch],
+    ) -> _RoutedSecShadowTransport:
         api_key = self._settings.sec_api_key
         if not api_key:
             raise RuntimeError("SEC API credential is unavailable")
-        return SecStreamEarningsTransport(
-            api_key=api_key,
-            watches=watches,
+        earnings_watches = tuple(
+            watch
+            for watch in watches
+            if isinstance(watch, SecEarningsWatch)
+        )
+        mstr_watches = tuple(
+            watch
+            for watch in watches
+            if isinstance(watch, MstrBtcSecWatch)
+        )
+        return _RoutedSecShadowTransport(
+            transport=SecStreamTransport(api_key=api_key),
+            earnings_watches=earnings_watches,
+            mstr_watches=mstr_watches,
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -230,12 +418,13 @@ class EarningsHostedShadowWorker:
                 self._settings.heartbeat_interval
             )
             self._logger.info(
-                "Earnings shadow heartbeat connected=%s watches=%s "
-                "processed=%s signals=%s errors=%s",
+                "SEC shadow heartbeat connected=%s watches=%s "
+                "processed=%s signals=%s mstr_accepted=%s errors=%s",
                 self._connected,
                 self._watch_count,
                 self._processed_count,
                 self._signal_count,
+                self._mstr_accepted_count,
                 self._error_count,
             )
 
@@ -264,9 +453,17 @@ def main(
     store = SqlAlchemyEarningsStore(
         database_url=settings.database_url
     )
+    mstr_store = (
+        SqlAlchemyMstrBtcHoldingsStore(
+            database_url=settings.database_url
+        )
+        if settings.mstr_btc_shadow_enabled
+        else None
+    )
     worker = EarningsHostedShadowWorker(
         settings=settings,
         store=store,
+        mstr_store=mstr_store,
         logger=logger,
     )
     try:
@@ -284,6 +481,8 @@ def main(
         return 5
     finally:
         store.close()
+        if mstr_store is not None:
+            mstr_store.close()
     return 0
 
 

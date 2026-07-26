@@ -5,15 +5,9 @@ import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-
-from cbr_trading.earnings.contracts import (
-    EarningsDocumentCandidate,
-    EarningsProvider,
-)
-
 
 SEC_API_ARCHIVE_HOST = "archive.sec-api.io"
 _SEC_ARCHIVE_PATH_PREFIX = "/archives/edgar/data/"
@@ -33,6 +27,13 @@ _ACCESS_BLOCK_MARKERS = (
 
 class SecDocumentFetchError(RuntimeError):
     """Sanitized failure while downloading a public SEC exhibit."""
+
+
+class SecDocumentCandidate(Protocol):
+    scope_id: str
+    ticker: str
+    source_url: str
+    provider: object
 
 
 @dataclass(frozen=True)
@@ -86,8 +87,8 @@ class SecDocumentFetcher:
             "'sec_api_archive'))"
         )
 
-    def fetch(self, candidate: EarningsDocumentCandidate) -> bytes:
-        if candidate.provider is not EarningsProvider.SEC:
+    def fetch(self, candidate: SecDocumentCandidate) -> bytes:
+        if getattr(candidate.provider, "value", None) != "sec":
             raise SecDocumentFetchError(
                 "SEC document fetcher received a non-SEC candidate"
             )
@@ -114,7 +115,7 @@ class SecDocumentFetcher:
                     archive_url,
                     headers={
                         "Authorization": self._api_key,
-                        "User-Agent": "CodexPoly/1.0 earnings-source",
+                        "User-Agent": "CodexPoly/1.0 sec-filing-source",
                         "Accept": (
                             "text/html,application/xhtml+xml,"
                             "text/plain;q=0.9,*/*;q=0.1"
@@ -181,7 +182,7 @@ class SecDocumentFetcher:
         request: Request,
         opener: Callable[..., Any],
         final_url_validator: Callable[[str], None],
-        candidate: EarningsDocumentCandidate,
+        candidate: SecDocumentCandidate,
         started_at: float,
     ) -> _RouteOutcome:
         try:

@@ -1,19 +1,29 @@
-# Earnings shadow source
+# SEC filing shadow source
 
-This package implements only the source side of the resolution architecture:
+The hosted worker now shares one source-neutral SEC transport:
 
 ```text
-SEC WebSocket / company IR
-    -> EarningsDocumentCandidate
-    -> company parser
-    -> EarningsFactCandidate
-    -> EarningsResolutionSource
-    -> ResolutionSignal
+SEC-API WebSocket
+    -> SecFilingEnvelope
+    -> EarningsRouter -> EarningsDocumentCandidate -> company parser
+    -> MstrBtcRouter -> MstrBtcDocumentCandidate -> holdings-first parser
 ```
 
-It deliberately has no dependency on a strategy, `OrderIntent`, or
-`PreparedExecutor`. A signal emitted here cannot place an order unless a
-separate later composition explicitly wires it to those layers.
+There is still exactly one WebSocket connection. Transport decoding knows
+nothing about earnings or MSTR semantics; each router independently applies
+its issuer, form, document, and event-window rules.
+
+The MSTR branch is shadow-only. It selects the primary initial `8-K`, pins the
+validated holdings state that existed before the weekly window, downloads the
+document through the same bounded SEC/SEC-API fetcher, and runs the
+holdings-first parser. Unrelated MSTR `8-K` filings return `NO_MATCH`. This
+branch does not yet persist a canonical weekly fact, update holdings state,
+emit a `ResolutionSignal`, or reach a strategy or executor.
+
+The source service deliberately has no dependency on a strategy,
+`OrderIntent`, or `PreparedExecutor`. An earnings signal emitted here cannot
+place an order unless a separate later composition explicitly wires it to
+those layers.
 
 The separate hosted composition lives in
 `cbr_trading.resolution_hosted`. It reads only persisted `VALIDATED` facts,
@@ -91,13 +101,17 @@ scope names, watch count, and missing parser names.
 
 It performs this loop:
 
-1. verifies migration 004 without applying migrations;
+1. verifies migration 004 and, when MSTR shadow is enabled, migration 008,
+   without applying migrations;
 2. loads only `SHADOW` and `WATCHING` rules;
-3. opens one SEC WebSocket connection;
-4. persists a deduplicated source event;
-5. downloads only a bounded public `https://*.sec.gov` exhibit;
-6. runs the configured company parser;
-7. persists a validated fact and logs a shadow `ResolutionSignal`.
+3. opens one source-neutral SEC WebSocket connection;
+4. fans normalized envelopes out to the earnings and MSTR routers;
+5. downloads only a bounded public `https://*.sec.gov` document;
+6. runs the selected semantic parser;
+7. for earnings, persists a validated fact and logs a shadow
+   `ResolutionSignal`;
+8. for MSTR, logs only the aggregate shadow parse result against the pinned
+   baseline.
 
 The worker rejects any mode except `shadow`. It does not import a strategy,
 account repository, Polymarket client, `OrderIntent`, or `PreparedExecutor`.
@@ -110,6 +124,10 @@ Required confidential runtime values:
 
 Keep both in a restricted platform Secret Group. Do not attach trading-account
 or Polymarket signing secrets to the shadow source service.
+
+`MSTR_BTC_SHADOW_ENABLED=true` is an explicit non-secret deployment switch.
+The checked-in Jul 21–27 watch is time-bounded and cannot route a filing
+outside that interval.
 
 ## Historical replay
 

@@ -27,6 +27,7 @@ class EarningsWorkerSettings:
     reconnect_max_delay: float = 30.0
     no_rules_retry_delay: float = 30.0
     heartbeat_interval: float = 60.0
+    mstr_btc_shadow_enabled: bool = False
     log_level: str = "INFO"
 
     @classmethod
@@ -96,6 +97,10 @@ class EarningsWorkerSettings:
             heartbeat_interval=float(
                 _clean(env.get("EARNINGS_HEARTBEAT_SEC"))
                 or "60"
+            ),
+            mstr_btc_shadow_enabled=_bool_value(
+                env.get("MSTR_BTC_SHADOW_ENABLED"),
+                default=False,
             ),
             log_level=(
                 _clean(env.get("LOG_LEVEL"))
@@ -167,3 +172,20 @@ def _clean(value: str | None) -> str:
     ):
         cleaned = cleaned[1:-1].strip()
     return cleaned
+
+
+def _bool_value(
+    value: str | None,
+    *,
+    default: bool,
+) -> bool:
+    normalized = _clean(value).casefold()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        "MSTR_BTC_SHADOW_ENABLED must be a boolean value"
+    )
