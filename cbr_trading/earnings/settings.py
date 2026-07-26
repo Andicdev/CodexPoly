@@ -28,6 +28,10 @@ class EarningsWorkerSettings:
     no_rules_retry_delay: float = 30.0
     heartbeat_interval: float = 60.0
     mstr_btc_shadow_enabled: bool = False
+    mstr_btc_ledger_enabled: bool = False
+    mstr_btc_ledger_url: str = "https://www.strategy.com/ledger"
+    mstr_btc_ledger_poll_interval: float = 2.0
+    mstr_btc_ledger_timeout: float = 10.0
     log_level: str = "INFO"
 
     @classmethod
@@ -101,6 +105,24 @@ class EarningsWorkerSettings:
             mstr_btc_shadow_enabled=_bool_value(
                 env.get("MSTR_BTC_SHADOW_ENABLED"),
                 default=False,
+                name="MSTR_BTC_SHADOW_ENABLED",
+            ),
+            mstr_btc_ledger_enabled=_bool_value(
+                env.get("MSTR_BTC_LEDGER_ENABLED"),
+                default=False,
+                name="MSTR_BTC_LEDGER_ENABLED",
+            ),
+            mstr_btc_ledger_url=(
+                _clean(env.get("MSTR_BTC_LEDGER_URL"))
+                or "https://www.strategy.com/ledger"
+            ),
+            mstr_btc_ledger_poll_interval=float(
+                _clean(env.get("MSTR_BTC_LEDGER_POLL_SEC"))
+                or "2"
+            ),
+            mstr_btc_ledger_timeout=float(
+                _clean(env.get("MSTR_BTC_LEDGER_TIMEOUT_SEC"))
+                or "10"
             ),
             log_level=(
                 _clean(env.get("LOG_LEVEL"))
@@ -161,6 +183,24 @@ class EarningsWorkerSettings:
             raise ValueError(
                 "EARNINGS_HEARTBEAT_SEC must be positive"
             )
+        if (
+            self.mstr_btc_ledger_enabled
+            and not self.mstr_btc_shadow_enabled
+        ):
+            raise ValueError(
+                "MSTR_BTC_LEDGER_ENABLED requires "
+                "MSTR_BTC_SHADOW_ENABLED"
+            )
+        if not self.mstr_btc_ledger_url.lower().startswith("https://"):
+            raise ValueError("MSTR_BTC_LEDGER_URL must use HTTPS")
+        if not 0.5 <= self.mstr_btc_ledger_poll_interval <= 60:
+            raise ValueError(
+                "MSTR_BTC_LEDGER_POLL_SEC must be between 0.5 and 60"
+            )
+        if not 1 <= self.mstr_btc_ledger_timeout <= 60:
+            raise ValueError(
+                "MSTR_BTC_LEDGER_TIMEOUT_SEC must be between 1 and 60"
+            )
 
 
 def _clean(value: str | None) -> str:
@@ -178,6 +218,7 @@ def _bool_value(
     value: str | None,
     *,
     default: bool,
+    name: str = "boolean setting",
 ) -> bool:
     normalized = _clean(value).casefold()
     if not normalized:
@@ -186,6 +227,4 @@ def _bool_value(
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(
-        "MSTR_BTC_SHADOW_ENABLED must be a boolean value"
-    )
+    raise ValueError(f"{name} must be a boolean value")

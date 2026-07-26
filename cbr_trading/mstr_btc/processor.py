@@ -13,6 +13,7 @@ from cbr_trading.mstr_btc.contracts import (
     MstrBtcDocumentCandidate,
     MstrBtcFactCandidate,
     MstrBtcHoldingsBaseline,
+    MstrBtcParseResult,
     MstrBtcParseStatus,
     MstrBtcResolutionRule,
 )
@@ -21,7 +22,6 @@ from cbr_trading.mstr_btc.audit_repository import (
     StoredMstrBtcTerminalResult,
 )
 from cbr_trading.mstr_btc.parser import MstrBtc8KParser
-from cbr_trading.mstr_btc.sec_router import MstrBtcSecWatch
 from cbr_trading.mstr_btc.resolution_rules import (
     mstr_jul21_27_resolution_rules,
 )
@@ -117,17 +117,33 @@ class MstrBtcDocumentFetcher(Protocol):
     def fetch(self, candidate: MstrBtcDocumentCandidate) -> bytes: ...
 
 
+class MstrBtcDocumentParser(Protocol):
+    def parse(
+        self,
+        document: str | bytes,
+        *,
+        source: MstrBtcDocumentCandidate,
+        baseline: MstrBtcHoldingsBaseline,
+        detected_at: datetime,
+    ) -> MstrBtcParseResult: ...
+
+
+class MstrBtcSourceWatch(Protocol):
+    scope_id: str
+    window_start: datetime
+
+
 class MstrBtcShadowProcessor:
-    """Fetch and parse MSTR filings against an immutable pre-window baseline."""
+    """Parse an official MSTR update against an immutable baseline."""
 
     def __init__(
         self,
         *,
         store: MstrBtcBaselineStore,
         audit_store: MstrBtcAuditStore,
-        watch: MstrBtcSecWatch,
+        watch: MstrBtcSourceWatch,
         document_fetcher: MstrBtcDocumentFetcher,
-        parser: MstrBtc8KParser | None = None,
+        parser: MstrBtcDocumentParser | None = None,
         resolution_rules: (
             tuple[MstrBtcResolutionRule, ...] | None
         ) = None,

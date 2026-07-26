@@ -7,7 +7,8 @@ reviewed CodexPoly image:
 
 - `earnings-worker` retains its compatibility service name and runs
   `python -u -m cbr_trading.earnings`; internally it owns one shared SEC
-  filing connection for earnings and MSTR shadow routers;
+  filing connection for earnings and MSTR shadow routers plus an independent
+  conditional Strategy Ledger poller;
 - `resolution-worker` runs
   `python -u -m cbr_trading.resolution_hosted`.
 
@@ -27,6 +28,12 @@ source watch. The worker verifies the append-only holdings schema, pins the
 validated pre-window baseline, persists the append-only source audit, and logs
 aggregate parser/signal output. It does not create an MSTR resolution profile,
 execution claim, order intent, or order.
+
+`MSTR_BTC_LEDGER_ENABLED=true` adds the official Strategy Ledger as a second
+MSTR transport. Production polls every two seconds using ETag validation. A
+new snapshot must retain baseline row `116` at `843775` BTC, add only
+contiguous rows, and reconcile every signed change against running holdings
+before it can persist a fact.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

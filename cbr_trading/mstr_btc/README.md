@@ -1,8 +1,13 @@
 # MSTR BTC resolution flow
 
-The MSTR source reuses the shared SEC WebSocket transport. An accepted
-holdings-first fact is persisted in the append-only MSTR audit tables and
-fans out into three independent market scopes:
+The MSTR source has two independent official transports:
+
+- the shared SEC-API WebSocket connection routes the initial MSTR 8-K;
+- a conditional HTTP poll reads the structured Strategy Bitcoin Ledger.
+
+Both transports produce the same holdings-first fact contract. An accepted
+fact is persisted in the append-only MSTR audit tables and fans out into three
+independent market scopes:
 
 - any BTC purchase;
 - a strict purchase greater than 1000 BTC;
@@ -12,6 +17,29 @@ The source owns fact interpretation only. It does not import a trading
 account, build an `OrderIntent`, or call an executor. The separate hosted
 composition binds each signal scope to its own execution profile and numeric
 strategy without adding trading dependencies to the source service.
+
+## Strategy Ledger source
+
+The checked-in July 21-27 watch pins Ledger row `116` and holdings `843775`.
+Each poll reads the page's structured `__NEXT_DATA__` payload, not rendered
+table text. The source:
+
+1. requires the pinned row and holdings to remain unchanged;
+2. accepts only a contiguous sequence of rows after `116`;
+3. treats positive signed `count` values as acquisitions and negative values
+   as sales;
+4. verifies the running holdings after every row;
+5. aggregates all new rows into one weekly fact.
+
+The public page is fetched with an ETag, and an unchanged document is ignored.
+The default interval is two seconds. A missing SEC PDF link does not block the
+Ledger fact because the Ledger page is itself the official source; the source
+URL is used as the evidence URL until a filing link is present.
+
+SEC and Ledger events have different provider identities in the audit tables,
+but their facts must have the same holdings/activity signature. They emit the
+same three stable signal IDs, so execution claims remain source-neutral and
+only one provider can cause an order for a market scope.
 
 ## Hosted composition
 

@@ -339,6 +339,38 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
         self.assertFalse(disabled.mstr_btc_shadow_enabled)
         self.assertTrue(enabled.mstr_btc_shadow_enabled)
 
+    def test_mstr_ledger_requires_mstr_and_explicit_enable(self) -> None:
+        base = {
+            "CBR_DATABASE_URL": "postgresql://configured",
+            "SEC_API_KEY": "configured",
+            "EARNINGS_HTTP_USER_AGENT": (
+                "CodexPoly test@example.com"
+            ),
+        }
+        disabled = EarningsWorkerSettings.from_env(base)
+        enabled = EarningsWorkerSettings.from_env(
+            {
+                **base,
+                "MSTR_BTC_SHADOW_ENABLED": "true",
+                "MSTR_BTC_LEDGER_ENABLED": "true",
+                "MSTR_BTC_LEDGER_POLL_SEC": "1",
+            }
+        )
+
+        self.assertFalse(disabled.mstr_btc_ledger_enabled)
+        self.assertTrue(enabled.mstr_btc_ledger_enabled)
+        self.assertEqual(enabled.mstr_btc_ledger_poll_interval, 1)
+        with self.assertRaisesRegex(
+            ValueError,
+            "requires MSTR_BTC_SHADOW_ENABLED",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    **base,
+                    "MSTR_BTC_LEDGER_ENABLED": "true",
+                }
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

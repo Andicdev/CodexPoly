@@ -52,6 +52,8 @@ Also confirm immediately before activation:
 5. Both outcomes of all three markets load with tick `0.01` or `0.001` and
    minimum size no greater than `50`.
 6. Northflank has no live earnings/resolution or legacy SEC duplicate.
+7. The production source heartbeat reports both the SEC stream connected and
+   the Strategy Ledger poller connected, with no Ledger rejection or error.
 
 ## No-submit supervision smoke
 

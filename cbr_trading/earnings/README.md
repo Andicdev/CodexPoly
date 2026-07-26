@@ -147,6 +147,13 @@ or Polymarket signing secrets to the shadow source service.
 The checked-in Jul 21–27 watch is time-bounded and cannot route a filing
 outside that interval.
 
+`MSTR_BTC_LEDGER_ENABLED=true` starts the independent Strategy Ledger poller
+inside the same non-trading source service. It requires MSTR shadow to be
+enabled. `MSTR_BTC_LEDGER_POLL_SEC` defaults to `2` and
+`MSTR_BTC_LEDGER_TIMEOUT_SEC` defaults to `10`. The poller uses conditional
+requests and stores an audit event only after a new, contiguous,
+holdings-reconciled Ledger row appears.
+
 ## Historical replay
 
 Run the parser against four official Navitas IR releases without storing the

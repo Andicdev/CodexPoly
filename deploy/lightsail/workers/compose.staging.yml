@@ -26,6 +26,10 @@ services:
       EARNINGS_NO_RULES_RETRY_SEC: "30"
       EARNINGS_HEARTBEAT_SEC: "60"
       MSTR_BTC_SHADOW_ENABLED: "true"
+      MSTR_BTC_LEDGER_ENABLED: "true"
+      MSTR_BTC_LEDGER_URL: "https://www.strategy.com/ledger"
+      MSTR_BTC_LEDGER_POLL_SEC: "2"
+      MSTR_BTC_LEDGER_TIMEOUT_SEC: "10"
       SEC_API_KEY_FILE: /run/secrets/SEC_API_KEY
     secrets:
       - source: database_app_password

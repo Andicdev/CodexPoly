@@ -32,7 +32,16 @@ from cbr_trading.mstr_btc.audit_repository import (
 )
 from cbr_trading.mstr_btc.processor import (
     MstrBtcShadowProcessor,
+    MstrBtcShadowResult,
     MstrBtcShadowStatus,
+)
+from cbr_trading.mstr_btc.ledger_source import (
+    MstrBtcLedgerDocumentFetcher,
+    MstrBtcLedgerParser,
+    MstrBtcLedgerWatch,
+    StrategyLedgerClient,
+    evaluate_mstr_btc_ledger,
+    mstr_jul21_27_ledger_watch,
 )
 from cbr_trading.mstr_btc.repository import (
     SqlAlchemyMstrBtcHoldingsStore,
@@ -119,6 +128,8 @@ class EarningsHostedShadowWorker:
         mstr_store: SqlAlchemyMstrBtcHoldingsStore | None = None,
         mstr_audit_store: SqlAlchemyMstrBtcAuditStore | None = None,
         mstr_watch: MstrBtcSecWatch | None = None,
+        mstr_ledger_watch: MstrBtcLedgerWatch | None = None,
+        ledger_client: StrategyLedgerClient | None = None,
         transport_builder: TransportBuilder | None = None,
         parsers: Mapping[str, object] | None = None,
         logger: logging.Logger | None = None,
@@ -134,9 +145,21 @@ class EarningsHostedShadowWorker:
                 else None
             )
         )
+        self._mstr_ledger_watch = (
+            mstr_ledger_watch
+            if mstr_ledger_watch is not None
+            else (
+                mstr_jul21_27_ledger_watch()
+                if settings.mstr_btc_ledger_enabled
+                else None
+            )
+        )
         self._mstr_store = mstr_store
         self._mstr_audit_store = mstr_audit_store
-        if self._mstr_watch is not None and (
+        if (
+            self._mstr_watch is not None
+            or self._mstr_ledger_watch is not None
+        ) and (
             self._mstr_store is None
             or self._mstr_audit_store is None
         ):
@@ -144,6 +167,35 @@ class EarningsHostedShadowWorker:
                 "MSTR holdings and audit stores are required when "
                 "MSTR shadow is enabled"
             )
+        self._ledger_client = (
+            ledger_client
+            if ledger_client is not None
+            else (
+                StrategyLedgerClient(
+                    url=settings.mstr_btc_ledger_url,
+                    timeout=settings.mstr_btc_ledger_timeout,
+                )
+                if self._mstr_ledger_watch is not None
+                else None
+            )
+        )
+        self._ledger_processor = (
+            MstrBtcShadowProcessor(
+                store=self._mstr_store,
+                audit_store=self._mstr_audit_store,
+                watch=self._mstr_ledger_watch,
+                document_fetcher=MstrBtcLedgerDocumentFetcher(),
+                parser=MstrBtcLedgerParser(),
+                max_fetch_attempts=1,
+                fetch_retry_delay=0,
+            )
+            if (
+                self._mstr_store is not None
+                and self._mstr_audit_store is not None
+                and self._mstr_ledger_watch is not None
+            )
+            else None
+        )
         self._transport_builder = (
             transport_builder
             or self._default_transport_builder
@@ -160,6 +212,10 @@ class EarningsHostedShadowWorker:
         self._processed_count = 0
         self._signal_count = 0
         self._mstr_accepted_count = 0
+        self._ledger_connected = False
+        self._ledger_poll_count = 0
+        self._ledger_accepted_count = 0
+        self._ledger_last_fingerprint: str | None = None
         self._error_count = 0
 
     async def run_forever(self) -> None:
@@ -172,10 +228,16 @@ class EarningsHostedShadowWorker:
             )
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
-            "earnings=true mstr=%s",
+            "earnings=true mstr=%s ledger=%s",
             self._mstr_watch is not None,
+            self._mstr_ledger_watch is not None,
         )
         heartbeat = asyncio.create_task(self._heartbeat_loop())
+        ledger_task = (
+            asyncio.create_task(self._ledger_poll_loop())
+            if self._ledger_client is not None
+            else None
+        )
         delay = self._settings.reconnect_initial_delay
         try:
             while True:
@@ -220,11 +282,20 @@ class EarningsHostedShadowWorker:
                 )
         finally:
             self._connected = False
+            self._ledger_connected = False
             heartbeat.cancel()
+            if ledger_task is not None:
+                ledger_task.cancel()
             await asyncio.gather(
-                heartbeat,
+                *(
+                    (heartbeat, ledger_task)
+                    if ledger_task is not None
+                    else (heartbeat,)
+                ),
                 return_exceptions=True,
             )
+            if self._ledger_client is not None:
+                await asyncio.to_thread(self._ledger_client.close)
 
     async def run_connection_cycle(self) -> WorkerCycleResult:
         rules = tuple(
@@ -437,6 +508,91 @@ class EarningsHostedShadowWorker:
             mstr_watches=mstr_watches,
         )
 
+    async def run_ledger_poll_cycle(
+        self,
+    ) -> MstrBtcShadowResult | None:
+        if (
+            self._ledger_client is None
+            or self._mstr_ledger_watch is None
+            or self._ledger_processor is None
+        ):
+            return None
+        snapshot = await asyncio.to_thread(
+            self._ledger_client.fetch_snapshot
+        )
+        self._ledger_connected = True
+        self._ledger_poll_count += 1
+        if snapshot is None:
+            return None
+        if snapshot.fingerprint == self._ledger_last_fingerprint:
+            return None
+        self._ledger_last_fingerprint = snapshot.fingerprint
+        decision = evaluate_mstr_btc_ledger(
+            snapshot,
+            watch=self._mstr_ledger_watch,
+        )
+        if decision.candidate is None:
+            if decision.reason != "no_new_ledger_rows":
+                self._logger.warning(
+                    "Strategy Ledger snapshot rejected reason=%s",
+                    decision.reason,
+                )
+            return None
+        result = await asyncio.to_thread(
+            self._ledger_processor.process,
+            decision.candidate,
+        )
+        if result.status is MstrBtcShadowStatus.ACCEPTED:
+            self._ledger_accepted_count += 1
+        if result.status is MstrBtcShadowStatus.ERROR:
+            self._error_count += 1
+        fact = result.fact
+        self._logger.info(
+            "MSTR BTC Ledger document processed "
+            "scope=%s status=%s reason=%s baseline=%s "
+            "event_id=%s fact_id=%s result_id=%s "
+            "resolution_signals=%s holdings_before=%s "
+            "holdings_after=%s acquired=%s sold=%s",
+            result.scope_id,
+            result.status.value,
+            result.reason,
+            result.baseline_state_id,
+            result.source_event_id,
+            result.fact_candidate_id,
+            result.processing_result_id,
+            len(result.signals),
+            (
+                fact.holdings_before_btc
+                if fact is not None
+                else None
+            ),
+            (
+                fact.holdings_after_btc
+                if fact is not None
+                else None
+            ),
+            fact.acquired_btc if fact is not None else None,
+            fact.sold_btc if fact is not None else None,
+        )
+        return result
+
+    async def _ledger_poll_loop(self) -> None:
+        while True:
+            try:
+                await self.run_ledger_poll_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._ledger_connected = False
+                self._error_count += 1
+                self._logger.warning(
+                    "Strategy Ledger poll failed error_code=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(
+                self._settings.mstr_btc_ledger_poll_interval
+            )
+
     async def _heartbeat_loop(self) -> None:
         while True:
             await asyncio.sleep(
@@ -444,12 +600,17 @@ class EarningsHostedShadowWorker:
             )
             self._logger.info(
                 "SEC shadow heartbeat connected=%s watches=%s "
-                "processed=%s signals=%s mstr_accepted=%s errors=%s",
+                "processed=%s signals=%s mstr_accepted=%s "
+                "ledger_connected=%s ledger_polls=%s "
+                "ledger_accepted=%s errors=%s",
                 self._connected,
                 self._watch_count,
                 self._processed_count,
                 self._signal_count,
                 self._mstr_accepted_count,
+                self._ledger_connected,
+                self._ledger_poll_count,
+                self._ledger_accepted_count,
                 self._error_count,
             )
 
