@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from pathlib import Path
 
 
@@ -25,6 +26,9 @@ _TRADING_COMPOSE = (
     / "lightsail"
     / "workers"
     / "compose.production.trading.yml"
+)
+_SECRET_MANIFEST = (
+    _ROOT / "deploy" / "lightsail" / "secret-manifest.json"
 )
 
 
@@ -72,6 +76,25 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertIn(
             "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_FILE",
             service,
+        )
+
+    def test_secret_manifest_keeps_scheduler_db_only(self) -> None:
+        manifest = json.loads(
+            _SECRET_MANIFEST.read_text(encoding="utf-8")
+        )
+        services = manifest["environments"]["production"]
+
+        self.assertEqual(
+            services["profile-scheduler-worker"],
+            ["DATABASE_APP_PASSWORD"],
+        )
+        self.assertEqual(
+            services["profile-readiness-worker"],
+            [
+                "DATABASE_APP_PASSWORD",
+                "ACCOUNTS_MASTER_KEY",
+                "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
+            ],
         )
 
 

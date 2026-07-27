@@ -27,6 +27,9 @@ never submits an order.
 - existing profile columns and legacy objects are not altered;
 - new schedules default to `MANUAL` and `PENDING`;
 - the production scheduler has no trading secrets;
+- the name-only manifest grants the scheduler only
+  `DATABASE_APP_PASSWORD`, while the readiness worker receives exactly the
+  existing database, master-key, and encrypted-key file names;
 - `PROFILE_SCHEDULER_AUTO_LIVE_ENABLED=0`;
 - the July schedule seed uses `AUTO_PREFLIGHT` only;
 - a successful scheduled preflight moves the schedule to `READY` while the
