@@ -199,9 +199,9 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertIn("2026-07-27 18:45:00+00", text)
         self.assertIn("2026-07-27 19:00:00+00", text)
         self.assertIn("2026-07-28 03:00:00+00", text)
-        self.assertIn("reviewed_notional > 1000", text)
-        self.assertIn("a validated NVTS fact already exists", text)
-        self.assertIn("an NVTS execution claim already exists", text)
+        self.assertIn(") <= 1000", text)
+        self.assertIn("status = 'VALIDATED'", text)
+        self.assertIn("FROM resolution_execution_claims", text)
         self.assertNotIn("SET status = 'ENABLED'", text)
 
     def test_nvts_schedule_check_requires_disabled_and_fresh_live(
