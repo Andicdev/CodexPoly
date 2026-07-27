@@ -69,6 +69,13 @@ partial unique index permits only one terminal `ACCEPTED`, `NO_MATCH`, or
 and the pre-window holdings state. Migration 009 does not create a resolution
 profile, execution claim, intent, or order.
 
+`010_add_source_notification_outbox.sql` creates only
+`source_notification_outbox`. Confirmed source events are inserted
+idempotently after their canonical fact is durable. A separate worker claims
+and sends messages, so Telegram network latency and retries are outside both
+the source-ingestion and trading hot paths. The table is mutable only for its
+delivery state and does not alter any legacy object.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

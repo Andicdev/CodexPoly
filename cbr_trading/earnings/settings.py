@@ -32,6 +32,7 @@ class EarningsWorkerSettings:
     mstr_btc_ledger_url: str = "https://www.strategy.com/ledger"
     mstr_btc_ledger_poll_interval: float = 2.0
     mstr_btc_ledger_timeout: float = 10.0
+    notification_delivery_delay: float = 2.0
     log_level: str = "INFO"
 
     @classmethod
@@ -124,6 +125,12 @@ class EarningsWorkerSettings:
                 _clean(env.get("MSTR_BTC_LEDGER_TIMEOUT_SEC"))
                 or "10"
             ),
+            notification_delivery_delay=float(
+                _clean(
+                    env.get("NEWS_NOTIFICATION_DELIVERY_DELAY_SEC")
+                )
+                or "2"
+            ),
             log_level=(
                 _clean(env.get("LOG_LEVEL"))
                 or "INFO"
@@ -200,6 +207,11 @@ class EarningsWorkerSettings:
         if not 1 <= self.mstr_btc_ledger_timeout <= 60:
             raise ValueError(
                 "MSTR_BTC_LEDGER_TIMEOUT_SEC must be between 1 and 60"
+            )
+        if not 0 <= self.notification_delivery_delay <= 60:
+            raise ValueError(
+                "NEWS_NOTIFICATION_DELIVERY_DELAY_SEC must be "
+                "between 0 and 60"
             )
 
 

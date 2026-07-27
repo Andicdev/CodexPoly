@@ -51,8 +51,19 @@ from cbr_trading.mstr_btc.sec_router import (
     MstrBtcSecWatch,
     mstr_jul21_27_shadow_watch,
 )
+from cbr_trading.notifications import (
+    SourceEventNotification,
+    SqlAlchemyNotificationOutboxStore,
+    source_event_notification_from_earnings,
+    source_event_notification_from_mstr,
+)
+from cbr_trading.orchestration import (
+    SqlAlchemyResolutionProfileStore,
+)
 from cbr_trading.sec_filings.stream import SecStreamTransport
 from cbr_trading.secret_guard import redact_exception
+from cbr_trading.source_runtime import ProfileWindowPollingGate
+from cbr_trading.sources import MSTR_BTC_SOURCE_NAME
 
 
 class StreamTransport(Protocol):
@@ -61,6 +72,17 @@ class StreamTransport(Protocol):
 
 SecWatch = SecEarningsWatch | MstrBtcSecWatch
 TransportBuilder = Callable[[Sequence[SecWatch]], StreamTransport]
+
+
+class NotificationOutbox(Protocol):
+    def ensure_ready(self) -> None: ...
+
+    def enqueue(
+        self,
+        notification: SourceEventNotification,
+        *,
+        delivery_delay_seconds: float = 0,
+    ): ...
 
 
 class WorkerCycleStatus(str, Enum):
@@ -130,6 +152,8 @@ class EarningsHostedShadowWorker:
         mstr_watch: MstrBtcSecWatch | None = None,
         mstr_ledger_watch: MstrBtcLedgerWatch | None = None,
         ledger_client: StrategyLedgerClient | None = None,
+        ledger_polling_gate: ProfileWindowPollingGate | None = None,
+        notification_store: NotificationOutbox | None = None,
         transport_builder: TransportBuilder | None = None,
         parsers: Mapping[str, object] | None = None,
         logger: logging.Logger | None = None,
@@ -179,6 +203,15 @@ class EarningsHostedShadowWorker:
                 else None
             )
         )
+        self._ledger_polling_gate = ledger_polling_gate
+        if (
+            self._mstr_ledger_watch is not None
+            and self._ledger_polling_gate is None
+        ):
+            raise ValueError(
+                "MSTR Ledger polling requires an active-profile gate"
+            )
+        self._notification_store = notification_store
         self._ledger_processor = (
             MstrBtcShadowProcessor(
                 store=self._mstr_store,
@@ -213,6 +246,8 @@ class EarningsHostedShadowWorker:
         self._signal_count = 0
         self._mstr_accepted_count = 0
         self._ledger_connected = False
+        self._ledger_polling_active = False
+        self._ledger_active_profile_count = 0
         self._ledger_poll_count = 0
         self._ledger_accepted_count = 0
         self._ledger_last_fingerprint: str | None = None
@@ -225,6 +260,10 @@ class EarningsHostedShadowWorker:
         if self._mstr_audit_store is not None:
             await asyncio.to_thread(
                 self._mstr_audit_store.ensure_ready
+            )
+        if self._notification_store is not None:
+            await asyncio.to_thread(
+                self._notification_store.ensure_ready
             )
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
@@ -303,6 +342,10 @@ class EarningsHostedShadowWorker:
                 self._store.load_active_rules
             )
         )
+        rules_by_scope = {
+            rule.scope_id: rule
+            for rule in rules
+        }
         earnings_watches = _watches_from_rules(rules)
         mstr_watches = (
             (self._mstr_watch,)
@@ -391,6 +434,13 @@ class EarningsHostedShadowWorker:
                     if result.status is ShadowProcessingStatus.SIGNAL:
                         signals += 1
                         self._signal_count += 1
+                        await self._enqueue_notification(
+                            source_event_notification_from_earnings(
+                                candidate=candidate,
+                                signal=result.signal,
+                                rule=rules_by_scope[candidate.scope_id],
+                            )
+                        )
                     if result.status is ShadowProcessingStatus.ERROR:
                         self._error_count += 1
                     self._logger.info(
@@ -426,6 +476,12 @@ class EarningsHostedShadowWorker:
                     if result.status is MstrBtcShadowStatus.ACCEPTED:
                         mstr_accepted += 1
                         self._mstr_accepted_count += 1
+                        await self._enqueue_notification(
+                            source_event_notification_from_mstr(
+                                fact=result.fact,
+                                signals=result.signals,
+                            )
+                        )
                     if result.status is MstrBtcShadowStatus.ERROR:
                         self._error_count += 1
                     fact = result.fact
@@ -517,6 +573,14 @@ class EarningsHostedShadowWorker:
             or self._ledger_processor is None
         ):
             return None
+        profile_count = await asyncio.to_thread(
+            self._ledger_polling_gate.active_profile_count
+        )
+        self._ledger_active_profile_count = profile_count
+        self._ledger_polling_active = profile_count > 0
+        if not self._ledger_polling_active:
+            self._ledger_connected = False
+            return None
         snapshot = await asyncio.to_thread(
             self._ledger_client.fetch_snapshot
         )
@@ -544,6 +608,12 @@ class EarningsHostedShadowWorker:
         )
         if result.status is MstrBtcShadowStatus.ACCEPTED:
             self._ledger_accepted_count += 1
+            await self._enqueue_notification(
+                source_event_notification_from_mstr(
+                    fact=result.fact,
+                    signals=result.signals,
+                )
+            )
         if result.status is MstrBtcShadowStatus.ERROR:
             self._error_count += 1
         fact = result.fact
@@ -577,9 +647,18 @@ class EarningsHostedShadowWorker:
         return result
 
     async def _ledger_poll_loop(self) -> None:
+        previous_active: bool | None = None
         while True:
             try:
                 await self.run_ledger_poll_cycle()
+                if previous_active is not self._ledger_polling_active:
+                    self._logger.info(
+                        "Strategy Ledger polling state active=%s "
+                        "profiles=%s",
+                        self._ledger_polling_active,
+                        self._ledger_active_profile_count,
+                    )
+                    previous_active = self._ledger_polling_active
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -601,6 +680,7 @@ class EarningsHostedShadowWorker:
             self._logger.info(
                 "SEC shadow heartbeat connected=%s watches=%s "
                 "processed=%s signals=%s mstr_accepted=%s "
+                "ledger_active=%s ledger_profiles=%s "
                 "ledger_connected=%s ledger_polls=%s "
                 "ledger_accepted=%s errors=%s",
                 self._connected,
@@ -608,11 +688,46 @@ class EarningsHostedShadowWorker:
                 self._processed_count,
                 self._signal_count,
                 self._mstr_accepted_count,
+                self._ledger_polling_active,
+                self._ledger_active_profile_count,
                 self._ledger_connected,
                 self._ledger_poll_count,
                 self._ledger_accepted_count,
                 self._error_count,
             )
+
+    async def _enqueue_notification(
+        self,
+        notification: SourceEventNotification,
+    ) -> None:
+        if self._notification_store is None:
+            return
+        try:
+            stored = await asyncio.to_thread(
+                self._notification_store.enqueue,
+                notification,
+                delivery_delay_seconds=(
+                    self._settings.notification_delivery_delay
+                ),
+            )
+        except Exception as exc:
+            self._error_count += 1
+            self._logger.warning(
+                "Source notification enqueue failed source=%s "
+                "scope=%s error_code=%s",
+                notification.source_name,
+                notification.scope_id,
+                type(exc).__name__,
+            )
+            return
+        self._logger.info(
+            "Source notification enqueued source=%s scope=%s "
+            "row_id=%s created=%s",
+            notification.source_name,
+            notification.scope_id,
+            stored.row_id,
+            stored.created,
+        )
 
 
 def main(
@@ -653,11 +768,31 @@ def main(
         if settings.mstr_btc_shadow_enabled
         else None
     )
+    profile_store = (
+        SqlAlchemyResolutionProfileStore(
+            database_url=settings.database_url
+        )
+        if settings.mstr_btc_ledger_enabled
+        else None
+    )
+    ledger_polling_gate = (
+        ProfileWindowPollingGate(
+            profile_store=profile_store,
+            source_name=MSTR_BTC_SOURCE_NAME,
+        )
+        if profile_store is not None
+        else None
+    )
+    notification_store = SqlAlchemyNotificationOutboxStore(
+        database_url=settings.database_url
+    )
     worker = EarningsHostedShadowWorker(
         settings=settings,
         store=store,
         mstr_store=mstr_store,
         mstr_audit_store=mstr_audit_store,
+        ledger_polling_gate=ledger_polling_gate,
+        notification_store=notification_store,
         logger=logger,
     )
     try:
@@ -679,6 +814,9 @@ def main(
             mstr_store.close()
         if mstr_audit_store is not None:
             mstr_audit_store.close()
+        if profile_store is not None:
+            profile_store.close()
+        notification_store.close()
     return 0
 
 

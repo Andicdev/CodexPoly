@@ -2,15 +2,18 @@
 
 ## Service boundary
 
-The worker stack contains exactly two private services built from the same
+The worker stack contains exactly three private services built from the same
 reviewed CodexPoly image:
 
 - `earnings-worker` retains its compatibility service name and runs
   `python -u -m cbr_trading.earnings`; internally it owns one shared SEC
-  filing connection for earnings and MSTR shadow routers plus an independent
-  conditional Strategy Ledger poller;
+  filing connection for earnings and MSTR shadow routers plus a conditional
+  Strategy Ledger poller;
 - `resolution-worker` runs
-  `python -u -m cbr_trading.resolution_hosted`.
+  `python -u -m cbr_trading.resolution_hosted`;
+- `notification-worker` runs
+  `python -u -m cbr_trading.notifications` and is the only new hosted
+  service that receives Telegram credentials.
 
 Neither service publishes a host port. Both join the existing internal
 PostgreSQL network and connect to `postgres:5432` as `codexpoly_app`. The
@@ -21,7 +24,10 @@ forwarding external lookups from rootless Docker to the host-only
 systemd-resolved stub.
 `earnings-worker` receives the SEC credential but never receives a trading
 credential. The base `resolution-worker` starts in `shadow` and receives only
-the application database password.
+the application database password. Confirmed events are written
+idempotently to `source_notification_outbox`; Telegram HTTP delivery and
+retries happen later in `notification-worker`, outside the ingestion and
+trading hot paths.
 
 `MSTR_BTC_SHADOW_ENABLED=true` enables only the checked-in, time-bounded MSTR
 source watch. The worker verifies the append-only holdings schema, pins the
@@ -30,10 +36,13 @@ aggregate parser/signal output. It does not create an MSTR resolution profile,
 execution claim, order intent, or order.
 
 `MSTR_BTC_LEDGER_ENABLED=true` adds the official Strategy Ledger as a second
-MSTR transport. Production polls every two seconds using ETag validation. A
-new snapshot must retain baseline row `116` at `843775` BTC, add only
-contiguous rows, and reconcile every signed change against running holdings
-before it can persist a fact.
+MSTR transport. The worker checks enabled in-window
+`mstr_btc_resolution` profiles every two seconds and makes no external Ledger
+request while that set is empty. While at least one profile is active,
+production polls every two seconds using ETag validation. A new snapshot must
+retain baseline row `116` at `843775` BTC, add only contiguous rows, and
+reconcile every signed change against running holdings before it can persist
+a fact. The SEC WebSocket remains connected independently of profile status.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

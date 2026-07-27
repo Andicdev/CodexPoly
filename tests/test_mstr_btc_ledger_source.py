@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from cbr_trading.mstr_btc import (
     MSTR_JUL21_27_WINDOW_START,
@@ -21,6 +22,7 @@ from cbr_trading.mstr_btc import (
 )
 from cbr_trading.earnings.hosted_worker import EarningsHostedShadowWorker
 from cbr_trading.earnings.settings import EarningsWorkerSettings
+from cbr_trading.source_runtime import ProfileWindowPollingGate
 
 
 _DETECTED_AT = datetime(
@@ -197,6 +199,25 @@ class _LedgerClient:
 
     def close(self):
         self.closed = True
+
+
+class _ProfileStore:
+    def __init__(self, profiles):
+        self.profiles = tuple(profiles)
+
+    def load_enabled(self, *, source_name=None):
+        return self.profiles
+
+
+class _NotificationStore:
+    def __init__(self):
+        self.notifications = []
+
+    def enqueue(self, notification, *, delivery_delay_seconds=0):
+        self.notifications.append(
+            (notification, delivery_delay_seconds)
+        )
+        return SimpleNamespace(row_id=91, created=True)
 
 
 class StrategyLedgerSourceTests(unittest.TestCase):
@@ -383,6 +404,7 @@ class StrategyLedgerHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         )
         ledger_client = _LedgerClient(snapshot)
         audit = _AuditStore()
+        notifications = _NotificationStore()
         worker = EarningsHostedShadowWorker(
             settings=EarningsWorkerSettings(
                 database_url="postgresql://configured",
@@ -395,6 +417,11 @@ class StrategyLedgerHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
             mstr_store=_BaselineStore(),
             mstr_audit_store=audit,
             ledger_client=ledger_client,
+            ledger_polling_gate=ProfileWindowPollingGate(
+                profile_store=_ProfileStore((object(),)),
+                source_name="mstr_btc_resolution",
+            ),
+            notification_store=notifications,
         )
 
         result = await worker.run_ledger_poll_cycle()
@@ -405,6 +432,40 @@ class StrategyLedgerHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.signals), 3)
         self.assertIsNone(duplicate_snapshot)
         self.assertEqual(len(audit.facts), 1)
+        self.assertEqual(len(notifications.notifications), 1)
+        notification, delay = notifications.notifications[0]
+        self.assertEqual(delay, 2)
+        self.assertIn(
+            "Market rules evaluated: 3",
+            notification.message_text,
+        )
+
+    async def test_worker_does_not_request_ledger_without_active_profile(
+        self,
+    ) -> None:
+        ledger_client = _LedgerClient(_snapshot())
+        worker = EarningsHostedShadowWorker(
+            settings=EarningsWorkerSettings(
+                database_url="postgresql://configured",
+                sec_api_key="configured",
+                http_user_agent="CodexPoly test@example.com",
+                mstr_btc_shadow_enabled=True,
+                mstr_btc_ledger_enabled=True,
+            ),
+            store=object(),
+            mstr_store=_BaselineStore(),
+            mstr_audit_store=_AuditStore(),
+            ledger_client=ledger_client,
+            ledger_polling_gate=ProfileWindowPollingGate(
+                profile_store=_ProfileStore(()),
+                source_name="mstr_btc_resolution",
+            ),
+        )
+
+        result = await worker.run_ledger_poll_cycle()
+
+        self.assertIsNone(result)
+        self.assertEqual(ledger_client.calls, 0)
 
 
 if __name__ == "__main__":

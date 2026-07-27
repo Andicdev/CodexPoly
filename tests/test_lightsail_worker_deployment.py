@@ -37,6 +37,15 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
                 "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
             ],
         )
+        for environment in (staging, production):
+            self.assertEqual(
+                environment["notification-worker"],
+                [
+                    "DATABASE_APP_PASSWORD",
+                    "TG_BOT_TOKEN",
+                    "TELEGRAM_INGEST_CHAT_ID",
+                ],
+            )
 
     def test_base_worker_files_are_private_and_shadow_only(self) -> None:
         for name, network in (
@@ -68,17 +77,22 @@ class LightsailWorkerDeploymentTests(unittest.TestCase):
                 text,
             )
             self.assertIn(
+                'command: ["python", "-u", "-m", '
+                '"cbr_trading.notifications"]',
+                text,
+            )
+            self.assertIn(
                 "target: DATABASE_APP_PASSWORD",
                 text,
             )
             self.assertIn("target: SEC_API_KEY", text)
             self.assertEqual(
                 text.count("      - 169.254.169.253"),
-                2,
+                3,
             )
             self.assertEqual(
                 text.count("      - egress"),
-                2,
+                3,
             )
             self.assertIn(
                 f"name: {network.replace('-backend', '-egress')}",

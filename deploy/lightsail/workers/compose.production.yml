@@ -30,6 +30,7 @@ services:
       MSTR_BTC_LEDGER_URL: "https://www.strategy.com/ledger"
       MSTR_BTC_LEDGER_POLL_SEC: "2"
       MSTR_BTC_LEDGER_TIMEOUT_SEC: "10"
+      NEWS_NOTIFICATION_DELIVERY_DELAY_SEC: "2"
       SEC_API_KEY_FILE: /run/secrets/SEC_API_KEY
     secrets:
       - source: database_app_password
@@ -52,6 +53,57 @@ services:
     mem_limit: 256m
     mem_reservation: 128m
     cpus: 0.50
+    stop_grace_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  notification-worker:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command: ["python", "-u", "-m", "cbr_trading.notifications"]
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      TG_BOT_TOKEN_FILE: /run/secrets/TG_BOT_TOKEN
+      TELEGRAM_INGEST_CHAT_ID_FILE: /run/secrets/TELEGRAM_INGEST_CHAT_ID
+      NEWS_TELEGRAM_TIMEOUT_SEC: "10"
+      NEWS_NOTIFICATION_POLL_SEC: "0.5"
+      NEWS_NOTIFICATION_RETRY_SEC: "10"
+      NEWS_NOTIFICATION_LEASE_SEC: "30"
+      NEWS_NOTIFICATION_HEARTBEAT_SEC: "60"
+    secrets:
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+      - source: telegram_bot_token
+        target: TG_BOT_TOKEN
+      - source: telegram_ingest_chat_id
+        target: TELEGRAM_INGEST_CHAT_ID
+    networks:
+      - backend
+      - egress
+    dns:
+      - 169.254.169.253
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 192m
+    mem_reservation: 96m
+    cpus: 0.25
     stop_grace_period: 20s
     logging:
       driver: local
@@ -117,3 +169,7 @@ secrets:
     file: /opt/codexpoly/secrets/prod/DATABASE_APP_PASSWORD
   sec_api_key:
     file: /opt/codexpoly/secrets/prod/SEC_API_KEY
+  telegram_bot_token:
+    file: /opt/codexpoly/secrets/prod/TG_BOT_TOKEN
+  telegram_ingest_chat_id:
+    file: /opt/codexpoly/secrets/prod/TELEGRAM_INGEST_CHAT_ID
