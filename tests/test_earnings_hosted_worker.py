@@ -226,10 +226,10 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_connection_cycle()
 
-        self.assertEqual(result.watch_count, 3)
+        self.assertEqual(result.watch_count, 4)
         self.assertEqual(
             {watch.ticker for watch in captured},
-            {"BBBY", "NVTS", "WWD"},
+            {"BBBY", "NVTS", "NXPI", "WWD"},
         )
 
     def test_multiple_active_scopes_for_same_cik_are_rejected(self) -> None:

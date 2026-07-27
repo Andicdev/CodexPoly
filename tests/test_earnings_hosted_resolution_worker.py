@@ -103,12 +103,13 @@ def _fact(rule: object, value: str) -> EarningsFactCandidate:
 
 
 class EarningsHostedResolutionWorkerTests(unittest.TestCase):
-    def test_three_sources_run_through_real_strategy_in_shadow(self) -> None:
+    def test_checked_in_sources_run_real_strategy_in_shadow(self) -> None:
         rules = checked_in_shadow_rules()
         by_ticker = {rule.ticker: rule for rule in rules}
         profiles = tuple(_profile(rule) for rule in rules)
         facts = (
             _fact(by_ticker["NVTS"], "-0.03"),
+            _fact(by_ticker["NXPI"], "3.54"),
             _fact(by_ticker["WWD"], "2.42"),
             _fact(by_ticker["BBBY"], "-0.25"),
         )
@@ -127,14 +128,14 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         preparations = worker.prepare()
         result = worker.poll_once()
 
-        self.assertEqual(len(preparations), 3)
+        self.assertEqual(len(preparations), 4)
         self.assertTrue(all(item.ready for item in preparations))
         self.assertTrue(
             all(item.template_count == 2 for item in preparations)
         )
-        self.assertEqual(worker.managed_count, 3)
-        self.assertEqual(result.fact_count, 3)
-        self.assertEqual(result.completed_count, 3)
+        self.assertEqual(worker.managed_count, 4)
+        self.assertEqual(result.fact_count, 4)
+        self.assertEqual(result.completed_count, 4)
         self.assertEqual(result.failed_count, 0)
         worker.close()
 

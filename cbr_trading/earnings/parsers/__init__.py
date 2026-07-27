@@ -9,6 +9,10 @@ from cbr_trading.earnings.parsers.navitas import (
     NavitasEpsParser,
     nvts_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.nxp import (
+    NxpNonGaapEpsParser,
+    nxpi_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.woodward import (
     WoodwardGaapEpsParser,
     wwd_q3_2026_shadow_rule,
@@ -19,6 +23,7 @@ def earnings_parser_registry() -> dict[str, object]:
     return {
         "BBBY": BedBathBeyondNonGaapEpsParser(),
         "NVTS": NavitasEpsParser(),
+        "NXPI": NxpNonGaapEpsParser(),
         "WWD": WoodwardGaapEpsParser(),
     }
 
@@ -26,6 +31,7 @@ def earnings_parser_registry() -> dict[str, object]:
 def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
     return (
         nvts_q2_2026_shadow_rule(),
+        nxpi_q2_2026_shadow_rule(),
         wwd_q3_2026_shadow_rule(),
         bbby_q2_2026_shadow_rule(),
     )
@@ -33,10 +39,12 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
 __all__ = [
     "BedBathBeyondNonGaapEpsParser",
     "NavitasEpsParser",
+    "NxpNonGaapEpsParser",
     "WoodwardGaapEpsParser",
     "bbby_q2_2026_shadow_rule",
     "checked_in_shadow_rules",
     "earnings_parser_registry",
     "nvts_q2_2026_shadow_rule",
+    "nxpi_q2_2026_shadow_rule",
     "wwd_q3_2026_shadow_rule",
 ]
