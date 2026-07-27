@@ -51,6 +51,13 @@ _AUTO_LIVE_VERIFY_SQL = (
     / "checks"
     / "verify_profile_lifecycle_auto_live_armed.sql"
 )
+_LIVE_RUNTIME_VERIFY_SQL = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_resolution_runtime_live.sql"
+)
 
 
 class LightsailProfileLifecycleTests(unittest.TestCase):
@@ -157,6 +164,17 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertIn("expected 15 pending AUTO_LIVE", text)
         self.assertIn("status <> 'DISABLED'", text)
         self.assertIn("reviewed_notional > 1000", text)
+
+    def test_live_runtime_check_requires_fresh_trading_heartbeat(
+        self,
+    ) -> None:
+        text = _LIVE_RUNTIME_VERIFY_SQL.read_text(encoding="utf-8")
+
+        self.assertIn("runtime_key = 'hosted-resolution'", text)
+        self.assertIn("mode = 'live'", text)
+        self.assertIn("supervision_enabled", text)
+        self.assertIn("trading_enabled", text)
+        self.assertIn("interval '15 seconds'", text)
 
 
 if __name__ == "__main__":
