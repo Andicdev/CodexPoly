@@ -76,6 +76,14 @@ and sends messages, so Telegram network latency and retries are outside both
 the source-ingestion and trading hot paths. The table is mutable only for its
 delivery state and does not alter any legacy object.
 
+`011_add_earnings_release_catalog.sql` creates only
+`earnings_release_catalog`. It stores reusable, non-secret research about an
+earnings date, official schedule evidence, known document formats, candidate
+metrics, and tested delivery channels. It is informational and does not arm
+polling, create an earnings market rule or execution profile, or submit an
+order. A new release receives a new event row, so previous research remains
+available for historical comparison.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in
