@@ -85,6 +85,6 @@ groups plus Starbucks on July 29. The earliest scheduler preflight is July 28
 at `08:45 UTC`; the earliest execution windows open at `09:00 UTC`.
 
 NVTS reports on July 27 and has a separate checked-in profile with execution
-window `19:00 UTC` through `03:00 UTC`. It is not one of the 15 schedules
-armed by this rollout and remains outside automatic activation until a
-separate reviewed schedule is added.
+window `19:00 UTC` through `03:00 UTC`. It was not one of the 15 schedules
+armed by this rollout. Its separately approved AUTO_LIVE promotion is
+recorded in `NVTS_AUTO_LIVE_PRODUCTION_2026-07-27.md`.
