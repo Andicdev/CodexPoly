@@ -30,6 +30,13 @@ _TRADING_COMPOSE = (
 _SECRET_MANIFEST = (
     _ROOT / "deploy" / "lightsail" / "secret-manifest.json"
 )
+_VERIFY_SQL = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_profile_lifecycle_auto_preflight.sql"
+)
 
 
 class LightsailProfileLifecycleTests(unittest.TestCase):
@@ -96,6 +103,16 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
                 "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
             ],
         )
+
+    def test_production_check_fails_closed_on_live_or_enabled_state(
+        self,
+    ) -> None:
+        text = _VERIFY_SQL.read_text(encoding="utf-8")
+
+        self.assertIn("expected 15 pending AUTO_PREFLIGHT", text)
+        self.assertIn("status <> 'DISABLED'", text)
+        self.assertIn("automation_mode = 'AUTO_LIVE'", text)
+        self.assertIn("state = 'ACTIVE'", text)
 
 
 if __name__ == "__main__":
