@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from threading import Barrier, Lock
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -85,6 +86,33 @@ class _PublicClient:
 
     def close(self):
         return None
+
+
+class _ConcurrentPublicClient(_PublicClient):
+    def __init__(self):
+        super().__init__()
+        self._barrier = Barrier(2)
+        self._lock = Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def poll(self, watches):
+        with self._lock:
+            self.watches.append(tuple(watches))
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            self._barrier.wait(timeout=2)
+            return PublicReleasePollResult(
+                candidates=(),
+                feed_count=len(watches),
+                success_count=len(watches),
+                not_modified_count=0,
+                error_count=0,
+            )
+        finally:
+            with self._lock:
+                self._active -= 1
 
 
 def _settings() -> EarningsWorkerSettings:
@@ -300,15 +328,21 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         processed = await worker.run_public_poll_cycle()
 
         self.assertEqual(processed, 0)
-        self.assertEqual(len(public_client.watches), 1)
+        self.assertEqual(len(public_client.watches), 2)
         self.assertEqual(
             {
                 watch.scope_id
-                for watch in public_client.watches[0]
+                for feed_watches in public_client.watches
+                for watch in feed_watches
             },
             {scope_id},
         )
-        self.assertEqual(len(public_client.watches[0]), 2)
+        self.assertTrue(
+            all(
+                len(feed_watches) == 1
+                for feed_watches in public_client.watches
+            )
+        )
 
     async def test_public_polling_does_no_http_without_profile(
         self,
@@ -330,6 +364,28 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(processed, 0)
         self.assertEqual(public_client.watches, [])
+
+    async def test_public_feeds_are_polled_concurrently(self) -> None:
+        public_client = _ConcurrentPublicClient()
+        scope_id = "earnings:NVTS:2026Q2"
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (SimpleNamespace(scope_id=scope_id),)
+            ),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            public_release_client=public_client,
+            public_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_public_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(public_client.max_active, 2)
 
     def test_multiple_active_scopes_for_same_cik_are_rejected(self) -> None:
         first = nvts_q2_2026_shadow_rule()

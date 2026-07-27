@@ -678,16 +678,46 @@ class EarningsHostedShadowWorker:
         if not watches:
             return 0
 
-        poll_result = await asyncio.to_thread(
-            self._public_release_client.poll,
-            watches,
+        watches_by_feed: dict[
+            tuple[str, str, int],
+            list[PublicReleaseWatch],
+        ] = {}
+        for watch in watches:
+            watches_by_feed.setdefault(
+                (
+                    watch.kind,
+                    watch.feed_url,
+                    watch.listing_utc_offset_minutes,
+                ),
+                [],
+            ).append(watch)
+        poll_results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    self._public_release_client.poll,
+                    tuple(feed_watches),
+                )
+                for _, feed_watches
+                in sorted(watches_by_feed.items())
+            )
         )
         self._public_poll_count += 1
         self._public_feed_success_count += (
-            poll_result.success_count
+            sum(
+                result.success_count
+                for result in poll_results
+            )
         )
-        self._error_count += poll_result.error_count
-        if not poll_result.candidates:
+        self._error_count += sum(
+            result.error_count
+            for result in poll_results
+        )
+        candidates = tuple(
+            candidate
+            for result in poll_results
+            for candidate in result.candidates
+        )
+        if not candidates:
             return 0
 
         fetcher = self._public_document_fetcher_builder(watches)
@@ -700,7 +730,7 @@ class EarningsHostedShadowWorker:
             fetch_retry_delay=self._settings.fetch_retry_delay,
         )
         processed = 0
-        for candidate in poll_result.candidates:
+        for candidate in candidates:
             event_key = (
                 candidate.scope_id,
                 candidate.provider.value,

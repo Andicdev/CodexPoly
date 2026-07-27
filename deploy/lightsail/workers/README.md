@@ -66,6 +66,11 @@ feeds configured in each earnings rule. The worker checks enabled in-window
 `earnings_resolution` scopes and makes no external IR or wire request while
 that set is empty. Each transport persists its own source event and validated
 fact; all of them resolve through the same event-scoped earnings signal.
+Different feeds are polled concurrently so a slow IR host cannot delay its
+wire peer. A failing feed receives its own bounded exponential retry backoff
+while healthy feeds retain the configured polling interval. The RSS parser
+accepts known HTML character entities emitted by common IR platforms while
+continuing to reject DTD and entity declarations.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

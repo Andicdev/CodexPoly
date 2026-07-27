@@ -23,6 +23,7 @@ from cbr_trading.execution import (
     OrderGroupStatus,
     OrderInspectionResult,
     OrderObservation,
+    OrderObservationPhase,
     PersistentOrderSupervisor,
     RemoteOrderSnapshot,
     RemoteOrderState,
@@ -637,7 +638,11 @@ class ResolutionOrderLifecycleIntegrationTests(
             group_repository.group.live_order_ids,
             (replacement_order_id,),
         )
-        self.assertEqual(len(group_repository.observations), 2)
+        self.assertEqual(len(group_repository.observations), 1)
+        self.assertEqual(
+            group_repository.observations[0].phase,
+            OrderObservationPhase.PRE_CANCEL,
+        )
         self.assertEqual(
             tuple(public_client.spec.token_ids),
             ("asset-yes",),

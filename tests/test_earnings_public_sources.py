@@ -498,6 +498,88 @@ class EarningsPublicSourceTests(unittest.TestCase):
             "Mon, 27 Jul 2026 19:59:59 GMT",
         )
 
+    def test_accepts_known_html_entity_in_rss_text(self) -> None:
+        watch = self.by_provider[EarningsProvider.COMPANY_IR]
+        feed = _IR_FEED.replace(
+            b"Second Quarter 2026",
+            b"Second&nbsp;Quarter 2026",
+        )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                feed,
+                url=request.full_url,
+            ),
+        ).poll((watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+
+    def test_failing_feed_is_deferred_without_delaying_healthy_feed(
+        self,
+    ) -> None:
+        clock = [100.0]
+        failing_watch = self.by_provider[
+            EarningsProvider.COMPANY_IR
+        ]
+        healthy_watch = self.by_provider[
+            EarningsProvider.GLOBE_NEWSWIRE
+        ]
+        requests: list[str] = []
+
+        def opener(request, *, timeout):
+            requests.append(request.full_url)
+            if request.full_url == failing_watch.feed_url:
+                raise RuntimeError("temporary feed failure")
+            return _Response(
+                _GLOBE_FEED,
+                url=request.full_url,
+            )
+
+        client = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=opener,
+            monotonic=lambda: clock[0],
+            error_backoff_initial=2,
+            error_backoff_max=8,
+        )
+
+        first = client.poll(
+            (failing_watch, healthy_watch),
+            received_at=_RECEIVED_AT,
+        )
+        second = client.poll(
+            (failing_watch, healthy_watch),
+            received_at=_RECEIVED_AT,
+        )
+
+        self.assertEqual(first.error_count, 1)
+        self.assertEqual(second.deferred_count, 1)
+        self.assertEqual(second.error_count, 0)
+        self.assertEqual(
+            requests.count(failing_watch.feed_url),
+            1,
+        )
+        self.assertEqual(
+            requests.count(healthy_watch.feed_url),
+            2,
+        )
+
+        clock[0] += 2
+        third = client.poll(
+            (failing_watch, healthy_watch),
+            received_at=_RECEIVED_AT,
+        )
+        self.assertEqual(third.error_count, 1)
+        self.assertEqual(
+            requests.count(failing_watch.feed_url),
+            2,
+        )
+
     def test_document_fetcher_enforces_scope_host_and_size(self) -> None:
         candidate = PublicReleaseFeedClient(
             user_agent="CodexPoly test@example.com",

@@ -260,7 +260,67 @@ class PersistentOrderSupervisor:
                 )
             )
 
-            post_snapshots: tuple[RemoteOrderSnapshot, ...] = ()
+            replaceable_order_ids = tuple(
+                order_id
+                for order_id in group.live_order_ids
+                if (
+                    pre_by_id[order_id].state
+                    in {
+                        RemoteOrderState.OPEN,
+                        RemoteOrderState.CANCELLED,
+                    }
+                )
+            )
+            (
+                remaining_quantity,
+                remaining_notional,
+            ) = _remaining_sizing(
+                group,
+                final_by_id=pre_by_id,
+                cancelled_order_ids=replaceable_order_ids,
+            )
+
+            if (
+                remaining_quantity is None
+                and remaining_notional is None
+            ):
+                self._repository.complete_without_replacement(
+                    claim,
+                    filled_order_ids=filled,
+                    cancelled_order_ids=cancelled,
+                    observations=observations,
+                )
+                return SupervisionResult(
+                    event_id=event.event_id,
+                    order_group_id=(
+                        group.registration.order_group_id
+                    ),
+                    status=SupervisionStatus.COMPLETED,
+                )
+            if not replaceable_order_ids:
+                raise ValueError(
+                    "remaining sizing has no replaceable source orders"
+                )
+
+            request = _replacement_request(
+                group,
+                cancelled_order_ids=replaceable_order_ids,
+                remaining_quantity=remaining_quantity,
+                remaining_notional=remaining_notional,
+            )
+            replacements = tuple(
+                self._gateway.place_replacement(request)
+            )
+            _validate_replacements(
+                replacements,
+                request=request,
+            )
+
+            # The target-tick order is the latency-sensitive operation.
+            # Submit it before cancellation and never wait for a
+            # post-cancel status read.  A cancellation failure is persisted
+            # together with the already-known replacement so reconciliation
+            # cannot blindly submit a duplicate.
             if open_order_ids:
                 cancellation = self._gateway.cancel_orders(
                     account_name=group.registration.account_name,
@@ -288,112 +348,9 @@ class PersistentOrderSupervisor:
                         or "one_or_more_cancellations_failed"
                     )
 
-                post_inspection = self._gateway.inspect_orders(
-                    account_name=group.registration.account_name,
-                    order_ids=open_order_ids,
-                )
-                post_snapshots = _validated_inspection(
-                    post_inspection,
-                    requested_order_ids=open_order_ids,
-                    group=group,
-                )
-                observations = (
-                    *observations,
-                    *(
-                        OrderObservation(
-                            phase=OrderObservationPhase.POST_CANCEL,
-                            snapshot=snapshot,
-                        )
-                        for snapshot in post_snapshots
-                    ),
-                )
-                if post_inspection.failed_order_ids:
-                    raise RuntimeError(
-                        post_inspection.error
-                        or "post_cancel_order_inspection_failed"
-                    )
-                _require_terminal_states(post_snapshots)
-
-            final_by_id = {
-                snapshot.order_id: snapshot
-                for snapshot in pre_snapshots
-                if snapshot.order_id not in set(open_order_ids)
-            }
-            final_by_id.update(
-                {
-                    snapshot.order_id: snapshot
-                    for snapshot in post_snapshots
-                }
-            )
-            if set(final_by_id) != set(group.live_order_ids):
-                raise ValueError(
-                    "final remote order state is incomplete"
-                )
-            final_filled = tuple(
-                order_id
-                for order_id in group.live_order_ids
-                if (
-                    final_by_id[order_id].state
-                    == RemoteOrderState.FILLED
-                )
-            )
-            final_cancelled = tuple(
-                order_id
-                for order_id in group.live_order_ids
-                if (
-                    final_by_id[order_id].state
-                    == RemoteOrderState.CANCELLED
-                )
-            )
-            (
-                remaining_quantity,
-                remaining_notional,
-            ) = _remaining_sizing(
-                group,
-                final_by_id=final_by_id,
-                cancelled_order_ids=final_cancelled,
-            )
-            filled = final_filled
-            cancelled = final_cancelled
-
-            if (
-                remaining_quantity is None
-                and remaining_notional is None
-            ):
-                self._repository.complete_without_replacement(
-                    claim,
-                    filled_order_ids=filled,
-                    cancelled_order_ids=cancelled,
-                    observations=observations,
-                )
-                return SupervisionResult(
-                    event_id=event.event_id,
-                    order_group_id=(
-                        group.registration.order_group_id
-                    ),
-                    status=SupervisionStatus.COMPLETED,
-                )
-            if not cancelled:
-                raise ValueError(
-                    "remaining sizing has no cancelled source orders"
-                )
-
-            request = _replacement_request(
-                group,
-                cancelled_order_ids=cancelled,
-                remaining_quantity=remaining_quantity,
-                remaining_notional=remaining_notional,
-            )
-            replacements = tuple(
-                self._gateway.place_replacement(request)
-            )
-            _validate_replacements(
-                replacements,
-                request=request,
-            )
             self._repository.complete_reprice(
                 claim,
-                cancelled_order_ids=cancelled,
+                cancelled_order_ids=replaceable_order_ids,
                 filled_order_ids=filled,
                 replacement_orders=replacements,
                 observations=observations,

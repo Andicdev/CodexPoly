@@ -73,9 +73,10 @@ The supervisor persistence boundary is additive and source-neutral:
   owned by a group, including its generation and lifecycle state;
 - `resolution_supervision_events` provides per-group event idempotency and
   records atomic tick-change claims;
-- `resolution_order_observations` stores immutable `PRE_CANCEL` and
-  `POST_CANCEL` remote snapshots, including price, original, matched, and
-  remaining quantity.
+- `resolution_order_observations` stores immutable remote snapshots,
+  including price, original, matched, and remaining quantity. The normal
+  replace-first path records `PRE_CANCEL`; legacy/recovery rows may also use
+  `POST_CANCEL` and `RECONCILE`.
 
 An `ExecutionHandle` carries the optional signal/template/strategy and order
 parameters needed to persist a replaceable order without re-reading a
@@ -96,26 +97,27 @@ readiness verification are explicit repository operations.
 1. It loads only active groups for the asset named by a tick-size event.
 2. The repository atomically claims each matching group and rejects duplicate
    or competing processing by event ID and optimistic revision.
-3. Before cancellation, the gateway reads every exact `live_order_id`.
+3. Before replacement, the gateway reads every exact `live_order_id`.
    The supervisor verifies account-scoped market ownership, side, and original
    sizing against the persisted group.
-4. Orders already `FILLED` need no cancellation. Only remotely `OPEN` IDs are
-   sent to exact batch cancellation; remotely `CANCELLED` IDs remain inside
-   the same owned group. A partial cancellation is a failure and no
-   replacement is submitted.
-5. After successful cancellation, every formerly open order is read again.
-   Replacement is forbidden unless the final state is `CANCELLED` or
-   `FILLED`. This second snapshot closes the race where another fill arrives
-   while cancellation is in flight.
-6. The remaining replacement size comes from the final remote state. Quantity
-   sizing preserves unfilled shares. Notional sizing preserves only the
-   unfilled old-order notional. A full fill completes the group without a new
-   order.
-7. The desired price is aligned to the target tick: BUY rounds down and SELL
-   rounds up. Successful completion stores both snapshots, closes filled and
-   replaced orders, inserts the new generation as `LIVE`, and completes the
-   event in one transaction. If state persistence fails after placement,
-   known replacement orders are recorded as `UNKNOWN`.
+4. Orders already `FILLED` need no replacement. The remaining replacement
+   size comes from this first remote snapshot: quantity sizing preserves
+   currently unfilled shares and notional sizing preserves their old-order
+   notional. A full fill completes the group without a new order.
+5. The desired price is aligned to the target tick: BUY rounds down and SELL
+   rounds up. The target-tick order is submitted before any cancellation so
+   exchange cancellation consistency cannot block the latency-sensitive
+   placement.
+6. Only the exact remotely `OPEN` source IDs are then sent to best-effort
+   batch cancellation. The cancellation acknowledgement is validated, but
+   there is no post-cancel status read or wait for a terminal state. A partial
+   cancellation fails the claim only after the already-known replacement ID
+   has been retained for reconciliation.
+7. Successful completion closes filled and replaced source orders, inserts
+   the new generation as `LIVE`, and completes the event in one transaction.
+   If cancellation or state persistence fails after placement, known
+   replacement orders are recorded as `UNKNOWN` so recovery cannot submit a
+   blind duplicate.
 
 This checkpoint defines and tests the supervisor and its order-gateway
 contract. `PolymarketSupervisionOrderGateway` is the first live implementation

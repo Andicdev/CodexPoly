@@ -5,11 +5,13 @@ import html
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from html.entities import html5
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError
@@ -67,6 +69,12 @@ _DOCUMENT_CONTENT_TYPES = frozenset(
     }
 )
 _XML_FORBIDDEN_MARKERS = (b"<!doctype", b"<!entity")
+_XML_NAMED_ENTITY_PATTERN = re.compile(
+    rb"&([A-Za-z][A-Za-z0-9]+);"
+)
+_XML_BUILTIN_ENTITIES = frozenset(
+    {b"amp", b"apos", b"gt", b"lt", b"quot"}
+)
 _PUBLIC_LISTING_KINDS = frozenset(
     {"html_listing", "rss", "wordpress_rest"}
 )
@@ -159,6 +167,7 @@ class PublicReleasePollResult:
     success_count: int
     not_modified_count: int
     error_count: int
+    deferred_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -244,6 +253,9 @@ class PublicReleaseFeedClient:
         max_bytes: int = 2 * 1024 * 1024,
         opener: Callable[..., Any] | None = None,
         logger: logging.Logger | None = None,
+        monotonic: Callable[[], float] | None = None,
+        error_backoff_initial: float = 1.0,
+        error_backoff_max: float = 30.0,
     ):
         normalized_agent = str(user_agent or "").strip()
         if not normalized_agent:
@@ -254,6 +266,14 @@ class PublicReleaseFeedClient:
             raise ValueError(
                 "max_bytes must be between 1024 and 8388608"
             )
+        if error_backoff_initial <= 0:
+            raise ValueError(
+                "error_backoff_initial must be positive"
+            )
+        if error_backoff_max < error_backoff_initial:
+            raise ValueError(
+                "error_backoff_max must be at least the initial backoff"
+            )
         self._user_agent = normalized_agent
         self._timeout = float(timeout)
         self._max_bytes = int(max_bytes)
@@ -261,7 +281,14 @@ class PublicReleaseFeedClient:
         self._logger = logger or logging.getLogger(
             "cbr_trading.earnings.public"
         )
+        self._monotonic = monotonic or time.monotonic
+        self._error_backoff_initial = float(
+            error_backoff_initial
+        )
+        self._error_backoff_max = float(error_backoff_max)
         self._validators: dict[str, tuple[str | None, str | None]] = {}
+        self._consecutive_failures: dict[str, int] = {}
+        self._retry_after: dict[str, float] = {}
 
     def poll(
         self,
@@ -298,11 +325,19 @@ class PublicReleaseFeedClient:
         successes = 0
         not_modified = 0
         errors = 0
+        deferred = 0
+        monotonic_now = float(self._monotonic())
         for (
             kind,
             feed_url,
             listing_utc_offset_minutes,
         ), feed_watches in sorted(by_feed.items()):
+            if (
+                self._retry_after.get(feed_url, 0.0)
+                > monotonic_now
+            ):
+                deferred += 1
+                continue
             try:
                 document = self._fetch_listing(
                     feed_url,
@@ -310,6 +345,7 @@ class PublicReleaseFeedClient:
                 )
                 if document is None:
                     not_modified += 1
+                    self._clear_feed_failure(feed_url)
                     continue
                 items = _parse_listing(
                     document,
@@ -318,6 +354,7 @@ class PublicReleaseFeedClient:
                         listing_utc_offset_minutes
                     ),
                 )
+                self._clear_feed_failure(feed_url)
                 successes += 1
                 for watch in feed_watches:
                     for item in items:
@@ -342,11 +379,21 @@ class PublicReleaseFeedClient:
                             )
             except Exception as exc:
                 errors += 1
+                # A validator is only safe after the corresponding body was
+                # parsed successfully.  Retrying an invalid body with a
+                # conditional request could otherwise turn the next attempt
+                # into a misleading 304.
+                self._validators.pop(feed_url, None)
+                retry_delay = self._record_feed_failure(
+                    feed_url,
+                    now=monotonic_now,
+                )
                 self._logger.warning(
                     "Public release feed poll failed host=%s "
-                    "error_code=%s",
+                    "error_code=%s retry_sec=%s",
                     _url_host(feed_url),
                     type(exc).__name__,
+                    retry_delay,
                 )
         return PublicReleasePollResult(
             candidates=tuple(candidates),
@@ -354,7 +401,28 @@ class PublicReleaseFeedClient:
             success_count=successes,
             not_modified_count=not_modified,
             error_count=errors,
+            deferred_count=deferred,
         )
+
+    def _clear_feed_failure(self, feed_url: str) -> None:
+        self._consecutive_failures.pop(feed_url, None)
+        self._retry_after.pop(feed_url, None)
+
+    def _record_feed_failure(
+        self,
+        feed_url: str,
+        *,
+        now: float,
+    ) -> float:
+        failures = self._consecutive_failures.get(feed_url, 0) + 1
+        self._consecutive_failures[feed_url] = failures
+        retry_delay = min(
+            self._error_backoff_initial
+            * (2 ** min(failures - 1, 30)),
+            self._error_backoff_max,
+        )
+        self._retry_after[feed_url] = now + retry_delay
+        return retry_delay
 
     def _fetch_listing(
         self,
@@ -615,7 +683,9 @@ def _parse_feed(document: bytes) -> tuple[_FeedItem, ...]:
             "public release feed contains forbidden XML declarations"
         )
     try:
-        root = ElementTree.fromstring(document)
+        root = ElementTree.fromstring(
+            _normalize_html_entities_for_xml(document)
+        )
     except ElementTree.ParseError:
         raise PublicReleaseSourceError(
             "public release feed is invalid XML"
@@ -653,6 +723,25 @@ def _parse_feed(document: bytes) -> tuple[_FeedItem, ...]:
             )
         )
     return tuple(items)
+
+
+def _normalize_html_entities_for_xml(document: bytes) -> bytes:
+    """Translate known HTML entities that are invalid in bare XML."""
+
+    def replacement(match: re.Match[bytes]) -> bytes:
+        encoded_name = match.group(1)
+        if encoded_name in _XML_BUILTIN_ENTITIES:
+            return match.group(0)
+        name = encoded_name.decode("ascii")
+        value = html5.get(f"{name};")
+        if value is None:
+            return match.group(0)
+        return "".join(
+            f"&#{ord(character)};"
+            for character in value
+        ).encode("ascii")
+
+    return _XML_NAMED_ENTITY_PATTERN.sub(replacement, document)
 
 
 def _parse_listing(
