@@ -23,6 +23,63 @@ services:
       - source: encrypted_private_key
         target: TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
 
+  profile-readiness-worker:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command:
+      - python
+      - -u
+      - -m
+      - cbr_trading.profile_lifecycle.readiness_main
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      PROFILE_READINESS_POLL_SEC: "1"
+      PROFILE_READINESS_HEARTBEAT_SEC: "60"
+      PROFILE_READINESS_LEASE_SEC: "60"
+      PROFILE_READINESS_TTL_SEC: "1800"
+      TRADING_ACCOUNT_SOURCE: database_metadata_secret
+      TRADING_ACCOUNT_NAME: abccbaq
+      ACCOUNTS_MASTER_KEY_FILE: /run/secrets/ACCOUNTS_MASTER_KEY
+      TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_FILE: /run/secrets/TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
+      CBR_LIVE_TRADING_ENABLED: "0"
+      CBR_LIVE_ALLOWED_ACCOUNT: abccbaq
+      CBR_LIVE_MAX_ORDER_QTY: "${CBR_LIVE_MAX_ORDER_QTY:?set the live quantity cap}"
+      CBR_LIVE_MAX_NOTIONAL: "${CBR_LIVE_MAX_NOTIONAL:?set the per-order notional cap}"
+      CBR_LIVE_MAX_TOTAL_NOTIONAL: "${CBR_LIVE_MAX_TOTAL_NOTIONAL:?set the aggregate notional cap}"
+      CBR_LIVE_POST_ONLY: "${CBR_LIVE_POST_ONLY:-0}"
+    secrets:
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+      - source: accounts_master_key
+        target: ACCOUNTS_MASTER_KEY
+      - source: encrypted_private_key
+        target: TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
+    networks:
+      - backend
+      - egress
+    dns:
+      - 169.254.169.253
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 150
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.50
+    stop_grace_period: 20s
+
 secrets:
   accounts_master_key:
     file: /opt/codexpoly/secrets/prod/ACCOUNTS_MASTER_KEY

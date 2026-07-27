@@ -10,6 +10,10 @@ from cbr_trading.earnings.contracts import (
     EarningsMarketRule,
 )
 from cbr_trading.mstr_btc.contracts import MstrBtcFactCandidate
+from cbr_trading.profile_lifecycle.contracts import (
+    ProfileScheduleState,
+    ProfileScheduleTransition,
+)
 from cbr_trading.secret_guard import redact_sensitive_text
 
 
@@ -155,6 +159,68 @@ def source_event_notification_from_mstr(
         event_kind="mstr_btc",
         message_text=_redact_notification_text(message),
         source_url=fact.source_url,
+    )
+
+
+def source_event_notification_from_profile_lifecycle(
+    transition: ProfileScheduleTransition,
+) -> SourceEventNotification:
+    """Describe scheduler eligibility without claiming an order was sent."""
+
+    state_messages = {
+        ProfileScheduleState.PREFLIGHTING: (
+            "Authenticated preflight requested",
+            "Profile status remains DISABLED.",
+        ),
+        ProfileScheduleState.READY: (
+            "Authenticated preflight passed",
+            (
+                "Profile status remains DISABLED."
+                if transition.automation_mode.value == "AUTO_PREFLIGHT"
+                else "Profile is ready for its activation window."
+            ),
+        ),
+        ProfileScheduleState.ACTIVE: (
+            "Profile enabled",
+            (
+                "Profile status is ENABLED; the resolution worker may "
+                "now accept a matching source signal."
+            ),
+        ),
+        ProfileScheduleState.BLOCKED: (
+            "Profile activation blocked",
+            "Profile status remains DISABLED.",
+        ),
+        ProfileScheduleState.EXPIRED: (
+            "Profile window finished",
+            "Profile status is DISABLED for new signals.",
+        ),
+    }
+    title, eligibility = state_messages[transition.next_state]
+    lines = [
+        f"CodexPoly: {title}",
+        f"Profile: {transition.profile_key}",
+        f"Schedule: {transition.schedule_key}",
+        f"Mode: {transition.automation_mode.value}",
+        f"State: {transition.next_state.value}",
+        f"Window opens: {transition.activate_at.isoformat()}",
+        f"Window closes: {transition.deactivate_at.isoformat()}",
+    ]
+    if transition.reason_code:
+        lines.append(f"Reason: {transition.reason_code}")
+    lines.extend(
+        (
+            eligibility,
+            f"Market: {transition.source_reference}",
+        )
+    )
+    return SourceEventNotification(
+        notification_key=transition.event_key,
+        source_name="profile_lifecycle",
+        scope_id=transition.scope_id,
+        event_kind="profile_lifecycle",
+        message_text=_redact_notification_text("\n".join(lines)),
+        source_url=transition.source_reference,
     )
 
 

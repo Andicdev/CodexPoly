@@ -162,6 +162,28 @@ WHERE status = 'ENABLED'
 ORDER BY source_name, scope_id, id
 """.strip()
 
+_LOAD_BY_KEY_SQL = """
+SELECT
+    profile_key,
+    scope_id,
+    source_name,
+    source_reference,
+    account_name,
+    condition_id,
+    yes_desired_price,
+    no_desired_price,
+    quantity,
+    lifecycle_kind,
+    old_tick,
+    new_tick,
+    max_reprices,
+    prepare_from,
+    expires_at,
+    metadata
+FROM resolution_execution_profiles
+WHERE profile_key = :profile_key
+""".strip()
+
 _SET_STATUS_SQL = """
 UPDATE resolution_execution_profiles
 SET status = :status, updated_at = now()
@@ -414,6 +436,31 @@ class SqlAlchemyResolutionProfileStore:
                 f"{type(exc).__name__}"
             ) from None
         return tuple(_profile_from_row(row) for row in rows)
+
+    def load(
+        self,
+        profile_key: str,
+    ) -> ResolutionExecutionProfile:
+        normalized_key = str(profile_key or "").strip()
+        if not normalized_key:
+            raise ValueError("profile_key is required")
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_LOAD_BY_KEY_SQL),
+                    {"profile_key": normalized_key},
+                ).mappings().one_or_none()
+        except Exception as exc:
+            raise ResolutionProfileStoreError(
+                "Failed to load resolution execution profile: "
+                f"{type(exc).__name__}"
+            ) from None
+        if row is None:
+            raise ResolutionProfileStoreError(
+                "Resolution execution profile does not exist"
+            )
+        return _profile_from_row(row)
 
     def close(self) -> None:
         if self._engine is not None:

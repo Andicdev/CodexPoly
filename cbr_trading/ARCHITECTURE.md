@@ -385,6 +385,27 @@ available for exceptional markets. The seeded default uses desired price
 `0.999` for either outcome, share quantity `50`, and the `0.01 -> 0.001`
 single-reprice policy.
 
+`resolution_profile_schedules` is another additive layer and never replaces
+the execution profile. It controls when an already reviewed profile may
+become eligible:
+
+```text
+Schedule -> LifecycleController -> profile status
+                                  -> lifecycle audit
+                                  -> Telegram outbox
+```
+
+`AUTO_PREFLIGHT` requests a separate authenticated readiness worker which
+loads a disabled profile, prepares and pre-signs both outcomes, records only
+non-secret aggregate evidence, and closes the executor without calling
+`execute()`. A successful check moves the schedule to `READY` but leaves the
+profile `DISABLED`. `AUTO_LIVE` additionally requires a fresh readiness
+result, the global automatic-live switch, an active window, and an aggregate
+worst-selected-outcome notional cap before an atomic transition to
+`ENABLED`. Window expiry returns the profile to `DISABLED`. All transitions
+are append-only audited; notification delivery remains outside the trading
+hot path.
+
 The hosted service defaults to `shadow`, where the complete decision path
 ends at a non-submitting executor. `preflight` authenticates and pre-signs
 both alternatives without creating execution claims. `live` uses

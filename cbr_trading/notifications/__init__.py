@@ -4,6 +4,7 @@ from cbr_trading.notifications.contracts import (
     SourceEventNotification,
     source_event_notification_from_earnings,
     source_event_notification_from_mstr,
+    source_event_notification_from_profile_lifecycle,
 )
 from cbr_trading.notifications.repository import (
     ClaimedNotification,
@@ -20,4 +21,5 @@ __all__ = [
     "StoredNotification",
     "source_event_notification_from_earnings",
     "source_event_notification_from_mstr",
+    "source_event_notification_from_profile_lifecycle",
 ]

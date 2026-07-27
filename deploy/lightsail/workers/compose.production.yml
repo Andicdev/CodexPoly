@@ -113,6 +113,48 @@ services:
         max-size: 10m
         max-file: "3"
 
+  profile-scheduler-worker:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command: ["python", "-u", "-m", "cbr_trading.profile_lifecycle"]
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      PROFILE_SCHEDULER_POLL_SEC: "2"
+      PROFILE_SCHEDULER_HEARTBEAT_SEC: "60"
+      PROFILE_SCHEDULER_ACTIVATION_GRACE_SEC: "60"
+      PROFILE_SCHEDULER_BATCH_SIZE: "100"
+      PROFILE_SCHEDULER_AUTO_LIVE_ENABLED: "0"
+    secrets:
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 192m
+    mem_reservation: 96m
+    cpus: 0.25
+    stop_grace_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
   resolution-worker:
     image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
     command: ["python", "-u", "-m", "cbr_trading.resolution_hosted"]

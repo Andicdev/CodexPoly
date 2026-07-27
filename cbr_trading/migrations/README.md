@@ -84,6 +84,15 @@ polling, create an earnings market rule or execution profile, or submit an
 order. A new release receives a new event row, so previous research remains
 available for historical comparison.
 
+`012_add_resolution_profile_schedules.sql` adds the source-neutral
+`resolution_profile_schedules` lifecycle table and the append-only
+`resolution_profile_schedule_events` audit table. Existing execution-profile
+columns and statuses are not changed. `AUTO_PREFLIGHT` requests an
+authenticated, non-submitting readiness check but cannot enable a profile.
+`AUTO_LIVE` additionally requires the global scheduler switch, a fresh
+readiness result, an in-window schedule, and an aggregate notional cap.
+Lifecycle Telegram messages use the existing durable notification outbox.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

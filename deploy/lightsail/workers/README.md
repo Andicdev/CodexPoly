@@ -2,7 +2,7 @@
 
 ## Service boundary
 
-The worker stack contains exactly three private services built from the same
+The base worker stack contains four private services built from the same
 reviewed CodexPoly image:
 
 - `earnings-worker` retains its compatibility service name and runs
@@ -13,7 +13,15 @@ reviewed CodexPoly image:
   `python -u -m cbr_trading.resolution_hosted`;
 - `notification-worker` runs
   `python -u -m cbr_trading.notifications` and is the only new hosted
-  service that receives Telegram credentials.
+  service that receives Telegram credentials;
+- `profile-scheduler-worker` runs
+  `python -u -m cbr_trading.profile_lifecycle`, owns only database access,
+  and moves reviewed schedules through their time-based states.
+
+The production trading overlay adds `profile-readiness-worker`. It receives
+the same narrowly mounted account secrets as the resolution service and runs
+authenticated preparation for both outcomes without calling `execute()` or
+submitting an order. The scheduler itself never receives trading secrets.
 
 Neither service publishes a host port. Both join the existing internal
 PostgreSQL network and connect to `postgres:5432` as `codexpoly_app`. The
@@ -28,6 +36,15 @@ the application database password. Confirmed events are written
 idempotently to `source_notification_outbox`; Telegram HTTP delivery and
 retries happen later in `notification-worker`, outside the ingestion and
 trading hot paths.
+
+Profile schedules are separate from execution configuration. `MANUAL` is
+inert, `AUTO_PREFLIGHT` can request and record a readiness check but cannot
+enable a profile, and `AUTO_LIVE` is additionally gated by the global
+`PROFILE_SCHEDULER_AUTO_LIVE_ENABLED` switch, a fresh readiness result, the
+active time window, and an aggregate notional cap. Every transition is
+append-only audited and enqueued to the same Telegram outbox. The `ACTIVE`
+message says that the profile status is `ENABLED`; it does not claim that an
+order was submitted.
 
 `MSTR_BTC_SHADOW_ENABLED=true` enables only the checked-in, time-bounded MSTR
 source watch. The worker verifies the append-only holdings schema, pins the
@@ -100,6 +117,16 @@ Live mode therefore requires explicit values for all three guards, including
 `RESOLUTION_SUPERVISION_ENABLED=1` and
 `CBR_LIVE_TRADING_ENABLED=1`.
 
+The base scheduler independently defaults to:
+
+```text
+PROFILE_SCHEDULER_AUTO_LIVE_ENABLED=0
+```
+
+The checked-in July batch uses only `AUTO_PREFLIGHT`. Successful preparation
+therefore leaves every `resolution_execution_profiles.status` value
+`DISABLED`.
+
 ## Account secret installation
 
 The production account has no legacy `trading_accounts` row. Its public
@@ -139,11 +166,15 @@ production account.
 4. Verify both workers' aggregate heartbeats without inspecting secrets.
 5. Install the production account secrets through the human-only installer.
 6. Verify the `resolution-worker-trading` secret set by name only.
-7. Enable only the reviewed in-window profiles and recreate
-   `resolution-worker` with the production trading overlay in preflight mode.
-8. Return the profiles to `DISABLED` after the authenticated preflight.
-9. Enable live mode only after explicit approval and after the Northflank live
-   resolution worker is stopped.
+7. Apply migration 012 and the reviewed schedule seed before starting the
+   scheduler.
+8. Start the base scheduler with automatic live activation disabled.
+9. Start only `profile-readiness-worker` from the production trading overlay
+   for scheduled authenticated preflight.
+10. Verify `READY`/`BLOCKED` lifecycle events and Telegram delivery while all
+    execution profiles remain `DISABLED`.
+11. Enable live mode and `AUTO_LIVE` only after a separate explicit approval
+    and after the Northflank live resolution worker is stopped.
 
 Only one live resolution worker may exist across Northflank and Lightsail. The
 two databases do not share execution claims, so simultaneous live workers are
