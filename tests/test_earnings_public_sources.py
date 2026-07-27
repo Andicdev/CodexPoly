@@ -180,6 +180,7 @@ class _Response:
         self._content = content
         self._url = url
         self.status = status
+        self.read_sizes: list[int] = []
         self.headers = Message()
         self.headers["Content-Type"] = content_type
         for name, value in (extra_headers or {}).items():
@@ -192,6 +193,7 @@ class _Response:
         return False
 
     def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
         return self._content[:size]
 
     def geturl(self) -> str:
@@ -219,7 +221,9 @@ class EarningsPublicSourceTests(unittest.TestCase):
         self.assertTrue(
             self.by_provider[
                 EarningsProvider.COMPANY_IR
-            ].feed_url.endswith("rss/news-releases.xml")
+            ].feed_url.startswith(
+                "https://navitassemi.gcs-web.com/"
+            )
         )
         self.assertTrue(
             all(watch.kind == "rss" for watch in self.watches)
@@ -497,6 +501,28 @@ class EarningsPublicSourceTests(unittest.TestCase):
             requests[1].get_header("If-modified-since"),
             "Mon, 27 Jul 2026 19:59:59 GMT",
         )
+
+    def test_content_length_avoids_waiting_for_connection_close(
+        self,
+    ) -> None:
+        watch = self.by_provider[EarningsProvider.COMPANY_IR]
+        response = _Response(
+            _IR_FEED,
+            url=watch.feed_url,
+            extra_headers={
+                "Content-Length": str(len(_IR_FEED)),
+            },
+        )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda *_args, **_kwargs: response,
+        ).poll((watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(response.read_sizes, [len(_IR_FEED)])
 
     def test_accepts_known_html_entity_in_rss_text(self) -> None:
         watch = self.by_provider[EarningsProvider.COMPANY_IR]

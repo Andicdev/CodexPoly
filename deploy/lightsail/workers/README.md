@@ -70,7 +70,10 @@ Different feeds are polled concurrently so a slow IR host cannot delay its
 wire peer. A failing feed receives its own bounded exponential retry backoff
 while healthy feeds retain the configured polling interval. The RSS parser
 accepts known HTML character entities emitted by common IR platforms while
-continuing to reject DTD and entity declarations.
+continuing to reject DTD and entity declarations. Responses with a valid
+`Content-Length` are read to that exact bound instead of waiting for a broken
+CDN connection close. The NVTS company feed uses the official
+`navitassemi.gcs-web.com` endpoint rather than the unstable vanity-host alias.
 
 | Environment | Compose source | Installed path |
 | --- | --- | --- |

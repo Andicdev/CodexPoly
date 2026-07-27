@@ -191,7 +191,7 @@ def nvts_q2_2026_shadow_rule() -> EarningsMarketRule:
                 "kind": "rss",
                 "provider": "company_ir",
                 "feed_url": (
-                    "https://ir.navitassemi.com/"
+                    "https://navitassemi.gcs-web.com/"
                     "rss/news-releases.xml"
                 ),
                 "allowed_document_hosts": [

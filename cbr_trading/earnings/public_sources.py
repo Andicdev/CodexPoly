@@ -512,7 +512,11 @@ class PublicReleaseFeedClient:
                 raise PublicReleaseSourceError(
                     "public release listing has unsupported content type"
                 )
-            document = response.read(self._max_bytes + 1)
+            document = _read_bounded_body(
+                response,
+                max_bytes=self._max_bytes,
+                label="public release listing",
+            )
             response_headers = getattr(response, "headers", None)
             next_etag = _header(response_headers, "ETag")
             next_modified = _header(
@@ -623,7 +627,11 @@ class PublicReleaseDocumentFetcher:
                 raise PublicReleaseSourceError(
                     "public release has unsupported content type"
                 )
-            document = response.read(self._max_bytes + 1)
+            document = _read_bounded_body(
+                response,
+                max_bytes=self._max_bytes,
+                label="public release document",
+            )
         if not document:
             raise PublicReleaseSourceError(
                 "public release document is empty"
@@ -1154,3 +1162,37 @@ def _header(headers: Any, name: str) -> str | None:
         return None
     value = str(headers.get(name) or "").strip()
     return value or None
+
+
+def _read_bounded_body(
+    response: Any,
+    *,
+    max_bytes: int,
+    label: str,
+) -> bytes:
+    raw_length = _header(
+        getattr(response, "headers", None),
+        "Content-Length",
+    )
+    if raw_length is None:
+        return response.read(max_bytes + 1)
+    try:
+        content_length = int(raw_length)
+    except (TypeError, ValueError):
+        raise PublicReleaseSourceError(
+            f"{label} has invalid content length"
+        ) from None
+    if content_length < 0:
+        raise PublicReleaseSourceError(
+            f"{label} has invalid content length"
+        )
+    if content_length > max_bytes:
+        raise PublicReleaseSourceError(
+            f"{label} exceeds the size limit"
+        )
+    document = response.read(content_length)
+    if len(document) != content_length:
+        raise PublicReleaseSourceError(
+            f"{label} body is incomplete"
+        )
+    return document
