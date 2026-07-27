@@ -108,6 +108,9 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         by_ticker = {rule.ticker: rule for rule in rules}
         profiles = tuple(_profile(rule) for rule in rules)
         facts = (
+            _fact(by_ticker["BA"], "-0.31"),
+            _fact(by_ticker["CSGP"], "0.11"),
+            _fact(by_ticker["CZR"], "0.06"),
             _fact(by_ticker["NVTS"], "-0.03"),
             _fact(by_ticker["NXPI"], "3.54"),
             _fact(by_ticker["WWD"], "2.42"),
@@ -128,14 +131,14 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         preparations = worker.prepare()
         result = worker.poll_once()
 
-        self.assertEqual(len(preparations), 4)
+        self.assertEqual(len(preparations), 7)
         self.assertTrue(all(item.ready for item in preparations))
         self.assertTrue(
             all(item.template_count == 2 for item in preparations)
         )
-        self.assertEqual(worker.managed_count, 4)
-        self.assertEqual(result.fact_count, 4)
-        self.assertEqual(result.completed_count, 4)
+        self.assertEqual(worker.managed_count, 7)
+        self.assertEqual(result.fact_count, 7)
+        self.assertEqual(result.completed_count, 7)
         self.assertEqual(result.failed_count, 0)
         worker.close()
 

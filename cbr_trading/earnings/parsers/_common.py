@@ -11,7 +11,7 @@ ROW_SEPARATOR = "__EARNINGS_ROW__"
 _ACCOUNTING_VALUE_PATTERN = re.compile(
     r"(?:\$\s*)?"
     r"(?P<value>"
-    r"\(\s*\d+(?:\.\d+)?\s*\)"
+    r"\(\s*(?:\$\s*)?\d+(?:\.\d+)?\s*\)"
     r"|-\s*\d+(?:\.\d+)?"
     r"|\d+(?:\.\d+)?"
     r")"
@@ -53,6 +53,41 @@ def contains_period(value: str, period_end: date) -> bool:
     return bool(pattern.search(value))
 
 
+def contains_fiscal_period(
+    value: str,
+    *,
+    period_end: date,
+    fiscal_year: int,
+    fiscal_quarter: int,
+) -> bool:
+    if contains_period(value, period_end):
+        return True
+    quarter_words = {
+        1: ("first", "1st", "q1"),
+        2: ("second", "2nd", "q2"),
+        3: ("third", "3rd", "q3"),
+        4: ("fourth", "4th", "q4"),
+    }
+    choices = "|".join(
+        re.escape(item)
+        for item in quarter_words[int(fiscal_quarter)]
+    )
+    quarter_then_year = re.compile(
+        rf"\b(?:{choices})\s+quarter\b"
+        rf".{{0,80}}\b{int(fiscal_year)}\b",
+        re.IGNORECASE,
+    )
+    year_then_quarter = re.compile(
+        rf"\b{int(fiscal_year)}\b"
+        rf".{{0,80}}\b(?:{choices})\s+quarter\b",
+        re.IGNORECASE,
+    )
+    return bool(
+        quarter_then_year.search(value)
+        or year_then_quarter.search(value)
+    )
+
+
 def accounting_values(value: str) -> tuple[Decimal, ...]:
     return tuple(
         parse_accounting_decimal(match.group("value"))
@@ -61,7 +96,7 @@ def accounting_values(value: str) -> tuple[Decimal, ...]:
 
 
 def parse_accounting_decimal(value: str) -> Decimal:
-    normalized = "".join(str(value or "").split())
+    normalized = "".join(str(value or "").split()).replace("$", "")
     negative = normalized.startswith("(") and normalized.endswith(")")
     if negative:
         normalized = normalized[1:-1]

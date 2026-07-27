@@ -15,18 +15,34 @@ class EarningsParserRegistryTests(unittest.TestCase):
 
         self.assertEqual(
             {rule.ticker for rule in rules},
-            {"BBBY", "NVTS", "NXPI", "WWD"},
+            {
+                "BA",
+                "BBBY",
+                "CSGP",
+                "CZR",
+                "NVTS",
+                "NXPI",
+                "WWD",
+            },
         )
         self.assertEqual(
             set(parsers),
-            {"BBBY", "NVTS", "NXPI", "WWD"},
+            {
+                "BA",
+                "BBBY",
+                "CSGP",
+                "CZR",
+                "NVTS",
+                "NXPI",
+                "WWD",
+            },
         )
         self.assertTrue(
             all(rule.condition_id for rule in rules)
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            4,
+            7,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(

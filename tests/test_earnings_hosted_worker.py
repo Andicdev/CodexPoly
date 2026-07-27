@@ -255,10 +255,18 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_connection_cycle()
 
-        self.assertEqual(result.watch_count, 4)
+        self.assertEqual(result.watch_count, 7)
         self.assertEqual(
             {watch.ticker for watch in captured},
-            {"BBBY", "NVTS", "NXPI", "WWD"},
+            {
+                "BA",
+                "BBBY",
+                "CSGP",
+                "CZR",
+                "NVTS",
+                "NXPI",
+                "WWD",
+            },
         )
 
     async def test_public_polling_is_profile_scope_gated(self) -> None:

@@ -374,12 +374,8 @@ VALUES
     'PARSER_ONLY',
     'FULL_HTML',
     $json${
-      "comparison_op": ">",
-      "fallback_basis": "basic",
-      "market_basis": "non_gaap_eps",
-      "primary_basis": "diluted",
-      "reported": ["gaap_eps", "non_gaap_eps"],
-      "strike": "3.53"
+      "market_basis": "unverified",
+      "reported": ["gaap_eps", "non_gaap_eps"]
     }$json$::jsonb,
     $json$[
       {
