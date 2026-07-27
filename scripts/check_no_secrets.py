@@ -9,6 +9,7 @@ from typing import Iterable
 
 _SKIPPED_DIRECTORIES = {
     ".git",
+    ".local-secrets",
     ".pytest_cache",
     ".venv",
     "__pycache__",
@@ -43,7 +44,7 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
         POLYMARKET_PRIVATE_KEY|
         PRIVATE_KEY|
         TG_BOT_TOKEN|
-        TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED
+        TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED(?:_[A-Z0-9_]+)?
     )
     ["']?\s*[:=]\s*
     (?P<value>.+?)\s*$
@@ -111,12 +112,17 @@ def scan_text(text: str, *, path: Path) -> list[Finding]:
             if assignment
             else ""
         )
+        assignment_is_file_reference = bool(
+            assignment
+            and assignment.group("key").endswith("_FILE")
+        )
         python_literal_assignment = (
             path.suffix.casefold() != ".py"
             or assignment_value.startswith(("'", '"'))
         )
         if (
             assignment
+            and not assignment_is_file_reference
             and python_literal_assignment
             and not _looks_like_placeholder(assignment_value)
         ):

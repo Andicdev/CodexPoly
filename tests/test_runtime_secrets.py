@@ -9,6 +9,7 @@ from cbr_trading.runtime_secrets import (
     RuntimeSecretError,
     read_runtime_secret,
     runtime_secret_present,
+    trading_account_private_key_secret_name,
 )
 
 
@@ -28,6 +29,16 @@ class RuntimeSecretsTests(unittest.TestCase):
         )
 
         self.assertEqual(value, "local-value")
+
+    def test_account_name_has_canonical_secret_suffix(self) -> None:
+        self.assertEqual(
+            trading_account_private_key_secret_name("kinderSman"),
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_KINDERSMAN",
+        )
+        self.assertEqual(
+            trading_account_private_key_secret_name("sport-two"),
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_SPORT_TWO",
+        )
 
     def test_conventional_file_wins_over_environment(self) -> None:
         (self.secret_dir / "API_KEY").write_text(

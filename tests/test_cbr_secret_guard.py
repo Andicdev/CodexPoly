@@ -45,6 +45,29 @@ class SecretGuardTests(unittest.TestCase):
         self.assertTrue(result.startswith("RuntimeError:"))
         self.assertNotIn("password", result)
 
+    def test_can_preserve_safe_multiline_notification_layout(self) -> None:
+        token = "123456789:" + "C" * 35
+        source = (
+            "Source document: https://www.sec.gov/example.htm\n"
+            f"TG_BOT_TOKEN={token}\n"
+            "Rule: value > 1 -> YES"
+        )
+
+        result = redact_sensitive_text(
+            source,
+            max_length=4_000,
+            preserve_newlines=True,
+        )
+
+        self.assertEqual(result.count("\n"), 2)
+        self.assertIn(
+            "Source document: https://www.sec.gov/example.htm",
+            result,
+        )
+        self.assertIn("Rule: value > 1 -> YES", result)
+        self.assertNotIn(token, result)
+        self.assertIn("TG_BOT_TOKEN=[REDACTED]", result)
+
     def test_redacts_sec_api_key_assignment(self) -> None:
         secret = "sec-api-credential"
 
@@ -69,6 +92,23 @@ class SecretGuardTests(unittest.TestCase):
         self.assertEqual(
             result,
             "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED=[REDACTED]",
+        )
+
+    def test_redacts_account_specific_encrypted_key_assignment(
+        self,
+    ) -> None:
+        secret = "account-specific-encrypted-key"
+
+        result = redact_sensitive_text(
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_KINDERSMAN="
+            f"{secret}"
+        )
+
+        self.assertNotIn(secret, result)
+        self.assertEqual(
+            result,
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_KINDERSMAN="
+            "[REDACTED]",
         )
 
     def test_presence_report_contains_names_only(self) -> None:

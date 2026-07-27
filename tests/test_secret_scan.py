@@ -27,6 +27,32 @@ class SecretScanTests(unittest.TestCase):
 
         self.assertEqual(findings, [])
 
+    def test_detects_account_specific_encrypted_key_assignment(
+        self,
+    ) -> None:
+        findings = check_no_secrets.scan_text(
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_KINDERSMAN="
+            "non-placeholder-ciphertext",
+            path=Path("sample.env"),
+        )
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].detector,
+            "sensitive-assignment",
+        )
+
+    def test_allows_account_specific_secret_file_reference(
+        self,
+    ) -> None:
+        findings = check_no_secrets.scan_text(
+            "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_KINDERSMAN_FILE="
+            "C:/private/account-key",
+            path=Path("sample.env"),
+        )
+
+        self.assertEqual(findings, [])
+
     def test_allows_python_environment_lookup_and_topic_hash(self) -> None:
         text = (
             'DATABASE_URL_SERVER_EXT = os.getenv("DATABASE_URL_SERVER_EXT")\n'

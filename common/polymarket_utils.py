@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, InvalidOperation
 from enum import Enum
 import logging
+import os
 import requests
 import time
 from datetime import datetime
@@ -40,6 +41,10 @@ from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
 from sqlalchemy import select
 from common.db import Session
+from cbr_trading.runtime_secrets import (
+    read_runtime_secret,
+    trading_account_private_key_secret_name,
+)
 from sqlalchemy import func
 from models.t_trading_accounts import TradingAccount
 from models.t_gamma_market import GammaMarket
@@ -298,6 +303,61 @@ def _decrypt_pk(pk_enc: bytes) -> str:
     return pk
 
 
+def _resolve_trading_account_pk(acc: TradingAccount) -> str:
+    if acc.pk_enc:
+        return _decrypt_pk(acc.pk_enc)
+
+    account_secret_name = trading_account_private_key_secret_name(
+        str(acc.name)
+    )
+    account_encrypted_pk = read_runtime_secret(
+        account_secret_name,
+        environ=os.environ,
+    )
+    if account_encrypted_pk:
+        logger.info(
+            "trading_account encrypted private key resolved from "
+            "account-specific local env: name=%s secret_name=%s",
+            acc.name,
+            account_secret_name,
+        )
+        return _decrypt_pk(
+            str(account_encrypted_pk).encode("utf-8")
+        )
+
+    # Backward compatibility for the newer single-account worker contract.
+    configured_name = str(
+        os.environ.get("TRADING_ACCOUNT_NAME") or ""
+    ).strip()
+    encrypted_pk = read_runtime_secret(
+        "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED",
+        environ=os.environ,
+    )
+    if (
+        encrypted_pk
+        and configured_name
+        and configured_name.casefold() == str(acc.name).casefold()
+    ):
+        logger.info(
+            "trading_account encrypted private key resolved from local env: name=%s",
+            acc.name,
+        )
+        return _decrypt_pk(str(encrypted_pk).encode("utf-8"))
+
+    pk = (config.PK or "").strip()
+    if not pk:
+        raise RuntimeError(
+            f"TradingAccount '{acc.name}' has empty pk_enc and no matching "
+            "local env private key is configured"
+        )
+
+    logger.info(
+        "trading_account private key resolved from local env: name=%s",
+        acc.name,
+    )
+    return pk
+
+
 def _pick_first_text(obj, fields: list[str]) -> Optional[str]:
     for f in fields:
         try:
@@ -366,8 +426,6 @@ def get_trading_account_by_name(account_name: str) -> TradingAccount:
             raise ValueError(f"TradingAccount not found by name='{name}'")
         if not acc.is_active:
             raise ValueError(f"TradingAccount '{name}' is disabled (is_active=false)")
-        if not acc.pk_enc:
-            raise ValueError(f"TradingAccount '{name}' has empty pk_enc")
         if not acc.wallet_address:
             raise ValueError(f"TradingAccount '{name}' has empty wallet_address")
         return acc
@@ -380,7 +438,7 @@ def get_clob_client_for_account_name(account_name: str, *, use_cache: bool = Tru
     # cache key includes signature_type and funder to avoid silent mismatches if DB row changes
     # (signature_type is critical for Safe/proxy wallets)
     acc = get_trading_account_by_name(name)
-    pk_plain = _decrypt_pk(acc.pk_enc)
+    pk_plain = _resolve_trading_account_pk(acc)
     sig_type = int(acc.signature_type or 1)
     funder = acc.wallet_address
     cache_key = (name, sig_type, funder.lower())

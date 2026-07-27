@@ -9,11 +9,29 @@ from typing import Mapping
 
 DEFAULT_SECRET_DIRECTORY = Path("/run/secrets")
 _SAFE_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_ACCOUNT_SECRET_SUFFIX = re.compile(r"[^A-Z0-9]+")
 _MAX_SECRET_BYTES = 64 * 1024
+TRADING_ACCOUNT_PRIVATE_KEY_PREFIX = (
+    "TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED_"
+)
 
 
 class RuntimeSecretError(RuntimeError):
     """A value-safe error that identifies only the affected key."""
+
+
+def trading_account_private_key_secret_name(
+    account_name: str,
+) -> str:
+    """Return the canonical per-account encrypted-key variable name."""
+
+    suffix = _ACCOUNT_SECRET_SUFFIX.sub(
+        "_",
+        str(account_name or "").strip().upper(),
+    ).strip("_")
+    if not suffix:
+        raise ValueError("trading account name has no env-safe characters")
+    return f"{TRADING_ACCOUNT_PRIVATE_KEY_PREFIX}{suffix}"
 
 
 def read_runtime_secret(

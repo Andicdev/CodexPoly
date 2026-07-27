@@ -56,31 +56,33 @@ def source_event_notification_from_earnings(
         if fiscal_year is not None and fiscal_quarter is not None
         else candidate.scope_id
     )
-    provider = str(
-        signal.attributes.get("provider") or candidate.provider.value
-    )
+    # The signal may canonically select an earlier provider. This message
+    # describes the transport event that just arrived.
+    provider = candidate.provider.value
     outcome = _numeric_outcome(
         signal.value,
         operator=rule.comparison_op,
         threshold=rule.strike,
     )
-    message = "\n".join(
+    lines = [
+        "CodexPoly: earnings event confirmed",
+        f"Company: {ticker}",
+        f"Period: {period}",
+        f"Provider: {provider}",
+        *_source_document_lines(
+            source_url=candidate.source_url,
+            filing_url=candidate.filing_url,
+        ),
+        f"Metric: {signal.metric}",
+        f"Value: {signal.value} {signal.unit or ''}".rstrip(),
         (
-            "CodexPoly: earnings event confirmed",
-            f"Company: {ticker}",
-            f"Period: {period}",
-            f"Metric: {signal.metric}",
-            f"Value: {signal.value} {signal.unit or ''}".rstrip(),
-            (
-                f"Rule: value {rule.comparison_op} {rule.strike} "
-                f"-> {'YES' if outcome else 'NO'}"
-            ),
-            f"Provider: {provider}",
-            f"Scope: {candidate.scope_id}",
-            "Trading path and Telegram delivery are decoupled.",
-            f"Source: {candidate.source_url}",
-        )
-    )
+            f"Rule: value {rule.comparison_op} {rule.strike} "
+            f"-> {'YES' if outcome else 'NO'}"
+        ),
+        f"Scope: {candidate.scope_id}",
+        "Trading path and Telegram delivery are decoupled.",
+    ]
+    message = "\n".join(lines)
     return SourceEventNotification(
         notification_key=(
             f"earnings:{candidate.provider.value}:"
@@ -89,7 +91,7 @@ def source_event_notification_from_earnings(
         source_name=signal.source,
         scope_id=candidate.scope_id,
         event_kind="earnings",
-        message_text=redact_sensitive_text(message),
+        message_text=_redact_notification_text(message),
         source_url=candidate.source_url,
     )
 
@@ -105,6 +107,10 @@ def source_event_notification_from_mstr(
     lines = [
         "CodexPoly: MSTR Bitcoin event confirmed",
         f"Provider: {fact.provider.value}",
+        *_source_document_lines(
+            source_url=fact.source_url,
+            filing_url=fact.filing_url,
+        ),
         f"Holdings before: {fact.holdings_before_btc:,} BTC",
         f"Holdings after: {fact.holdings_after_btc:,} BTC",
         f"Net change: {fact.net_change_btc:+,} BTC",
@@ -136,7 +142,6 @@ def source_event_notification_from_mstr(
         (
             f"Scope: {fact.scope_id}",
             "Trading path and Telegram delivery are decoupled.",
-            f"Source: {fact.source_url}",
         )
     )
     message = "\n".join(lines)
@@ -148,13 +153,34 @@ def source_event_notification_from_mstr(
         source_name="mstr_btc_resolution",
         scope_id=fact.scope_id,
         event_kind="mstr_btc",
-        message_text=redact_sensitive_text(message),
+        message_text=_redact_notification_text(message),
         source_url=fact.source_url,
     )
 
 
 def _optional_btc(value: int | None) -> str:
     return "not confirmed" if value is None else f"{value:,} BTC"
+
+
+def _source_document_lines(
+    *,
+    source_url: str,
+    filing_url: str,
+) -> tuple[str, ...]:
+    lines = [f"Source document: {source_url}"]
+    if filing_url != source_url:
+        lines.append(f"Filing: {filing_url}")
+    return tuple(lines)
+
+
+def _redact_notification_text(message: str) -> str:
+    # Telegram accepts up to 4096 characters. Keep a small safety margin while
+    # preserving the line layout and clickable HTTPS URLs.
+    return redact_sensitive_text(
+        message,
+        max_length=4_000,
+        preserve_newlines=True,
+    )
 
 
 def _numeric_outcome(

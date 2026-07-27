@@ -142,6 +142,18 @@ class SourceNotificationContractTests(unittest.TestCase):
         )
         self.assertIn("Value: 0.07 USD", notification.message_text)
         self.assertIn("-> YES", notification.message_text)
+        self.assertIn(
+            "Source document: https://www.sec.gov/nvts.htm",
+            notification.message_text,
+        )
+        self.assertIn(
+            "Filing: https://www.sec.gov/nvts-index.htm",
+            notification.message_text,
+        )
+        self.assertLess(
+            notification.message_text.index("Source document:"),
+            notification.message_text.index("Metric:"),
+        )
 
     def test_mstr_event_is_one_message_for_all_market_rules(self) -> None:
         fact = MstrBtcFactCandidate(
@@ -219,7 +231,68 @@ class SourceNotificationContractTests(unittest.TestCase):
             "Market rules evaluated: 3",
             notification.message_text,
         )
+        self.assertIn(
+            "Source document: https://www.strategy.com/ledger",
+            notification.message_text,
+        )
+        self.assertIn(
+            "Filing: https://www.sec.gov/mstr.pdf",
+            notification.message_text,
+        )
+        self.assertLess(
+            notification.message_text.index("Source document:"),
+            notification.message_text.index("Holdings before:"),
+        )
         self.assertEqual(notification.event_kind, "mstr_btc")
+
+    def test_notification_omits_duplicate_filing_link(self) -> None:
+        fact = MstrBtcFactCandidate(
+            scope_id="mstr-btc:2026-07-21:2026-07-27",
+            provider=MstrBtcProvider.SEC,
+            provider_event_id="accession",
+            baseline_state_id="17",
+            holdings_before_btc=843_775,
+            holdings_after_btc=843_775,
+            net_change_btc=0,
+            acquired_btc=0,
+            sold_btc=None,
+            acquired_derivation=MstrBtcValueDerivation.HOLDINGS_DELTA,
+            sold_derivation=MstrBtcValueDerivation.NOT_CONFIRMED,
+            holdings_crosscheck_difference_btc=0,
+            source_url="https://www.sec.gov/mstr.htm",
+            filing_url="https://www.sec.gov/mstr.htm",
+            published_at=_NOW,
+            detected_at=_NOW,
+            parser_name="sec",
+            parser_version="1",
+            document_fingerprint="fingerprint",
+            attributes={"ticker": "MSTR", "cik": "1050446"},
+        )
+        signal = ResolutionSignal(
+            signal_id=f"{fact.scope_id}:purchase-any",
+            source="mstr_btc_resolution",
+            subject="company:MSTR:bitcoin",
+            metric="company.mstr.bitcoin.acquired",
+            value=Decimal("0"),
+            unit="BTC",
+            detected_at=_NOW,
+            attributes={
+                "activity": "acquired",
+                "comparison_op": ">",
+                "threshold_btc": "0",
+            },
+        )
+
+        notification = source_event_notification_from_mstr(
+            fact=fact,
+            signals=(signal,),
+        )
+
+        self.assertEqual(
+            notification.message_text.count("https://www.sec.gov/mstr.htm"),
+            1,
+        )
+        self.assertNotIn("\nFiling:", notification.message_text)
 
     def test_settings_hide_telegram_credentials(self) -> None:
         settings = NotificationWorkerSettings.from_env(

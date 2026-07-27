@@ -47,8 +47,18 @@ SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
 )
 
 _KEY_NAMES = "|".join(
-    re.escape(name)
-    for name in sorted(SENSITIVE_ENV_KEYS, key=len, reverse=True)
+    (
+        r"TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED(?:_[A-Z0-9_]+)?",
+        *(
+            re.escape(name)
+            for name in sorted(
+                SENSITIVE_ENV_KEYS
+                - {"TRADING_ACCOUNT_PRIVATE_KEY_ENCRYPTED"},
+                key=len,
+                reverse=True,
+            )
+        ),
+    )
 )
 _ASSIGNMENT_RE = re.compile(
     rf"(?i)(?<![A-Z0-9_])"
@@ -99,10 +109,18 @@ def redact_sensitive_text(
     value: object,
     *,
     max_length: int = 240,
+    preserve_newlines: bool = False,
 ) -> str:
     """Return log-safe text without exposing common credential formats."""
 
-    text = " ".join(str(value or "").split())
+    raw_text = str(value or "")
+    if preserve_newlines:
+        text = "\n".join(
+            " ".join(line.split())
+            for line in raw_text.splitlines()
+        )
+    else:
+        text = " ".join(raw_text.split())
     text = _PEM_PRIVATE_KEY_RE.sub("[REDACTED_PRIVATE_KEY]", text)
     text = _ASSIGNMENT_RE.sub(
         lambda match: (

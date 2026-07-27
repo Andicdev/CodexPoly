@@ -13,7 +13,10 @@ RUN pip install --no-cache-dir \
     -r cbr_trading/requirements-live.txt
 
 COPY cbr_trading cbr_trading
+COPY common common
+COPY models models
 COPY scripts scripts
+COPY tools tools
 COPY deploy deploy
 COPY tests tests
 
