@@ -112,30 +112,30 @@ BEGIN
     END IF;
 
     SELECT
-        COALESCE(
-            SUM(
-                profile.quantity * GREATEST(
-                    profile.yes_desired_price,
-                    profile.no_desired_price
-                )
-            ),
-            0
-        )
-    INTO reviewed_notional
-    FROM resolution_profile_schedules AS schedule
-    JOIN resolution_execution_profiles AS profile
-      ON profile.profile_key = schedule.profile_key
-    WHERE schedule.automation_mode = 'AUTO_LIVE'
-      AND schedule.state NOT IN ('BLOCKED', 'EXPIRED');
-
-    SELECT
-        reviewed_notional
+        existing.total_notional
         + profile.quantity * GREATEST(
             profile.yes_desired_price,
             profile.no_desired_price
         )
     INTO reviewed_notional
     FROM resolution_execution_profiles AS profile
+    CROSS JOIN (
+        SELECT
+            COALESCE(
+                SUM(
+                    scheduled_profile.quantity * GREATEST(
+                        scheduled_profile.yes_desired_price,
+                        scheduled_profile.no_desired_price
+                    )
+                ),
+                0
+            ) AS total_notional
+        FROM resolution_profile_schedules AS schedule
+        JOIN resolution_execution_profiles AS scheduled_profile
+          ON scheduled_profile.profile_key = schedule.profile_key
+        WHERE schedule.automation_mode = 'AUTO_LIVE'
+          AND schedule.state NOT IN ('BLOCKED', 'EXPIRED')
+    ) AS existing
     WHERE profile.profile_key = 'earnings-nvts-2026q2'
       AND profile.scope_id = 'earnings:NVTS:2026Q2'
       AND profile.source_name = 'earnings_resolution'
