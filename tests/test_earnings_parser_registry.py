@@ -20,9 +20,19 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "BBBY",
                 "CSGP",
                 "CZR",
+                "F",
+                "HLT",
+                "IVZ",
+                "JBLU",
+                "KO",
                 "NVTS",
                 "NXPI",
+                "PYPL",
                 "RCL",
+                "SBUX",
+                "SPGI",
+                "UPS",
+                "V",
                 "WWD",
             },
         )
@@ -33,9 +43,19 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "BBBY",
                 "CSGP",
                 "CZR",
+                "F",
+                "HLT",
+                "IVZ",
+                "JBLU",
+                "KO",
                 "NVTS",
                 "NXPI",
+                "PYPL",
                 "RCL",
+                "SBUX",
+                "SPGI",
+                "UPS",
+                "V",
                 "WWD",
             },
         )
@@ -44,7 +64,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            8,
+            18,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(
@@ -70,6 +90,14 @@ class EarningsParserRegistryTests(unittest.TestCase):
         self.assertEqual(
             by_ticker["BBBY"].estimated_release_at.isoformat(),
             "2026-08-04T20:00:00+00:00",
+        )
+        self.assertIn(
+            "07-28-2026",
+            by_ticker["SBUX"].market_slug,
+        )
+        self.assertEqual(
+            by_ticker["SBUX"].estimated_release_at.isoformat(),
+            "2026-07-29T20:05:00+00:00",
         )
 
 
