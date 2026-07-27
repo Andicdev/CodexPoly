@@ -83,13 +83,23 @@ Production Compose was saved as `compose.before-421a278.yml` before the
 replacement. Staging and production source events can now accumulate durable
 pending notifications even while Telegram delivery is unavailable.
 
-## Remaining human-only action
+## Telegram activation
 
-The name-only checks found that both environments currently lack
-`TG_BOT_TOKEN` and `TELEGRAM_INGEST_CHAT_ID`. The production
-`notification-worker` was therefore intentionally not started.
+The initial name-only check found that production lacked `TG_BOT_TOKEN` and
+`TELEGRAM_INGEST_CHAT_ID`. An operator installed both values through the
+existing hidden-prompt installer after the SSH helper gained an explicit
+`-Interactive` mode that allocates a remote TTY.
 
-An operator must install those two production secrets through the existing
-hidden-prompt installer. After both name-only checks pass, the reviewed
-production Compose can start only `notification-worker`; no earnings,
-resolution, profile, or trading change is required.
+The final name-only check passed for all three notification-worker secrets.
+The outbox contained zero rows before activation, so starting the worker could
+not replay or send an old event. After explicit approval, production started
+only `notification-worker` from the same immutable image. Its startup log
+confirmed:
+
+```text
+Notification outbox schema ready
+```
+
+All three base workers are running. Future confirmed earnings and MSTR events
+will be inserted idempotently and delivered to the configured Telegram chat.
+No synthetic Telegram message was sent during activation.

@@ -7,7 +7,10 @@ param(
     [string[]]$RemoteCommand,
 
     [Parameter()]
-    [string]$StdinSqlFile
+    [string]$StdinSqlFile,
+
+    [Parameter()]
+    [switch]$Interactive
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,14 +39,20 @@ if ($StdinSqlFile) {
         throw "A remote migration runner command is required."
     }
 }
+if ($Interactive -and $StdinSqlFile) {
+    throw "Interactive mode cannot be combined with StdinSqlFile."
+}
 
 $sshArguments = @(
     "-i", $identityFile,
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=12",
-    "-o", "StrictHostKeyChecking=yes",
-    "codexdeploy@52.16.49.33"
+    "-o", "StrictHostKeyChecking=yes"
 )
+if ($Interactive) {
+    $sshArguments += "-tt"
+}
+$sshArguments += "codexdeploy@52.16.49.33"
 
 if ($RemoteCommand.Count -gt 0) {
     $sshArguments += "--"
