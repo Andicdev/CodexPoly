@@ -15,6 +15,7 @@ class ProfileLifecycleSettings:
     poll_interval: float = 2.0
     heartbeat_interval: float = 60.0
     activation_grace_seconds: float = 60.0
+    live_heartbeat_stale_seconds: float = 15.0
     batch_size: int = 100
     auto_live_enabled: bool = False
     max_total_notional: Decimal | None = None
@@ -45,6 +46,14 @@ class ProfileLifecycleSettings:
                 )
                 or "60"
             ),
+            live_heartbeat_stale_seconds=float(
+                _clean(
+                    env.get(
+                        "PROFILE_SCHEDULER_LIVE_HEARTBEAT_STALE_SEC"
+                    )
+                )
+                or "15"
+            ),
             batch_size=int(
                 _clean(env.get("PROFILE_SCHEDULER_BATCH_SIZE"))
                 or "100"
@@ -73,6 +82,7 @@ class ProfileLifecycleSettings:
             "poll_interval",
             "heartbeat_interval",
             "activation_grace_seconds",
+            "live_heartbeat_stale_seconds",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")

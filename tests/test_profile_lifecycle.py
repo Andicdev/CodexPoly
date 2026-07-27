@@ -177,7 +177,14 @@ class _LifecycleStore:
         self.calls.append("request")
         return self.requests.pop(0) if self.requests else None
 
-    def activate_due_ready(self, *, now, max_total_notional):
+    def activate_due_ready(
+        self,
+        *,
+        now,
+        max_total_notional,
+        live_heartbeat_stale_seconds,
+        activation_grace_seconds,
+    ):
         self.calls.append("activate")
         return None
 

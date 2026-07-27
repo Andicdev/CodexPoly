@@ -26,6 +26,8 @@ class HostedResolutionSettings:
     poll_interval: float = 0.25
     heartbeat_interval: float = 30.0
     no_profiles_retry_delay: float = 30.0
+    profile_refresh_interval: float = 2.0
+    runtime_heartbeat_interval: float = 5.0
     supervision_enabled: bool = False
     supervision_watch_refresh_interval: float = 5.0
     supervision_reconciliation_interval: float = 5.0
@@ -77,6 +79,22 @@ class HostedResolutionSettings:
                 )
                 or "30"
             ),
+            profile_refresh_interval=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_ORCHESTRATOR_PROFILE_REFRESH_SEC"
+                    )
+                )
+                or "2"
+            ),
+            runtime_heartbeat_interval=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_RUNTIME_HEARTBEAT_SEC"
+                    )
+                )
+                or "5"
+            ),
             supervision_enabled=_bool(
                 env.get("RESOLUTION_SUPERVISION_ENABLED"),
                 default=False,
@@ -126,6 +144,8 @@ class HostedResolutionSettings:
             "poll_interval",
             "heartbeat_interval",
             "no_profiles_retry_delay",
+            "profile_refresh_interval",
+            "runtime_heartbeat_interval",
             "supervision_watch_refresh_interval",
             "supervision_reconciliation_interval",
             "supervision_stale_after",

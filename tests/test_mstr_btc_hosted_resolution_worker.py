@@ -54,6 +54,12 @@ class _ProfileStore:
         self.ready_checks = 0
         self.loaded_sources: list[str | None] = []
 
+    def set_profiles(
+        self,
+        profiles: tuple[ResolutionExecutionProfile, ...],
+    ) -> None:
+        self._profiles = profiles
+
     def ensure_ready(self) -> None:
         self.ready_checks += 1
 
@@ -237,6 +243,28 @@ class MstrBtcHostedResolutionWorkerTests(unittest.TestCase):
             "RESOLUTION_SUPERVISION_ENABLED",
         ):
             worker.prepare()
+
+    def test_reconcile_attaches_and_detaches_without_restart(self) -> None:
+        profiles = _ProfileStore(())
+        worker = MstrBtcHostedResolutionWorker(
+            settings=_settings(),
+            audit_store=_AuditStore(()),
+            profile_store=profiles,
+            clock=lambda: _NOW,
+        )
+
+        self.assertEqual(worker.reconcile_profiles(), ())
+        profiles.set_profiles((_profiles()[0],))
+        attached = worker.reconcile_profiles()
+        self.assertEqual(len(attached), 1)
+        self.assertEqual(worker.managed_count, 1)
+        self.assertEqual(worker.reconcile_profiles(), ())
+        self.assertEqual(worker.managed_count, 1)
+
+        profiles.set_profiles(())
+        self.assertEqual(worker.reconcile_profiles(), ())
+        self.assertEqual(worker.managed_count, 0)
+        worker.close()
 
     def test_checked_in_market_bindings_match_source_rules(self) -> None:
         rules = {

@@ -43,12 +43,35 @@ class _ProfileStore:
         self._profiles = profiles
         self.ready_checks = 0
 
+    def set_profiles(
+        self,
+        profiles: tuple[ResolutionExecutionProfile, ...],
+    ) -> None:
+        self._profiles = profiles
+
     def ensure_ready(self) -> None:
         self.ready_checks += 1
 
     def load_enabled(self, *, source_name: str | None = None) -> tuple:
         assert source_name == EARNINGS_SOURCE_NAME
         return self._profiles
+
+
+class _LifecycleStore:
+    def __init__(self) -> None:
+        self.ready_checks = 0
+        self.blocked: list[tuple[str, str]] = []
+
+    def ensure_ready(self) -> None:
+        self.ready_checks += 1
+
+    def block_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str,
+    ) -> None:
+        self.blocked.append((profile_key, reason_code))
 
 
 def _profile(rule: object) -> ResolutionExecutionProfile:
@@ -218,6 +241,71 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
             "RESOLUTION_SUPERVISION_ENABLED",
         ):
             worker.prepare()
+
+    def test_reconcile_attaches_and_detaches_without_restart(self) -> None:
+        rule = checked_in_shadow_rules()[0]
+        profiles = _ProfileStore(())
+        worker = EarningsHostedResolutionWorker(
+            settings=HostedResolutionSettings(
+                mode=HostedResolutionMode.SHADOW,
+                database_url="postgresql://unused",
+            ),
+            earnings_store=_EarningsStore(()),
+            profile_store=profiles,
+            clock=lambda: _NOW,
+        )
+
+        self.assertEqual(worker.reconcile_profiles(), ())
+        profiles.set_profiles((_profile(rule),))
+        attached = worker.reconcile_profiles()
+        self.assertEqual(len(attached), 1)
+        self.assertEqual(worker.managed_count, 1)
+        self.assertEqual(worker.reconcile_profiles(), ())
+        self.assertEqual(worker.managed_count, 1)
+
+        profiles.set_profiles(())
+        self.assertEqual(worker.reconcile_profiles(), ())
+        self.assertEqual(worker.managed_count, 0)
+        worker.close()
+
+    def test_dynamic_preparation_failure_blocks_only_bad_profile(
+        self,
+    ) -> None:
+        rule = checked_in_shadow_rules()[0]
+        good = _profile(rule)
+        bad = ResolutionExecutionProfile(
+            **{
+                **good.__dict__,
+                "profile_key": f"{good.profile_key}-bad",
+                "condition_id": "0xwrong",
+            }
+        )
+        lifecycle = _LifecycleStore()
+        worker = EarningsHostedResolutionWorker(
+            settings=HostedResolutionSettings(
+                mode=HostedResolutionMode.SHADOW,
+                database_url="postgresql://unused",
+            ),
+            earnings_store=_EarningsStore(()),
+            profile_store=_ProfileStore((good, bad)),
+            lifecycle_store=lifecycle,
+            clock=lambda: _NOW,
+        )
+
+        preparations = worker.reconcile_profiles()
+
+        self.assertEqual(len(preparations), 2)
+        self.assertEqual(worker.managed_count, 1)
+        self.assertEqual(
+            lifecycle.blocked,
+            [
+                (
+                    bad.profile_key,
+                    "live_profile_preparation_failed",
+                )
+            ],
+        )
+        worker.close()
 
 
 class HostedResolutionSettingsTests(unittest.TestCase):

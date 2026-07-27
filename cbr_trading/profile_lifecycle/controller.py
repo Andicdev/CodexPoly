@@ -45,6 +45,8 @@ class LifecycleStore(Protocol):
         *,
         now: datetime,
         max_total_notional,
+        live_heartbeat_stale_seconds: float,
+        activation_grace_seconds: float,
     ) -> ProfileScheduleTransition | None: ...
 
     def load_unnotified_event(
@@ -130,6 +132,12 @@ class ProfileLifecycleController:
                     now=now,
                     max_total_notional=(
                         self._settings.max_total_notional
+                    ),
+                    live_heartbeat_stale_seconds=(
+                        self._settings.live_heartbeat_stale_seconds
+                    ),
+                    activation_grace_seconds=(
+                        self._settings.activation_grace_seconds
                     ),
                 )
             )

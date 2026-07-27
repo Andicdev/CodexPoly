@@ -12,6 +12,10 @@ from cbr_trading.resolution_hosted.settings import (
     HostedResolutionMode,
     HostedResolutionSettings,
 )
+from cbr_trading.resolution_hosted.runtime_repository import (
+    ResolutionRuntimeStoreError,
+    SqlAlchemyResolutionRuntimeStore,
+)
 
 __all__ = [
     "EarningsHostedResolutionWorker",
@@ -19,5 +23,7 @@ __all__ = [
     "HostedPollResult",
     "HostedResolutionMode",
     "HostedResolutionSettings",
+    "ResolutionRuntimeStoreError",
+    "SqlAlchemyResolutionRuntimeStore",
     "MstrBtcHostedResolutionWorker",
 ]

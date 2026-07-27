@@ -49,7 +49,19 @@ SELECT
     to_regclass('ux_resolution_profile_schedule_events_key') IS NOT NULL
         AS event_key_index,
     to_regclass('ix_resolution_profile_schedule_events_notify') IS NOT NULL
-        AS event_notify_index
+        AS event_notify_index,
+    to_regclass('resolution_runtime_heartbeats') IS NOT NULL
+        AS runtime_heartbeat_table,
+    (
+        SELECT count(*) = 10
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'resolution_runtime_heartbeats'
+    ) AS runtime_heartbeat_columns,
+    to_regclass('ux_resolution_runtime_heartbeats_key') IS NOT NULL
+        AS runtime_heartbeat_key_index,
+    to_regclass('ix_resolution_runtime_heartbeats_seen') IS NOT NULL
+        AS runtime_heartbeat_seen_index
 """.strip()
 
 _UPSERT_SQL = """
@@ -160,6 +172,37 @@ WHERE schedule.state = 'READY'
 ORDER BY schedule.activate_at, schedule.id
 FOR UPDATE OF schedule, profile SKIP LOCKED
 LIMIT 1
+""".strip()
+
+_SELECT_LIVE_HEARTBEAT_SQL = """
+SELECT
+    mode,
+    supervision_enabled,
+    trading_enabled,
+    process_started_at,
+    last_seen_at
+FROM resolution_runtime_heartbeats
+WHERE runtime_key = 'hosted-resolution'
+""".strip()
+
+_SELECT_ACTIVE_PROFILE_SQL = """
+SELECT
+    schedule.id,
+    schedule.schedule_key,
+    schedule.profile_key,
+    schedule.automation_mode,
+    schedule.activate_at,
+    schedule.deactivate_at,
+    profile.scope_id,
+    profile.source_reference
+FROM resolution_profile_schedules AS schedule
+JOIN resolution_execution_profiles AS profile
+  ON profile.profile_key = schedule.profile_key
+WHERE schedule.profile_key = :profile_key
+  AND schedule.automation_mode = 'AUTO_LIVE'
+  AND schedule.state = 'ACTIVE'
+  AND profile.status = 'ENABLED'
+FOR UPDATE OF schedule, profile
 """.strip()
 
 _SELECT_DUE_EXPIRY_SQL = """
@@ -467,11 +510,21 @@ class SqlAlchemyProfileLifecycleStore:
         *,
         now: datetime,
         max_total_notional: Decimal,
+        live_heartbeat_stale_seconds: float,
+        activation_grace_seconds: float,
     ) -> ProfileScheduleTransition | None:
         current = _as_utc(now)
         cap = Decimal(str(max_total_notional))
         if not cap.is_finite() or cap <= 0:
             raise ValueError("max_total_notional must be positive")
+        if live_heartbeat_stale_seconds <= 0:
+            raise ValueError(
+                "live_heartbeat_stale_seconds must be positive"
+            )
+        if activation_grace_seconds <= 0:
+            raise ValueError(
+                "activation_grace_seconds must be positive"
+            )
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
@@ -489,12 +542,39 @@ class SqlAlchemyProfileLifecycleStore:
                     session.rollback()
                     return None
                 reason: str | None = None
+                heartbeat = session.execute(
+                    text_factory(_SELECT_LIVE_HEARTBEAT_SQL)
+                ).mappings().one_or_none()
+                heartbeat_healthy = _live_runtime_healthy(
+                    heartbeat,
+                    now=current,
+                    stale_seconds=live_heartbeat_stale_seconds,
+                )
+                activation_deadline = _as_utc(
+                    row["activate_at"]
+                ) + timedelta(
+                    seconds=float(activation_grace_seconds)
+                )
+                if not heartbeat_healthy and current < activation_deadline:
+                    session.rollback()
+                    return None
+                if not heartbeat_healthy:
+                    reason = "live_resolution_runtime_unhealthy"
                 valid_until = row.get("readiness_valid_until")
-                if valid_until is None or _as_utc(valid_until) <= current:
+                if (
+                    reason is None
+                    and (
+                        valid_until is None
+                        or _as_utc(valid_until) <= current
+                    )
+                ):
                     reason = "authenticated_preflight_expired"
-                elif str(row["profile_status"]) != "DISABLED":
+                elif (
+                    reason is None
+                    and str(row["profile_status"]) != "DISABLED"
+                ):
                     reason = "profile_not_disabled"
-                else:
+                elif reason is None:
                     active_notional = session.execute(
                         text_factory(
                             """
@@ -621,6 +701,63 @@ class SqlAlchemyProfileLifecycleStore:
         except Exception as exc:
             raise ProfileLifecycleStoreError(
                 "Failed to expire profile schedule: "
+                f"{type(exc).__name__}"
+            ) from None
+
+    def block_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str = "live_profile_preparation_failed",
+    ) -> ProfileScheduleTransition | None:
+        key = str(profile_key or "").strip()
+        reason = str(reason_code or "").strip()
+        if not key:
+            raise ValueError("profile_key is required")
+        if reason != "live_profile_preparation_failed":
+            raise ValueError("unsupported active profile block reason")
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_SELECT_ACTIVE_PROFILE_SQL),
+                    {"profile_key": key},
+                ).mappings().one_or_none()
+                if row is None:
+                    session.rollback()
+                    return None
+                session.execute(
+                    text_factory(
+                        """
+                        UPDATE resolution_execution_profiles
+                        SET status = 'DISABLED', updated_at = now()
+                        WHERE profile_key = :profile_key
+                          AND status = 'ENABLED'
+                        """
+                    ),
+                    {"profile_key": key},
+                )
+                self._set_schedule_state(
+                    session,
+                    text_factory,
+                    schedule_id=int(row["id"]),
+                    state=ProfileScheduleState.BLOCKED,
+                    error_code=reason,
+                )
+                transition = self._insert_event(
+                    session,
+                    text_factory,
+                    row=row,
+                    previous_state=ProfileScheduleState.ACTIVE,
+                    next_state=ProfileScheduleState.BLOCKED,
+                    event_kind="LIVE_PREPARATION_BLOCKED",
+                    reason_code=reason,
+                )
+                session.commit()
+                return transition
+        except Exception as exc:
+            raise ProfileLifecycleStoreError(
+                "Failed to block active execution profile: "
                 f"{type(exc).__name__}"
             ) from None
 
@@ -1036,6 +1173,23 @@ def _as_utc(value: datetime) -> datetime:
     ):
         raise ValueError("lifecycle clock must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _live_runtime_healthy(
+    heartbeat: Mapping[str, Any] | None,
+    *,
+    now: datetime,
+    stale_seconds: float,
+) -> bool:
+    if heartbeat is None:
+        return False
+    return (
+        str(heartbeat["mode"]) == "live"
+        and bool(heartbeat["supervision_enabled"])
+        and bool(heartbeat["trading_enabled"])
+        and _as_utc(heartbeat["last_seen_at"])
+        > _as_utc(now) - timedelta(seconds=float(stale_seconds))
+    )
 
 
 def _normalize_database_url(url: str) -> str:

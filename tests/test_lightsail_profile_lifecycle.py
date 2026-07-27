@@ -37,6 +37,20 @@ _VERIFY_SQL = (
     / "checks"
     / "verify_profile_lifecycle_auto_preflight.sql"
 )
+_AUTO_LIVE_SEED = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "seeds"
+    / "010_arm_july_28_auto_live.sql"
+)
+_AUTO_LIVE_VERIFY_SQL = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_profile_lifecycle_auto_live_armed.sql"
+)
 
 
 class LightsailProfileLifecycleTests(unittest.TestCase):
@@ -53,7 +67,7 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertNotIn("SET status = 'ENABLED'", text)
         self.assertIn("expected 15 AUTO_PREFLIGHT schedules", text)
 
-    def test_base_scheduler_has_no_trading_secrets_and_auto_live_off(
+    def test_base_scheduler_has_no_trading_secrets_and_defaults_live_off(
         self,
     ) -> None:
         text = _BASE_COMPOSE.read_text(encoding="utf-8")
@@ -61,7 +75,17 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         service = service.split("  resolution-worker:", 1)[0]
 
         self.assertIn(
-            'PROFILE_SCHEDULER_AUTO_LIVE_ENABLED: "0"',
+            "PROFILE_SCHEDULER_AUTO_LIVE_ENABLED: "
+            '"${PROFILE_SCHEDULER_AUTO_LIVE_ENABLED:-0}"',
+            service,
+        )
+        self.assertIn(
+            "PROFILE_SCHEDULER_MAX_TOTAL_NOTIONAL: "
+            '"${PROFILE_SCHEDULER_MAX_TOTAL_NOTIONAL:-}"',
+            service,
+        )
+        self.assertIn(
+            'PROFILE_SCHEDULER_LIVE_HEARTBEAT_STALE_SEC: "15"',
             service,
         )
         self.assertNotIn("ACCOUNTS_MASTER_KEY", service)
@@ -113,6 +137,26 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertIn("status <> 'DISABLED'", text)
         self.assertIn("automation_mode = 'AUTO_LIVE'", text)
         self.assertIn("state = 'ACTIVE'", text)
+
+    def test_auto_live_seed_arms_exact_reviewed_batch_only(self) -> None:
+        text = _AUTO_LIVE_SEED.read_text(encoding="utf-8")
+
+        self.assertEqual(text.count("'earnings-"), 45)
+        self.assertIn("expected 15 pending AUTO_PREFLIGHT", text)
+        self.assertIn("automation_mode = 'AUTO_LIVE'", text)
+        self.assertIn("state = 'PENDING'", text)
+        self.assertNotIn("SET status = 'ENABLED'", text)
+        self.assertIn("reviewed_notional > 1000", text)
+
+    def test_auto_live_check_requires_heartbeat_schema_and_cap(
+        self,
+    ) -> None:
+        text = _AUTO_LIVE_VERIFY_SQL.read_text(encoding="utf-8")
+
+        self.assertIn("resolution_runtime_heartbeats", text)
+        self.assertIn("expected 15 pending AUTO_LIVE", text)
+        self.assertIn("status <> 'DISABLED'", text)
+        self.assertIn("reviewed_notional > 1000", text)
 
 
 if __name__ == "__main__":

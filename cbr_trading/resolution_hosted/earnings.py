@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -103,6 +104,7 @@ class EarningsHostedResolutionWorker:
         settings: HostedResolutionSettings,
         earnings_store: SqlAlchemyEarningsStore,
         profile_store: SqlAlchemyResolutionProfileStore,
+        lifecycle_store: Any | None = None,
         executor_factory: ExecutorFactory | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
@@ -110,6 +112,7 @@ class EarningsHostedResolutionWorker:
         self._settings = settings
         self._earnings_store = earnings_store
         self._profile_store = profile_store
+        self._lifecycle_store = lifecycle_store
         self._executor_factory = executor_factory
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -128,6 +131,7 @@ class EarningsHostedResolutionWorker:
         self._supervisor: PersistentOrderSupervisor | None = None
         self._closed = False
         self._poll_count = 0
+        self._schemas_ready = False
 
     @property
     def managed_count(self) -> int:
@@ -140,21 +144,52 @@ class EarningsHostedResolutionWorker:
             raise RuntimeError(
                 "hosted resolution worker is already prepared"
             )
-        self._earnings_store.ensure_ready()
-        self._profile_store.ensure_ready()
+        return self.reconcile_profiles()
+
+    def reconcile_profiles(self) -> tuple[HostedPreparation, ...]:
+        """Match in-memory coordinators to the current enabled profiles."""
+        if self._closed:
+            raise RuntimeError("hosted resolution worker is closed")
+        self._ensure_ready()
         rules = tuple(self._earnings_store.load_active_rules())
         profiles = tuple(
             self._profile_store.load_enabled(
                 source_name=EARNINGS_SOURCE_NAME,
             )
         )
-        if not profiles:
-            return ()
         rules_by_scope = {rule.scope_id: rule for rule in rules}
         if len(rules_by_scope) != len(rules):
             raise ValueError(
                 "active earnings rules contain duplicate scopes"
             )
+        enabled_keys = {profile.profile_key for profile in profiles}
+        retained: list[_ManagedResolution] = []
+        for managed in self._managed:
+            if managed.profile.profile_key in enabled_keys:
+                retained.append(managed)
+                continue
+            _expire_executor(
+                managed.executor,
+                reason="profile_disabled_or_out_of_window",
+            )
+            managed.coordinator.close()
+            self._logger.info(
+                "Hosted earnings resolution detached "
+                "profile=%s scope=%s",
+                managed.profile.profile_key,
+                managed.profile.scope_id,
+            )
+        self._managed = retained
+        managed_keys = {
+            managed.profile.profile_key for managed in self._managed
+        }
+        new_profiles = tuple(
+            profile
+            for profile in profiles
+            if profile.profile_key not in managed_keys
+        )
+        if not new_profiles:
+            return ()
         needs_supervision = (
             self._settings.mode is HostedResolutionMode.LIVE
             and any(
@@ -162,7 +197,7 @@ class EarningsHostedResolutionWorker:
                     profile.lifecycle_policy,
                     RepriceOnTickChange,
                 )
-                for profile in profiles
+                for profile in new_profiles
             )
         )
         if needs_supervision:
@@ -185,7 +220,8 @@ class EarningsHostedResolutionWorker:
 
         results: list[HostedPreparation] = []
         failures: list[str] = []
-        for profile in profiles:
+        newly_managed: list[_ManagedResolution] = []
+        for profile in new_profiles:
             try:
                 rule = _validated_rule(profile, rules_by_scope)
                 managed, preparation = self._prepare_one(
@@ -217,8 +253,11 @@ class EarningsHostedResolutionWorker:
                         reason="preparation_failed",
                     )
                     managed.coordinator.close()
+                    self._block_failed_profile(
+                        profile.profile_key
+                    )
                     continue
-                self._managed.append(managed)
+                newly_managed.append(managed)
                 results.append(
                     HostedPreparation(
                         profile_key=profile.profile_key,
@@ -249,17 +288,23 @@ class EarningsHostedResolutionWorker:
                         error=error,
                     )
                 )
+                self._block_failed_profile(profile.profile_key)
         if failures:
-            for managed in self._managed:
+            if self._lifecycle_store is not None:
+                self._managed.extend(newly_managed)
+                return tuple(results)
+            for managed in newly_managed:
                 _expire_executor(
                     managed.executor,
                     reason="preparation_batch_failed",
                 )
+                managed.coordinator.close()
             self.close()
             raise RuntimeError(
                 "Hosted resolution preparation failed: "
                 + "; ".join(failures)
             )
+        self._managed.extend(newly_managed)
         return tuple(results)
 
     def poll_once(self) -> HostedPollResult:
@@ -355,27 +400,49 @@ class EarningsHostedResolutionWorker:
         )
 
     async def run_forever(self) -> None:
-        while not self._closed:
-            preparations = await asyncio.to_thread(self.prepare)
-            if preparations:
-                break
-            self._logger.warning(
-                "Hosted resolution has no enabled in-window profiles"
-            )
-            await asyncio.sleep(
-                self._settings.no_profiles_retry_delay
-            )
-        if self._closed:
-            return
-        self._logger.info(
-            "Hosted resolution ready mode=%s profiles=%s templates=%s",
-            self._settings.mode.value,
-            len(preparations),
-            sum(item.template_count for item in preparations),
-        )
         heartbeat = asyncio.create_task(self._heartbeat_loop())
+        next_refresh = 0.0
+        next_empty_log = 0.0
         try:
-            while True:
+            while not self._closed:
+                monotonic_now = time.monotonic()
+                if monotonic_now >= next_refresh:
+                    try:
+                        preparations = await asyncio.to_thread(
+                            self.reconcile_profiles
+                        )
+                    except Exception:
+                        self._expire_all(
+                            reason="profile_reconciliation_failed"
+                        )
+                        raise
+                    if preparations:
+                        self._logger.info(
+                            "Hosted earnings resolution attached "
+                            "mode=%s profiles=%s templates=%s",
+                            self._settings.mode.value,
+                            len(preparations),
+                            sum(
+                                item.template_count
+                                for item in preparations
+                            ),
+                        )
+                    elif (
+                        not self._managed
+                        and monotonic_now >= next_empty_log
+                    ):
+                        self._logger.warning(
+                            "Hosted earnings resolution has no "
+                            "enabled in-window profiles"
+                        )
+                        next_empty_log = (
+                            monotonic_now
+                            + self._settings.no_profiles_retry_delay
+                        )
+                    next_refresh = (
+                        monotonic_now
+                        + self._settings.profile_refresh_interval
+                    )
                 await asyncio.to_thread(self.poll_once)
                 await asyncio.sleep(self._settings.poll_interval)
         finally:
@@ -407,6 +474,30 @@ class EarningsHostedResolutionWorker:
             self._supervisor = None
         if first_error is not None:
             raise RuntimeError(redact_exception(first_error)) from None
+
+    def _ensure_ready(self) -> None:
+        if self._schemas_ready:
+            return
+        self._earnings_store.ensure_ready()
+        self._profile_store.ensure_ready()
+        if self._lifecycle_store is not None:
+            self._lifecycle_store.ensure_ready()
+        self._schemas_ready = True
+
+    def _expire_all(self, *, reason: str) -> None:
+        for managed in self._managed:
+            try:
+                _expire_executor(managed.executor, reason=reason)
+            finally:
+                managed.coordinator.close()
+
+    def _block_failed_profile(self, profile_key: str) -> None:
+        if self._lifecycle_store is None:
+            return
+        self._lifecycle_store.block_active_profile(
+            profile_key=profile_key,
+            reason_code="live_profile_preparation_failed",
+        )
 
     def _prepare_one(
         self,
