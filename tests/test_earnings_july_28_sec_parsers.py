@@ -37,18 +37,28 @@ from cbr_trading.earnings.parsers.july_28_sec import (
 _DETECTED = datetime(2026, 7, 28, 10, 0, 5, tzinfo=timezone.utc)
 
 
-def _source(rule) -> EarningsDocumentCandidate:
+def _source(
+    rule,
+    *,
+    provider: EarningsProvider = EarningsProvider.SEC,
+    source_url: str = "https://www.sec.gov/example-exhibit",
+) -> EarningsDocumentCandidate:
+    is_sec = provider is EarningsProvider.SEC
     return EarningsDocumentCandidate(
         scope_id=rule.scope_id,
-        provider=EarningsProvider.SEC,
+        provider=provider,
         provider_event_id=f"test:{rule.ticker}",
         ticker=rule.ticker,
         cik=rule.cik,
-        form_type="8-K",
-        items=("Item 2.02", "Item 9.01"),
-        document_type="EX-99.1",
-        source_url="https://www.sec.gov/example-exhibit",
-        filing_url="https://www.sec.gov/example-filing",
+        form_type="8-K" if is_sec else "PRESS_RELEASE",
+        items=("Item 2.02", "Item 9.01") if is_sec else (),
+        document_type="EX-99.1" if is_sec else "HTML",
+        source_url=source_url,
+        filing_url=(
+            "https://www.sec.gov/example-filing"
+            if is_sec
+            else source_url
+        ),
         filed_at=_DETECTED,
         received_at=_DETECTED,
         authority=SourceAuthority.OFFICIAL_COMPANY,
@@ -178,6 +188,35 @@ class July28SecParserTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_hilton_company_ir_html_selects_adjusted_eps(self) -> None:
+        rule = hlt_q2_2026_shadow_rule()
+        source_url = (
+            "https://stories.hilton.com/releases/"
+            "hilton-reports-2026-second-quarter-results"
+        )
+        result = HiltonAdjustedDilutedEpsParser().parse(
+            (
+                "<html><body><h1>Hilton Reports 2026 Second Quarter "
+                "Results</h1><p>For the quarter ended June 30, 2026, "
+                "diluted EPS was $1.66, and diluted "
+                "EPS, adjusted for special items, was $2.01.</p>"
+                "<p>Diluted EPS, adjusted for special items, is "
+                "projected to be between $2.18 and $2.24.</p>"
+                "</body></html>"
+            ),
+            source=_source(
+                rule,
+                provider=EarningsProvider.COMPANY_IR,
+                source_url=source_url,
+            ),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(str(result.candidate.value), "2.01")
+
     def test_guidance_and_wrong_metric_fail_closed(self) -> None:
         cases = (
             (
@@ -209,7 +248,7 @@ class July28SecParserTests(unittest.TestCase):
                 )
                 self.assertEqual(result.status, ParseStatus.NO_MATCH)
 
-    def test_rules_are_sec_only_and_match_market_basis(self) -> None:
+    def test_rules_match_source_and_market_basis(self) -> None:
         rules = (
             pypl_q2_2026_shadow_rule(),
             ups_q2_2026_shadow_rule(),
@@ -230,8 +269,28 @@ class July28SecParserTests(unittest.TestCase):
                 for rule in rules
             )
         )
+        hlt_rule = hlt_q2_2026_shadow_rule()
+        self.assertEqual(
+            hlt_rule.source_policy["company_ir"],
+            {
+                "kind": "rss",
+                "provider": "company_ir",
+                "feed_url": "https://stories.hilton.com/feed/",
+                "allowed_document_hosts": ["stories.hilton.com"],
+                "title_all": [
+                    "Hilton",
+                    "Second Quarter",
+                    "Results",
+                ],
+                "title_none": ["Announces", "Release Date"],
+            },
+        )
         self.assertTrue(
-            all("company_ir" not in rule.source_policy for rule in rules)
+            all(
+                "company_ir" not in rule.source_policy
+                for rule in rules
+                if rule.ticker != "HLT"
+            )
         )
         self.assertEqual(
             sbux_q3_2026_shadow_rule().metric,

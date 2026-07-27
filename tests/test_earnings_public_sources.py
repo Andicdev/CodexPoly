@@ -8,6 +8,9 @@ from cbr_trading.earnings.contracts import EarningsProvider
 from cbr_trading.earnings.parsers.boeing import (
     ba_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.july_28_sec import (
+    hlt_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -139,6 +142,25 @@ _BA_PR_NEWSWIRE_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
       <link>https://www.prnewswire.com/news-releases/boeing-announces-second-quarter-deliveries-302499301.html</link>
       <title>Boeing Announces Second Quarter Deliveries</title>
       <pubDate>Tue, 08 Jul 2025 11:30:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+_HLT_STORIES_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid isPermaLink="true">
+        https://stories.hilton.com/releases/hilton-reports-2026-second-quarter-results
+      </guid>
+      <link>https://stories.hilton.com/releases/hilton-reports-2026-second-quarter-results</link>
+      <title>Hilton Reports 2026 Second Quarter Results</title>
+      <pubDate>Tue, 28 Jul 2026 10:00:03 GMT</pubDate>
+    </item>
+    <item>
+      <link>https://stories.hilton.com/releases/hilton-releases-second-quarter-2026-earnings-date</link>
+      <title>Hilton Announces Second Quarter 2026 Earnings Release Date</title>
+      <pubDate>Mon, 29 Jun 2026 12:00:00 GMT</pubDate>
     </item>
   </channel>
 </rss>
@@ -335,6 +357,40 @@ class EarningsPublicSourceTests(unittest.TestCase):
             candidate.source_url,
         )
         self.assertNotIn("deliveries", candidate.source_url)
+
+    def test_routes_only_hilton_results_from_official_feed(self) -> None:
+        watches = public_release_watches_from_rules(
+            (hlt_q2_2026_shadow_rule(),)
+        )
+        self.assertEqual(len(watches), 1)
+        company_watch = watches[0]
+        self.assertEqual(
+            company_watch.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _HLT_STORIES_FEED,
+                url=request.full_url,
+            ),
+        ).poll((company_watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(
+            candidate.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+        self.assertIn(
+            "hilton-reports-2026-second-quarter-results",
+            candidate.source_url,
+        )
+        self.assertNotIn("earnings-date", candidate.source_url)
 
     def test_rejects_non_array_wordpress_listing(self) -> None:
         company_watch = next(

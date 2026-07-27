@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -411,7 +412,7 @@ def ups_q2_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def hlt_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="HLT",
         cik=HILTON_CIK,
         fiscal_quarter=2,
@@ -429,6 +430,27 @@ def hlt_q2_2026_shadow_rule() -> EarningsMarketRule:
         metric_selection=(
             "reported_diluted_eps_adjusted_for_special_items"
         ),
+    )
+    return replace(
+        rule,
+        source_policy={
+            **dict(rule.source_policy),
+            "company_ir": {
+                "kind": "rss",
+                "provider": "company_ir",
+                "feed_url": "https://stories.hilton.com/feed/",
+                "allowed_document_hosts": ["stories.hilton.com"],
+                "title_all": [
+                    "Hilton",
+                    "Second Quarter",
+                    "Results",
+                ],
+                "title_none": [
+                    "Announces",
+                    "Release Date",
+                ],
+            },
+        },
     )
 
 
