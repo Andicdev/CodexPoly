@@ -8,6 +8,9 @@ from cbr_trading.earnings.contracts import EarningsProvider
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.royal_caribbean import (
+    rcl_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.woodward import (
     wwd_q3_2026_shadow_rule,
 )
@@ -89,6 +92,35 @@ _WWD_WORDPRESS_LISTING = b"""[
     }
   }
 ]"""
+_RCL_HTML_LISTING = b"""
+<html>
+  <body>
+    <div class="release">
+      <p class="date">July 28, 2026 6:30 am</p>
+      <p>
+        <a
+          href="https://www.rclinvestor.com/press-releases/release/?id=1842"
+          title="ROYAL CARIBBEAN GROUP REPORTS SECOND QUARTER RESULTS"
+        >
+          ROYAL CARIBBEAN GROUP REPORTS SECOND QUARTER RESULTS
+        </a>
+      </p>
+    </div>
+    <div class="release">
+      <p class="date">July 8, 2026 4:30 pm</p>
+      <p>
+        <a
+          href="https://www.rclinvestor.com/press-releases/release/?id=1841"
+          title="ROYAL CARIBBEAN GROUP TO HOLD CONFERENCE CALL ON SECOND QUARTER 2026 EARNINGS"
+        >
+          ROYAL CARIBBEAN GROUP TO HOLD CONFERENCE CALL ON SECOND
+          QUARTER 2026 EARNINGS
+        </a>
+      </p>
+    </div>
+  </body>
+</html>
+"""
 
 
 class _Response:
@@ -190,6 +222,56 @@ class EarningsPublicSourceTests(unittest.TestCase):
         self.assertEqual(
             candidate.metadata["listing_kind"],
             "wordpress_rest",
+        )
+
+    def test_routes_rcl_html_listing_candidate(self) -> None:
+        watches = public_release_watches_from_rules(
+            (rcl_q2_2026_shadow_rule(),)
+        )
+        by_provider = {
+            watch.provider: watch
+            for watch in watches
+        }
+        company_watch = by_provider[EarningsProvider.COMPANY_IR]
+        self.assertEqual(company_watch.kind, "html_listing")
+        self.assertEqual(
+            company_watch.listing_utc_offset_minutes,
+            -240,
+        )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _RCL_HTML_LISTING,
+                url=request.full_url,
+                content_type="text/html",
+            ),
+        ).poll((company_watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.feed_count, 1)
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(
+            candidate.source_url,
+            (
+                "https://www.rclinvestor.com/press-releases/"
+                "release/?id=1842"
+            ),
+        )
+        self.assertEqual(
+            candidate.filed_at.isoformat(),
+            "2026-07-28T10:30:00+00:00",
+        )
+        self.assertEqual(
+            candidate.metadata["listing_kind"],
+            "html_listing",
+        )
+        self.assertIn(
+            EarningsProvider.PR_NEWSWIRE,
+            by_provider,
         )
 
     def test_rejects_non_array_wordpress_listing(self) -> None:

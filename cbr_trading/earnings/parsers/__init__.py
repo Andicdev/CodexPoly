@@ -25,6 +25,10 @@ from cbr_trading.earnings.parsers.nxp import (
     NxpNonGaapEpsParser,
     nxpi_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.royal_caribbean import (
+    RoyalCaribbeanAdjustedEpsParser,
+    rcl_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.woodward import (
     WoodwardGaapEpsParser,
     wwd_q3_2026_shadow_rule,
@@ -39,6 +43,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "CZR": CaesarsGaapEpsParser(),
         "NVTS": NavitasEpsParser(),
         "NXPI": NxpNonGaapEpsParser(),
+        "RCL": RoyalCaribbeanAdjustedEpsParser(),
         "WWD": WoodwardGaapEpsParser(),
     }
 
@@ -50,6 +55,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         czr_q2_2026_shadow_rule(),
         nvts_q2_2026_shadow_rule(),
         nxpi_q2_2026_shadow_rule(),
+        rcl_q2_2026_shadow_rule(),
         wwd_q3_2026_shadow_rule(),
         bbby_q2_2026_shadow_rule(),
     )
@@ -61,6 +67,7 @@ __all__ = [
     "CostarGaapEpsParser",
     "NavitasEpsParser",
     "NxpNonGaapEpsParser",
+    "RoyalCaribbeanAdjustedEpsParser",
     "WoodwardGaapEpsParser",
     "ba_q2_2026_shadow_rule",
     "bbby_q2_2026_shadow_rule",
@@ -70,5 +77,6 @@ __all__ = [
     "earnings_parser_registry",
     "nvts_q2_2026_shadow_rule",
     "nxpi_q2_2026_shadow_rule",
+    "rcl_q2_2026_shadow_rule",
     "wwd_q3_2026_shadow_rule",
 ]

@@ -27,6 +27,11 @@ from cbr_trading.earnings.parsers.costar import (
     CostarGaapEpsParser,
     csgp_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.royal_caribbean import (
+    ROYAL_CARIBBEAN_CIK,
+    RoyalCaribbeanAdjustedEpsParser,
+    rcl_q2_2026_shadow_rule,
+)
 from cbr_trading.secret_guard import redact_exception
 
 
@@ -75,6 +80,21 @@ _REPLAYS = {
         COSTAR_CIK,
         "https://investors.costargroup.com/node/16776/html",
         "0.01",
+    ),
+    "RCL": (
+        RoyalCaribbeanAdjustedEpsParser(),
+        replace(
+            rcl_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("RCL", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        ROYAL_CARIBBEAN_CIK,
+        (
+            "https://www.rclinvestor.com/press-releases/"
+            "release/?id=1832"
+        ),
+        "3.60",
     ),
 }
 

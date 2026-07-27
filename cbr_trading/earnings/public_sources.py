@@ -8,8 +8,9 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -51,6 +52,12 @@ _WORDPRESS_CONTENT_TYPES = frozenset(
         "text/json",
     }
 )
+_HTML_LISTING_CONTENT_TYPES = frozenset(
+    {
+        "application/xhtml+xml",
+        "text/html",
+    }
+)
 _DOCUMENT_CONTENT_TYPES = frozenset(
     {
         "application/xhtml+xml",
@@ -60,7 +67,9 @@ _DOCUMENT_CONTENT_TYPES = frozenset(
     }
 )
 _XML_FORBIDDEN_MARKERS = (b"<!doctype", b"<!entity")
-_PUBLIC_LISTING_KINDS = frozenset({"rss", "wordpress_rest"})
+_PUBLIC_LISTING_KINDS = frozenset(
+    {"html_listing", "rss", "wordpress_rest"}
+)
 
 
 class PublicReleaseSourceError(RuntimeError):
@@ -80,6 +89,7 @@ class PublicReleaseWatch:
     allowed_document_hosts: tuple[str, ...]
     title_all: tuple[str, ...]
     title_none: tuple[str, ...] = ()
+    listing_utc_offset_minutes: int = 0
 
     def __post_init__(self) -> None:
         for name in ("scope_id", "ticker", "cik"):
@@ -127,6 +137,18 @@ class PublicReleaseWatch:
             self,
             "title_none",
             _normalized_terms(self.title_none),
+        )
+        listing_utc_offset_minutes = int(
+            self.listing_utc_offset_minutes
+        )
+        if not -720 <= listing_utc_offset_minutes <= 840:
+            raise ValueError(
+                "listing_utc_offset_minutes is invalid"
+            )
+        object.__setattr__(
+            self,
+            "listing_utc_offset_minutes",
+            listing_utc_offset_minutes,
         )
 
 
@@ -200,6 +222,12 @@ def public_release_watches_from_rules(
                     title_none=_string_tuple(
                         raw_policy.get("title_none")
                     ),
+                    listing_utc_offset_minutes=int(
+                        raw_policy.get(
+                            "listing_utc_offset_minutes",
+                            0,
+                        )
+                    ),
                 )
             )
     return tuple(watches)
@@ -254,11 +282,17 @@ class PublicReleaseFeedClient:
             "received_at",
         )
         by_feed: dict[
-            tuple[str, str],
+            tuple[str, str, int],
             list[PublicReleaseWatch],
         ] = defaultdict(list)
         for watch in watch_rows:
-            by_feed[(watch.kind, watch.feed_url)].append(watch)
+            by_feed[
+                (
+                    watch.kind,
+                    watch.feed_url,
+                    watch.listing_utc_offset_minutes,
+                )
+            ].append(watch)
 
         candidates: list[EarningsDocumentCandidate] = []
         successes = 0
@@ -267,6 +301,7 @@ class PublicReleaseFeedClient:
         for (
             kind,
             feed_url,
+            listing_utc_offset_minutes,
         ), feed_watches in sorted(by_feed.items()):
             try:
                 document = self._fetch_listing(
@@ -276,7 +311,13 @@ class PublicReleaseFeedClient:
                 if document is None:
                     not_modified += 1
                     continue
-                items = _parse_listing(document, kind=kind)
+                items = _parse_listing(
+                    document,
+                    kind=kind,
+                    listing_utc_offset_minutes=(
+                        listing_utc_offset_minutes
+                    ),
+                )
                 successes += 1
                 for watch in feed_watches:
                     for item in items:
@@ -337,6 +378,12 @@ class PublicReleaseFeedClient:
                 "application/xml,text/xml;q=0.9,*/*;q=0.1"
             )
             accepted_content_types = _FEED_CONTENT_TYPES
+        elif kind == "html_listing":
+            accept = (
+                "text/html,application/xhtml+xml;q=0.9,"
+                "*/*;q=0.1"
+            )
+            accepted_content_types = _HTML_LISTING_CONTENT_TYPES
         elif kind == "wordpress_rest":
             accept = "application/json,text/json;q=0.9,*/*;q=0.1"
             accepted_content_types = _WORDPRESS_CONTENT_TYPES
@@ -612,14 +659,167 @@ def _parse_listing(
     document: bytes,
     *,
     kind: str,
+    listing_utc_offset_minutes: int,
 ) -> tuple[_FeedItem, ...]:
     if kind == "rss":
         return _parse_feed(document)
+    if kind == "html_listing":
+        return _parse_html_listing(
+            document,
+            listing_utc_offset_minutes=(
+                listing_utc_offset_minutes
+            ),
+        )
     if kind == "wordpress_rest":
         return _parse_wordpress_rest(document)
     raise PublicReleaseSourceError(
         "unsupported public release source kind"
     )
+
+
+def _parse_html_listing(
+    document: bytes,
+    *,
+    listing_utc_offset_minutes: int,
+) -> tuple[_FeedItem, ...]:
+    try:
+        decoded = document.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            decoded = document.decode("windows-1252")
+        except UnicodeDecodeError:
+            raise PublicReleaseSourceError(
+                "public release HTML listing has invalid encoding"
+            ) from None
+    parser = _ReleaseListingHtmlParser()
+    try:
+        parser.feed(decoded)
+        parser.close()
+    except Exception:
+        raise PublicReleaseSourceError(
+            "public release HTML listing is invalid"
+        ) from None
+    items: list[_FeedItem] = []
+    for event_id, title, link, published in parser.rows:
+        try:
+            published_at = _parse_html_listing_datetime(
+                published,
+                listing_utc_offset_minutes=(
+                    listing_utc_offset_minutes
+                ),
+            )
+        except (TypeError, ValueError):
+            continue
+        items.append(
+            _FeedItem(
+                event_id=event_id,
+                title=title,
+                link=link,
+                published_at=published_at,
+                contributor=None,
+            )
+        )
+    return tuple(items)
+
+
+class _ReleaseListingHtmlParser(HTMLParser):
+    """Extract bounded ``div.release`` records from an IR listing."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[tuple[str, str, str, str]] = []
+        self._release_depth = 0
+        self._in_date = False
+        self._in_link = False
+        self._date_parts: list[str] = []
+        self._title_parts: list[str] = []
+        self._title_attribute = ""
+        self._link = ""
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        normalized = tag.casefold()
+        attributes = {
+            str(name).casefold(): str(value or "")
+            for name, value in attrs
+        }
+        if normalized == "div":
+            classes = {
+                item.casefold()
+                for item in attributes.get("class", "").split()
+            }
+            if self._release_depth:
+                self._release_depth += 1
+            elif "release" in classes:
+                self._release_depth = 1
+                self._date_parts = []
+                self._title_parts = []
+                self._title_attribute = ""
+                self._link = ""
+            return
+        if not self._release_depth:
+            return
+        if normalized == "p":
+            classes = {
+                item.casefold()
+                for item in attributes.get("class", "").split()
+            }
+            self._in_date = "date" in classes
+        elif normalized == "a":
+            self._in_link = True
+            self._link = attributes.get("href", "").strip()
+            self._title_attribute = html.unescape(
+                attributes.get("title", "")
+            ).strip()
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.casefold()
+        if normalized == "p":
+            self._in_date = False
+        elif normalized == "a":
+            self._in_link = False
+        elif normalized == "div" and self._release_depth:
+            self._release_depth -= 1
+            if self._release_depth == 0:
+                self._finish_release()
+
+    def handle_data(self, data: str) -> None:
+        if self._in_date:
+            self._date_parts.append(data)
+        if self._in_link:
+            self._title_parts.append(data)
+
+    def _finish_release(self) -> None:
+        published = " ".join(" ".join(self._date_parts).split())
+        title = self._title_attribute or " ".join(
+            " ".join(self._title_parts).split()
+        )
+        if published and title and self._link:
+            self.rows.append(
+                (self._link, title, self._link, published)
+            )
+
+
+def _parse_html_listing_datetime(
+    value: str,
+    *,
+    listing_utc_offset_minutes: int,
+) -> datetime:
+    normalized = " ".join(str(value or "").split())
+    if not normalized:
+        raise ValueError("published timestamp is required")
+    parsed = datetime.strptime(
+        normalized,
+        "%B %d, %Y %I:%M %p",
+    )
+    return parsed.replace(
+        tzinfo=timezone(
+            timedelta(minutes=listing_utc_offset_minutes)
+        )
+    ).astimezone(timezone.utc)
 
 
 def _parse_wordpress_rest(
