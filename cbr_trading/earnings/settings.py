@@ -27,6 +27,8 @@ class EarningsWorkerSettings:
     reconnect_max_delay: float = 30.0
     no_rules_retry_delay: float = 30.0
     heartbeat_interval: float = 60.0
+    public_sources_enabled: bool = False
+    public_poll_interval: float = 1.0
     mstr_btc_shadow_enabled: bool = False
     mstr_btc_ledger_enabled: bool = False
     mstr_btc_ledger_url: str = "https://www.strategy.com/ledger"
@@ -102,6 +104,15 @@ class EarningsWorkerSettings:
             heartbeat_interval=float(
                 _clean(env.get("EARNINGS_HEARTBEAT_SEC"))
                 or "60"
+            ),
+            public_sources_enabled=_bool_value(
+                env.get("EARNINGS_PUBLIC_SOURCES_ENABLED"),
+                default=False,
+                name="EARNINGS_PUBLIC_SOURCES_ENABLED",
+            ),
+            public_poll_interval=float(
+                _clean(env.get("EARNINGS_PUBLIC_POLL_SEC"))
+                or "1"
             ),
             mstr_btc_shadow_enabled=_bool_value(
                 env.get("MSTR_BTC_SHADOW_ENABLED"),
@@ -189,6 +200,10 @@ class EarningsWorkerSettings:
         if self.heartbeat_interval <= 0:
             raise ValueError(
                 "EARNINGS_HEARTBEAT_SEC must be positive"
+            )
+        if not 0.25 <= self.public_poll_interval <= 60:
+            raise ValueError(
+                "EARNINGS_PUBLIC_POLL_SEC must be between 0.25 and 60"
             )
         if (
             self.mstr_btc_ledger_enabled

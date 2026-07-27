@@ -15,79 +15,36 @@ from cbr_trading.earnings.contracts import (
     SourceAuthority,
     earnings_scope_id,
 )
-from cbr_trading.earnings.parsers.navitas import (
-    NavitasEpsParser,
-    nvts_q2_2026_shadow_rule,
+from cbr_trading.earnings.parsers.woodward import (
+    WoodwardGaapEpsParser,
+    wwd_q3_2026_shadow_rule,
 )
 from cbr_trading.secret_guard import redact_exception
 
 
 _REPLAYS = (
     {
-        "year": 2026,
-        "quarter": 1,
-        "period_end": date(2026, 3, 31),
-        "expected": Decimal("-0.04"),
         "provider": EarningsProvider.COMPANY_IR,
+        "expected": Decimal("2.19"),
         "url": (
-            "https://ir.navitassemi.com/news-releases/"
-            "news-release-details/navitas-semiconductor-announces-"
-            "first-quarter-2026-financial"
+            "https://www.woodward.com/press-release/"
+            "woodward-reports-second-quarter-fiscal-year-2026-results/"
         ),
     },
     {
-        "year": 2025,
-        "quarter": 4,
-        "period_end": date(2025, 12, 31),
-        "expected": Decimal("-0.05"),
-        "provider": EarningsProvider.COMPANY_IR,
-        "url": (
-            "https://ir.navitassemi.com/news-releases/"
-            "news-release-details/navitas-semiconductor-announces-"
-            "fourth-quarter-and-full-year-0"
-        ),
-    },
-    {
-        "year": 2025,
-        "quarter": 3,
-        "period_end": date(2025, 9, 30),
-        "expected": Decimal("-0.05"),
-        "provider": EarningsProvider.COMPANY_IR,
-        "url": (
-            "https://ir.navitassemi.com/news-releases/"
-            "news-release-details/navitas-semiconductor-announces-"
-            "third-quarter-2025-financial"
-        ),
-    },
-    {
-        "year": 2025,
-        "quarter": 2,
-        "period_end": date(2025, 6, 30),
-        "expected": Decimal("-0.05"),
-        "provider": EarningsProvider.COMPANY_IR,
-        "url": (
-            "https://ir.navitassemi.com/news-releases/"
-            "news-release-details/navitas-semiconductor-announces-"
-            "second-quarter-2025-financial"
-        ),
-    },
-    {
-        "year": 2026,
-        "quarter": 1,
-        "period_end": date(2026, 3, 31),
-        "expected": Decimal("-0.04"),
         "provider": EarningsProvider.GLOBE_NEWSWIRE,
+        "expected": Decimal("2.19"),
         "url": (
-            "https://www.globenewswire.com/news-release/2026/"
-            "05/05/3288263/0/en/Navitas-Semiconductor-Announces-"
-            "First-Quarter-2026-Financial-Results.html"
+            "https://www.globenewswire.com/news-release/2026/04/29/"
+            "3284205/0/en/Woodward-Reports-Second-Quarter-Fiscal-"
+            "Year-2026-Results.html"
         ),
     },
 )
 
 
 def main() -> int:
-    parser = NavitasEpsParser()
+    parser = WoodwardGaapEpsParser()
     results: list[dict[str, Any]] = []
     try:
         for replay in _REPLAYS:
@@ -101,7 +58,7 @@ def main() -> int:
             )
             with urlopen(request, timeout=20) as response:
                 document = response.read()
-            rule = _replay_rule(replay)
+            rule = _replay_rule()
             parsed = parser.parse(
                 document,
                 source=_source(
@@ -123,9 +80,7 @@ def main() -> int:
             )
             results.append(
                 {
-                    "period": (
-                        f"{replay['year']}Q{replay['quarter']}"
-                    ),
+                    "period": "2026Q2",
                     "provider": replay["provider"].value,
                     "ok": ok,
                     "status": parsed.status.value,
@@ -161,17 +116,13 @@ def main() -> int:
     return 0 if payload["ok"] else 5
 
 
-def _replay_rule(replay: dict[str, Any]):
-    base = nvts_q2_2026_shadow_rule()
-    year = int(replay["year"])
-    quarter = int(replay["quarter"])
+def _replay_rule():
     return replace(
-        base,
-        rule_key=f"nvts-{year}q{quarter}-historical-replay",
-        scope_id=earnings_scope_id("NVTS", year, quarter),
-        fiscal_year=year,
-        fiscal_quarter=quarter,
-        period_end=replay["period_end"],
+        wwd_q3_2026_shadow_rule(),
+        rule_key="wwd-2026q2-historical-replay",
+        scope_id=earnings_scope_id("WWD", 2026, 2),
+        fiscal_quarter=2,
+        period_end=date(2026, 3, 31),
     )
 
 
@@ -187,9 +138,9 @@ def _source(
         provider_event_id=f"{provider.value}:{rule.scope_id}",
         ticker=rule.ticker,
         cik=rule.cik,
-        form_type="IR",
+        form_type="PRESS_RELEASE",
         items=(),
-        document_type="EARNINGS_RELEASE",
+        document_type="HTML",
         source_url=url,
         filing_url=url,
         filed_at=now,

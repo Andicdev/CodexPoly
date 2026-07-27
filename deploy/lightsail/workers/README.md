@@ -44,6 +44,12 @@ retain baseline row `116` at `843775` BTC, add only contiguous rows, and
 reconcile every signed change against running holdings before it can persist
 a fact. The SEC WebSocket remains connected independently of profile status.
 
+`EARNINGS_PUBLIC_SOURCES_ENABLED=true` adds the company IR and press-wire RSS
+feeds configured in each earnings rule. The worker checks enabled in-window
+`earnings_resolution` scopes and makes no external IR or wire request while
+that set is empty. Each transport persists its own source event and validated
+fact; all of them resolve through the same event-scoped earnings signal.
+
 | Environment | Compose source | Installed path |
 | --- | --- | --- |
 | staging | `compose.staging.yml` | `/opt/codexpoly/staging/apps/workers/compose.yml` |

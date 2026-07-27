@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from types import SimpleNamespace
 
 from cbr_trading.earnings.hosted_worker import (
     EarningsHostedShadowWorker,
@@ -15,11 +16,13 @@ from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.settings import EarningsWorkerSettings
+from cbr_trading.earnings.public_sources import PublicReleasePollResult
 from cbr_trading.mstr_btc import (
     MstrBtcDocumentCandidate,
     mstr_jul21_27_shadow_watch,
 )
 from cbr_trading.sec_filings import normalize_sec_filing
+from cbr_trading.source_runtime import ProfileWindowPollingGate
 
 
 class _Store:
@@ -56,6 +59,32 @@ class _EnvelopeTransport:
         self.connection_count += 1
         for envelope in self.envelopes:
             yield envelope
+
+
+class _ProfileStore:
+    def __init__(self, profiles):
+        self.profiles = tuple(profiles)
+
+    def load_enabled(self, *, source_name=None):
+        return self.profiles
+
+
+class _PublicClient:
+    def __init__(self):
+        self.watches = []
+
+    def poll(self, watches):
+        self.watches.append(tuple(watches))
+        return PublicReleasePollResult(
+            candidates=(),
+            feed_count=len(watches),
+            success_count=len(watches),
+            not_modified_count=0,
+            error_count=0,
+        )
+
+    def close(self):
+        return None
 
 
 def _settings() -> EarningsWorkerSettings:
@@ -232,6 +261,57 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
             {"BBBY", "NVTS", "NXPI", "WWD"},
         )
 
+    async def test_public_polling_is_profile_scope_gated(self) -> None:
+        public_client = _PublicClient()
+        scope_id = "earnings:NVTS:2026Q2"
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (SimpleNamespace(scope_id=scope_id),)
+            ),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            public_release_client=public_client,
+            public_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_public_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(len(public_client.watches), 1)
+        self.assertEqual(
+            {
+                watch.scope_id
+                for watch in public_client.watches[0]
+            },
+            {scope_id},
+        )
+        self.assertEqual(len(public_client.watches[0]), 2)
+
+    async def test_public_polling_does_no_http_without_profile(
+        self,
+    ) -> None:
+        public_client = _PublicClient()
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(()),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            public_release_client=public_client,
+            public_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_public_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(public_client.watches, [])
+
     def test_multiple_active_scopes_for_same_cik_are_rejected(self) -> None:
         first = nvts_q2_2026_shadow_rule()
         second = replace(
@@ -368,6 +448,37 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 {
                     **base,
                     "MSTR_BTC_LEDGER_ENABLED": "true",
+                }
+            )
+
+    def test_public_sources_require_explicit_enable_and_poll_bounds(
+        self,
+    ) -> None:
+        base = {
+            "CBR_DATABASE_URL": "postgresql://configured",
+            "SEC_API_KEY": "configured",
+            "EARNINGS_HTTP_USER_AGENT": (
+                "CodexPoly test@example.com"
+            ),
+        }
+        enabled = EarningsWorkerSettings.from_env(
+            {
+                **base,
+                "EARNINGS_PUBLIC_SOURCES_ENABLED": "true",
+                "EARNINGS_PUBLIC_POLL_SEC": "0.5",
+            }
+        )
+
+        self.assertTrue(enabled.public_sources_enabled)
+        self.assertEqual(enabled.public_poll_interval, 0.5)
+        with self.assertRaisesRegex(
+            ValueError,
+            "EARNINGS_PUBLIC_POLL_SEC",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    **base,
+                    "EARNINGS_PUBLIC_POLL_SEC": "0.1",
                 }
             )
 

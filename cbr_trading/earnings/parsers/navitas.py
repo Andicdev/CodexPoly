@@ -187,6 +187,44 @@ def nvts_q2_2026_shadow_rule() -> EarningsMarketRule:
                 "required_item": "2.02",
                 "document_type": "EX-99.1",
             },
+            "company_ir": {
+                "kind": "rss",
+                "provider": "company_ir",
+                "feed_url": (
+                    "https://ir.navitassemi.com/"
+                    "rss/news-releases.xml"
+                ),
+                "allowed_document_hosts": [
+                    "ir.navitassemi.com",
+                    "navitassemi.gcs-web.com",
+                ],
+                "title_all": [
+                    "Navitas Semiconductor",
+                    "Second Quarter 2026",
+                    "Financial Results",
+                ],
+                "title_none": ["to report"],
+            },
+            "press_wire": {
+                "kind": "rss",
+                "provider": "globenewswire",
+                "feed_url": (
+                    "https://www.globenewswire.com/RssFeed/"
+                    "subjectcode/13-Earnings%20Releases%20And%20"
+                    "Operating%20Results/feedTitle/GlobeNewswire"
+                    "%20-%20Earnings%20Releases%20And%20Operating"
+                    "%20Results"
+                ),
+                "allowed_document_hosts": [
+                    "www.globenewswire.com",
+                ],
+                "title_all": [
+                    "Navitas Semiconductor",
+                    "Second Quarter 2026",
+                    "Financial Results",
+                ],
+                "title_none": ["to report"],
+            },
         },
         fallback_policy={
             "non_gaap_secondary": "seeking_alpha",

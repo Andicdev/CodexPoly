@@ -12,6 +12,9 @@ class EarningsProvider(str, Enum):
     SEC = "sec"
     COMPANY_IR = "company_ir"
     PRESS_RELEASE_RSS = "press_release_rss"
+    GLOBE_NEWSWIRE = "globenewswire"
+    BUSINESS_WIRE = "businesswire"
+    PR_NEWSWIRE = "prnewswire"
     SEEKING_ALPHA = "seeking_alpha"
 
 

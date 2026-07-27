@@ -190,6 +190,53 @@ def wwd_q3_2026_shadow_rule() -> EarningsMarketRule:
                 "required_item": "2.02",
                 "document_type": "EX-99.1",
             },
+            "company_ir": {
+                "kind": "wordpress_rest",
+                "provider": "company_ir",
+                "feed_url": (
+                    "https://www.woodward.com/wp-json/wp/v2/"
+                    "press-release?per_page=10&orderby=date&"
+                    "order=desc&_fields=id,date_gmt,modified_gmt,"
+                    "link,slug,title"
+                ),
+                "allowed_document_hosts": [
+                    "www.woodward.com",
+                ],
+                "title_all": [
+                    "Woodward",
+                    "Third Quarter",
+                    "Fiscal Year 2026",
+                    "Results",
+                ],
+                "title_none": [
+                    "conference call",
+                    "to report",
+                ],
+            },
+            "press_wire": {
+                "kind": "rss",
+                "provider": "globenewswire",
+                "feed_url": (
+                    "https://www.globenewswire.com/RssFeed/"
+                    "subjectcode/13-Earnings%20Releases%20And%20"
+                    "Operating%20Results/feedTitle/GlobeNewswire%20"
+                    "-%20Earnings%20Releases%20And%20Operating%20"
+                    "Results"
+                ),
+                "allowed_document_hosts": [
+                    "www.globenewswire.com",
+                ],
+                "title_all": [
+                    "Woodward",
+                    "Third Quarter",
+                    "Fiscal Year 2026",
+                    "Results",
+                ],
+                "title_none": [
+                    "conference call",
+                    "to report",
+                ],
+            },
         },
         fallback_policy={
             "gaap_secondary": "seeking_alpha",

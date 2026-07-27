@@ -19,6 +19,20 @@ _CHECK = (
     / "checks"
     / "verify_initial_earnings_configuration.sql"
 )
+_WWD_SOURCE_MIGRATION = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "seeds"
+    / "003_add_wwd_public_sources.sql"
+)
+_WWD_SOURCE_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_wwd_public_sources.sql"
+)
 
 
 class LightsailEarningsSeedTests(unittest.TestCase):
@@ -58,6 +72,29 @@ class LightsailEarningsSeedTests(unittest.TestCase):
         self.assertNotIn("insert into resolution_execution_claims", text)
         self.assertNotIn("delete from", text)
         self.assertNotIn("drop table", text)
+
+    def test_wwd_public_source_migration_is_additive_and_checked(
+        self,
+    ) -> None:
+        migration = _WWD_SOURCE_MIGRATION.read_text(encoding="utf-8")
+        check = _WWD_SOURCE_CHECK.read_text(encoding="utf-8")
+
+        self.assertIn("wordpress_rest", migration)
+        self.assertIn("www.woodward.com/wp-json/wp/v2", migration)
+        self.assertIn("globenewswire", migration)
+        self.assertIn(
+            "rule_key = 'wwd-2026q3-gaap-eps-2pt42'",
+            migration,
+        )
+        self.assertNotIn("resolution_execution_profiles", migration)
+        self.assertNotIn("DELETE FROM", migration)
+        self.assertNotIn("DROP TABLE", migration)
+
+        self.assertIn("BEGIN TRANSACTION READ ONLY", check)
+        self.assertIn("wordpress_rest", check)
+        self.assertIn("globenewswire", check)
+        self.assertIn("ROLLBACK", check)
+        self.assertNotIn("UPDATE ", check)
 
     def test_initial_check_is_read_only_and_covers_safety_invariants(
         self,

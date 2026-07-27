@@ -38,3 +38,23 @@ class ProfileWindowPollingGate:
 
     def is_active(self) -> bool:
         return self.active_profile_count() > 0
+
+    def active_scope_ids(self) -> frozenset[str]:
+        """Return only scopes whose profiles are enabled and in-window."""
+
+        profiles = tuple(
+            self._profile_store.load_enabled(
+                source_name=self.source_name,
+            )
+        )
+        scopes: set[str] = set()
+        for profile in profiles:
+            scope_id = str(
+                getattr(profile, "scope_id", "") or ""
+            ).strip()
+            if not scope_id:
+                raise ValueError(
+                    "enabled profile is missing scope_id"
+                )
+            scopes.add(scope_id)
+        return frozenset(scopes)

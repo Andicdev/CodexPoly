@@ -78,6 +78,39 @@ VALUES
                 "document_type": "EX-99.1",
                 "form_type": "8-K",
                 "required_item": "2.02"
+            },
+            "company_ir": {
+                "allowed_document_hosts": [
+                    "ir.navitassemi.com",
+                    "navitassemi.gcs-web.com"
+                ],
+                "feed_url": "https://ir.navitassemi.com/rss/news-releases.xml",
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Navitas Semiconductor",
+                    "Second Quarter 2026",
+                    "Financial Results"
+                ],
+                "title_none": [
+                    "to report"
+                ]
+            },
+            "press_wire": {
+                "allowed_document_hosts": [
+                    "www.globenewswire.com"
+                ],
+                "feed_url": "https://www.globenewswire.com/RssFeed/subjectcode/13-Earnings%20Releases%20And%20Operating%20Results/feedTitle/GlobeNewswire%20-%20Earnings%20Releases%20And%20Operating%20Results",
+                "kind": "rss",
+                "provider": "globenewswire",
+                "title_all": [
+                    "Navitas Semiconductor",
+                    "Second Quarter 2026",
+                    "Financial Results"
+                ],
+                "title_none": [
+                    "to report"
+                ]
             }
         }'::jsonb,
         '{
@@ -112,6 +145,42 @@ VALUES
                 "document_type": "EX-99.1",
                 "form_type": "8-K",
                 "required_item": "2.02"
+            },
+            "company_ir": {
+                "allowed_document_hosts": [
+                    "www.woodward.com"
+                ],
+                "feed_url": "https://www.woodward.com/wp-json/wp/v2/press-release?per_page=10&orderby=date&order=desc&_fields=id,date_gmt,modified_gmt,link,slug,title",
+                "kind": "wordpress_rest",
+                "provider": "company_ir",
+                "title_all": [
+                    "Woodward",
+                    "Third Quarter",
+                    "Fiscal Year 2026",
+                    "Results"
+                ],
+                "title_none": [
+                    "conference call",
+                    "to report"
+                ]
+            },
+            "press_wire": {
+                "allowed_document_hosts": [
+                    "www.globenewswire.com"
+                ],
+                "feed_url": "https://www.globenewswire.com/RssFeed/subjectcode/13-Earnings%20Releases%20And%20Operating%20Results/feedTitle/GlobeNewswire%20-%20Earnings%20Releases%20And%20Operating%20Results",
+                "kind": "rss",
+                "provider": "globenewswire",
+                "title_all": [
+                    "Woodward",
+                    "Third Quarter",
+                    "Fiscal Year 2026",
+                    "Results"
+                ],
+                "title_none": [
+                    "conference call",
+                    "to report"
+                ]
             }
         }'::jsonb,
         '{

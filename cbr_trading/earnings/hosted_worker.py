@@ -19,6 +19,12 @@ from cbr_trading.earnings.processor import (
     EarningsShadowProcessor,
     ShadowProcessingStatus,
 )
+from cbr_trading.earnings.public_sources import (
+    PublicReleaseDocumentFetcher,
+    PublicReleaseFeedClient,
+    PublicReleaseWatch,
+    public_release_watches_from_rules,
+)
 from cbr_trading.earnings.repository import SqlAlchemyEarningsStore
 from cbr_trading.earnings.sec_stream import (
     SecEarningsWatch,
@@ -63,7 +69,10 @@ from cbr_trading.orchestration import (
 from cbr_trading.sec_filings.stream import SecStreamTransport
 from cbr_trading.secret_guard import redact_exception
 from cbr_trading.source_runtime import ProfileWindowPollingGate
-from cbr_trading.sources import MSTR_BTC_SOURCE_NAME
+from cbr_trading.sources import (
+    EARNINGS_SOURCE_NAME,
+    MSTR_BTC_SOURCE_NAME,
+)
 
 
 class StreamTransport(Protocol):
@@ -72,6 +81,10 @@ class StreamTransport(Protocol):
 
 SecWatch = SecEarningsWatch | MstrBtcSecWatch
 TransportBuilder = Callable[[Sequence[SecWatch]], StreamTransport]
+PublicDocumentFetcherBuilder = Callable[
+    [Sequence[PublicReleaseWatch]],
+    object,
+]
 
 
 class NotificationOutbox(Protocol):
@@ -153,6 +166,11 @@ class EarningsHostedShadowWorker:
         mstr_ledger_watch: MstrBtcLedgerWatch | None = None,
         ledger_client: StrategyLedgerClient | None = None,
         ledger_polling_gate: ProfileWindowPollingGate | None = None,
+        public_release_client: PublicReleaseFeedClient | None = None,
+        public_polling_gate: ProfileWindowPollingGate | None = None,
+        public_document_fetcher_builder: (
+            PublicDocumentFetcherBuilder | None
+        ) = None,
         notification_store: NotificationOutbox | None = None,
         transport_builder: TransportBuilder | None = None,
         parsers: Mapping[str, object] | None = None,
@@ -211,6 +229,32 @@ class EarningsHostedShadowWorker:
             raise ValueError(
                 "MSTR Ledger polling requires an active-profile gate"
             )
+        self._public_release_client = (
+            public_release_client
+            if public_release_client is not None
+            else (
+                PublicReleaseFeedClient(
+                    user_agent=settings.http_user_agent,
+                    timeout=settings.fetch_timeout,
+                    logger=logger,
+                )
+                if settings.public_sources_enabled
+                else None
+            )
+        )
+        self._public_polling_gate = public_polling_gate
+        if (
+            self._public_release_client is not None
+            and self._public_polling_gate is None
+        ):
+            raise ValueError(
+                "public earnings polling requires an "
+                "active-profile gate"
+            )
+        self._public_document_fetcher_builder = (
+            public_document_fetcher_builder
+            or self._default_public_document_fetcher
+        )
         self._notification_store = notification_store
         self._ledger_processor = (
             MstrBtcShadowProcessor(
@@ -251,6 +295,16 @@ class EarningsHostedShadowWorker:
         self._ledger_poll_count = 0
         self._ledger_accepted_count = 0
         self._ledger_last_fingerprint: str | None = None
+        self._public_polling_active = False
+        self._public_active_scope_count = 0
+        self._public_watch_count = 0
+        self._public_poll_count = 0
+        self._public_feed_success_count = 0
+        self._public_candidate_count = 0
+        self._public_signal_count = 0
+        self._public_completed_events: set[
+            tuple[str, str, str, str]
+        ] = set()
         self._error_count = 0
 
     async def run_forever(self) -> None:
@@ -267,7 +321,8 @@ class EarningsHostedShadowWorker:
             )
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
-            "earnings=true mstr=%s ledger=%s",
+            "earnings=true public=%s mstr=%s ledger=%s",
+            self._public_release_client is not None,
             self._mstr_watch is not None,
             self._mstr_ledger_watch is not None,
         )
@@ -275,6 +330,11 @@ class EarningsHostedShadowWorker:
         ledger_task = (
             asyncio.create_task(self._ledger_poll_loop())
             if self._ledger_client is not None
+            else None
+        )
+        public_task = (
+            asyncio.create_task(self._public_poll_loop())
+            if self._public_release_client is not None
             else None
         )
         delay = self._settings.reconnect_initial_delay
@@ -325,16 +385,26 @@ class EarningsHostedShadowWorker:
             heartbeat.cancel()
             if ledger_task is not None:
                 ledger_task.cancel()
+            if public_task is not None:
+                public_task.cancel()
             await asyncio.gather(
-                *(
-                    (heartbeat, ledger_task)
-                    if ledger_task is not None
-                    else (heartbeat,)
+                *tuple(
+                    task
+                    for task in (
+                        heartbeat,
+                        ledger_task,
+                        public_task,
+                    )
+                    if task is not None
                 ),
                 return_exceptions=True,
             )
             if self._ledger_client is not None:
                 await asyncio.to_thread(self._ledger_client.close)
+            if self._public_release_client is not None:
+                await asyncio.to_thread(
+                    self._public_release_client.close
+                )
 
     async def run_connection_cycle(self) -> WorkerCycleResult:
         rules = tuple(
@@ -564,6 +634,145 @@ class EarningsHostedShadowWorker:
             mstr_watches=mstr_watches,
         )
 
+    def _default_public_document_fetcher(
+        self,
+        watches: Sequence[PublicReleaseWatch],
+    ) -> PublicReleaseDocumentFetcher:
+        return PublicReleaseDocumentFetcher(
+            watches=watches,
+            user_agent=self._settings.http_user_agent,
+            timeout=self._settings.fetch_timeout,
+            max_bytes=self._settings.max_document_bytes,
+        )
+
+    async def run_public_poll_cycle(self) -> int:
+        """Poll IR/wire feeds only for enabled, in-window scopes."""
+
+        if self._public_release_client is None:
+            return 0
+        active_scopes = await asyncio.to_thread(
+            self._public_polling_gate.active_scope_ids
+        )
+        self._public_active_scope_count = len(active_scopes)
+        self._public_polling_active = bool(active_scopes)
+        if not active_scopes:
+            self._public_watch_count = 0
+            return 0
+
+        rules = tuple(
+            await asyncio.to_thread(
+                self._store.load_active_rules
+            )
+        )
+        active_rules = tuple(
+            rule
+            for rule in rules
+            if rule.scope_id in active_scopes
+        )
+        rules_by_scope = {
+            rule.scope_id: rule
+            for rule in active_rules
+        }
+        watches = public_release_watches_from_rules(active_rules)
+        self._public_watch_count = len(watches)
+        if not watches:
+            return 0
+
+        poll_result = await asyncio.to_thread(
+            self._public_release_client.poll,
+            watches,
+        )
+        self._public_poll_count += 1
+        self._public_feed_success_count += (
+            poll_result.success_count
+        )
+        self._error_count += poll_result.error_count
+        if not poll_result.candidates:
+            return 0
+
+        fetcher = self._public_document_fetcher_builder(watches)
+        processor = EarningsShadowProcessor(
+            store=self._store,
+            rules=active_rules,
+            parsers=self._parsers,
+            document_fetcher=fetcher,
+            max_fetch_attempts=self._settings.max_fetch_attempts,
+            fetch_retry_delay=self._settings.fetch_retry_delay,
+        )
+        processed = 0
+        for candidate in poll_result.candidates:
+            event_key = (
+                candidate.scope_id,
+                candidate.provider.value,
+                candidate.provider_event_id,
+                candidate.source_url,
+            )
+            if event_key in self._public_completed_events:
+                continue
+            processed += 1
+            self._public_candidate_count += 1
+            result = await asyncio.to_thread(
+                processor.process,
+                candidate,
+            )
+            if result.status is ShadowProcessingStatus.SIGNAL:
+                self._public_signal_count += 1
+                await self._enqueue_notification(
+                    source_event_notification_from_earnings(
+                        candidate=candidate,
+                        signal=result.signal,
+                        rule=rules_by_scope[candidate.scope_id],
+                    )
+                )
+            if result.status is ShadowProcessingStatus.ERROR:
+                self._error_count += 1
+            else:
+                self._public_completed_events.add(event_key)
+            self._logger.info(
+                "Public earnings document processed "
+                "provider=%s scope=%s ticker=%s status=%s "
+                "reason=%s event_id=%s fact_id=%s value=%s",
+                candidate.provider.value,
+                result.scope_id,
+                candidate.ticker,
+                result.status.value,
+                result.reason,
+                result.event_id,
+                result.fact_id,
+                (
+                    result.signal.value
+                    if result.signal is not None
+                    else None
+                ),
+            )
+        return processed
+
+    async def _public_poll_loop(self) -> None:
+        previous_active: bool | None = None
+        while True:
+            try:
+                await self.run_public_poll_cycle()
+                if previous_active is not self._public_polling_active:
+                    self._logger.info(
+                        "Public earnings polling state active=%s "
+                        "scopes=%s watches=%s",
+                        self._public_polling_active,
+                        self._public_active_scope_count,
+                        self._public_watch_count,
+                    )
+                    previous_active = self._public_polling_active
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._error_count += 1
+                self._logger.warning(
+                    "Public earnings poll failed error_code=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(
+                self._settings.public_poll_interval
+            )
+
     async def run_ledger_poll_cycle(
         self,
     ) -> MstrBtcShadowResult | None:
@@ -680,6 +889,10 @@ class EarningsHostedShadowWorker:
             self._logger.info(
                 "SEC shadow heartbeat connected=%s watches=%s "
                 "processed=%s signals=%s mstr_accepted=%s "
+                "public_active=%s public_scopes=%s "
+                "public_watches=%s public_polls=%s "
+                "public_feed_success=%s public_candidates=%s "
+                "public_signals=%s "
                 "ledger_active=%s ledger_profiles=%s "
                 "ledger_connected=%s ledger_polls=%s "
                 "ledger_accepted=%s errors=%s",
@@ -688,6 +901,13 @@ class EarningsHostedShadowWorker:
                 self._processed_count,
                 self._signal_count,
                 self._mstr_accepted_count,
+                self._public_polling_active,
+                self._public_active_scope_count,
+                self._public_watch_count,
+                self._public_poll_count,
+                self._public_feed_success_count,
+                self._public_candidate_count,
+                self._public_signal_count,
                 self._ledger_polling_active,
                 self._ledger_active_profile_count,
                 self._ledger_connected,
@@ -772,7 +992,10 @@ def main(
         SqlAlchemyResolutionProfileStore(
             database_url=settings.database_url
         )
-        if settings.mstr_btc_ledger_enabled
+        if (
+            settings.mstr_btc_ledger_enabled
+            or settings.public_sources_enabled
+        )
         else None
     )
     ledger_polling_gate = (
@@ -781,6 +1004,16 @@ def main(
             source_name=MSTR_BTC_SOURCE_NAME,
         )
         if profile_store is not None
+        and settings.mstr_btc_ledger_enabled
+        else None
+    )
+    public_polling_gate = (
+        ProfileWindowPollingGate(
+            profile_store=profile_store,
+            source_name=EARNINGS_SOURCE_NAME,
+        )
+        if profile_store is not None
+        and settings.public_sources_enabled
         else None
     )
     notification_store = SqlAlchemyNotificationOutboxStore(
@@ -792,6 +1025,7 @@ def main(
         mstr_store=mstr_store,
         mstr_audit_store=mstr_audit_store,
         ledger_polling_gate=ledger_polling_gate,
+        public_polling_gate=public_polling_gate,
         notification_store=notification_store,
         logger=logger,
     )
