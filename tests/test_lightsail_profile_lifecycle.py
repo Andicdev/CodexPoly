@@ -58,6 +58,20 @@ _LIVE_RUNTIME_VERIFY_SQL = (
     / "checks"
     / "verify_resolution_runtime_live.sql"
 )
+_NVTS_AUTO_LIVE_SEED = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "seeds"
+    / "011_schedule_nvts_auto_live.sql"
+)
+_NVTS_AUTO_LIVE_VERIFY_SQL = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_nvts_auto_live_armed.sql"
+)
 
 
 class LightsailProfileLifecycleTests(unittest.TestCase):
@@ -175,6 +189,32 @@ class LightsailProfileLifecycleTests(unittest.TestCase):
         self.assertIn("supervision_enabled", text)
         self.assertIn("trading_enabled", text)
         self.assertIn("interval '15 seconds'", text)
+
+    def test_nvts_schedule_seed_is_fail_closed_and_does_not_enable(
+        self,
+    ) -> None:
+        text = _NVTS_AUTO_LIVE_SEED.read_text(encoding="utf-8")
+
+        self.assertIn("'AUTO_LIVE'", text)
+        self.assertIn("2026-07-27 18:45:00+00", text)
+        self.assertIn("2026-07-27 19:00:00+00", text)
+        self.assertIn("2026-07-28 03:00:00+00", text)
+        self.assertIn("reviewed_notional > 1000", text)
+        self.assertIn("a validated NVTS fact already exists", text)
+        self.assertIn("an NVTS execution claim already exists", text)
+        self.assertNotIn("SET status = 'ENABLED'", text)
+
+    def test_nvts_schedule_check_requires_disabled_and_fresh_live(
+        self,
+    ) -> None:
+        text = _NVTS_AUTO_LIVE_VERIFY_SQL.read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("schedule.state = 'PENDING'", text)
+        self.assertIn("profile.status = 'DISABLED'", text)
+        self.assertIn("runtime_key = 'hosted-resolution'", text)
+        self.assertIn("reviewed_notional > 1000", text)
 
 
 if __name__ == "__main__":
