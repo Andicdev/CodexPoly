@@ -34,10 +34,19 @@ class BoeingCoreEpsParser(LabelledEpsParser):
                 basis=EpsBasis.DILUTED,
                 label_patterns=(
                     eps_label(
-                        r"\bcore\s+(?:earnings(?:\s*/\s*"
+                        r"\bgaap\s+(?:diluted\s+)?"
+                        r"(?:earnings(?:\s*/\s*"
+                        r"\(?\s*loss\s*\)?)?|loss)\s+per\s+share"
+                        r"\s+(?:of|was)\s+"
+                        r"(?:\$\s*)?(?:"
+                        r"\(\s*(?:\$\s*)?\d+(?:\.\d+)?\s*\)"
+                        r"|-\s*\d+(?:\.\d+)?"
+                        r"|\d+(?:\.\d+)?)"
+                        r"\s+and\s+core\s+"
+                        r"(?:earnings(?:\s*/\s*"
                         r"\(?\s*loss\s*\)?)?|loss)\s+per\s+share"
                         r"(?:\s*\(\s*non[\s\u2010-\u2015-]*gaap"
-                        r"\s*\)\s*\*?)?"
+                        r"\s*\)\s*\*?)?\s+(?:of|was)\s*"
                     ),
                 ),
                 parser_name="boeing_core_eps",
@@ -48,12 +57,6 @@ class BoeingCoreEpsParser(LabelledEpsParser):
                 evidence_title="Boeing official earnings release",
                 resolution_basis=(
                     "primary_headline_non_gaap_diluted_eps"
-                ),
-                forbidden_tails=(
-                    "is defined",
-                    "for purposes",
-                    "most directly comparable",
-                    "core operating",
                 ),
             )
         )
@@ -110,6 +113,26 @@ def ba_q2_2026_shadow_rule() -> EarningsMarketRule:
                     "Results",
                 ],
                 "title_none": ["to release"],
+            },
+            "press_wire": {
+                "kind": "rss",
+                "provider": "prnewswire",
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "allowed_document_hosts": [
+                    "www.prnewswire.com",
+                ],
+                "title_all": [
+                    "Boeing",
+                    "Second Quarter",
+                    "Results",
+                ],
+                "title_none": [
+                    "to release",
+                    "deliveries",
+                ],
             },
         },
         fallback_policy={

@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from email.message import Message
 
 from cbr_trading.earnings.contracts import EarningsProvider
+from cbr_trading.earnings.parsers.boeing import (
+    ba_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -120,6 +123,25 @@ _RCL_HTML_LISTING = b"""
     </div>
   </body>
 </html>
+"""
+_BA_PR_NEWSWIRE_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid isPermaLink="true">
+        https://www.prnewswire.com/news-releases/boeing-reports-second-quarter-results-302516005.html
+      </guid>
+      <link>https://www.prnewswire.com/news-releases/boeing-reports-second-quarter-results-302516005.html</link>
+      <title>Boeing Reports Second Quarter Results</title>
+      <pubDate>Tue, 29 Jul 2025 11:30:00 GMT</pubDate>
+    </item>
+    <item>
+      <link>https://www.prnewswire.com/news-releases/boeing-announces-second-quarter-deliveries-302499301.html</link>
+      <title>Boeing Announces Second Quarter Deliveries</title>
+      <pubDate>Tue, 08 Jul 2025 11:30:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
 """
 
 
@@ -273,6 +295,46 @@ class EarningsPublicSourceTests(unittest.TestCase):
             EarningsProvider.PR_NEWSWIRE,
             by_provider,
         )
+
+    def test_routes_only_boeing_results_from_prnewswire(self) -> None:
+        watches = public_release_watches_from_rules(
+            (ba_q2_2026_shadow_rule(),)
+        )
+        by_provider = {
+            watch.provider: watch
+            for watch in watches
+        }
+        self.assertEqual(
+            set(by_provider),
+            {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.PR_NEWSWIRE,
+            },
+        )
+        press_wire = by_provider[EarningsProvider.PR_NEWSWIRE]
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _BA_PR_NEWSWIRE_FEED,
+                url=request.full_url,
+            ),
+        ).poll((press_wire,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(
+            candidate.provider,
+            EarningsProvider.PR_NEWSWIRE,
+        )
+        self.assertIn(
+            "boeing-reports-second-quarter-results",
+            candidate.source_url,
+        )
+        self.assertNotIn("deliveries", candidate.source_url)
 
     def test_rejects_non_array_wordpress_listing(self) -> None:
         company_watch = next(
