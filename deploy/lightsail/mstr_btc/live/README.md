@@ -148,9 +148,12 @@ executor_execute_called=false
 ```
 
 Warm preparation must create no execution claim. Claims are reserved
-atomically only after a matching persisted signal selects an intent and
-immediately before submission. A pre-signal restart is therefore safe. Any
-claim that appears before live startup is a blocker.
+atomically only after a matching persisted signal and immediately before
+submission. The executor reserves all six prepared alternatives in one
+transaction, submits the three selected templates, marks those claims
+`EXECUTED`, and marks the three unselected alternatives `EXPIRED`. A
+pre-signal restart is therefore safe. Any claim that appears before live
+startup is a blocker.
 
 ## Live transition
 
@@ -177,6 +180,33 @@ Before the signal, the claims table must remain empty for all three scopes.
 After a signal, a duplicate worker must lose the atomic claim race before any
 order submission. A crash after reservation remains fail-closed because the
 remote submission result can be ambiguous.
+
+## Post-execution verification
+
+After the three profiles report `COMPLETED`, inspect the three exact persisted
+order IDs through the authenticated read-only audit:
+
+```text
+python scripts/production_mstr_order_audit.py
+```
+
+The script never prints order IDs or secrets. Require `ok=true`,
+`order_count=3`, `all_terminal=true`, and three `FILLED` states with zero
+remaining quantity.
+
+Then run the database invariant:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/codexpoly_ssh.ps1 `
+  -StdinSqlFile `
+    deploy/lightsail/mstr_btc/live/003_verify_mstr_post_execution.sql `
+  sudo -n /usr/local/sbin/codexpoly-production-migrate
+```
+
+It requires one accepted SEC fact, six terminal claims
+(`3 EXECUTED + 3 EXPIRED`), three selected `NO` submissions at their
+tick-aligned prices, and terminal supervision state.
 
 ## Fail-closed disarm
 
