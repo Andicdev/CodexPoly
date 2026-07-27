@@ -29,6 +29,8 @@ class LightsailBoeingPressWireSeedTests(unittest.TestCase):
         self.assertIn('"provider": "prnewswire"', text)
         self.assertIn("www.prnewswire.com", text)
         self.assertIn("jsonb_set", text)
+        self.assertIn("2026-07-28 09:45:00+00", text)
+        self.assertIn("2026-07-28 10:00:00+00", text)
         self.assertIn("profile.status = 'disabled'", text)
         self.assertIn("schedule.state = 'pending'", text)
         self.assertNotIn("update resolution_execution_profiles", text)
@@ -42,6 +44,8 @@ class LightsailBoeingPressWireSeedTests(unittest.TestCase):
         text = _CHECK.read_text(encoding="utf-8").lower()
 
         self.assertIn("begin transaction read only", text)
+        self.assertIn("2026-07-28 09:45:00+00", text)
+        self.assertIn("2026-07-28 10:00:00+00", text)
         self.assertIn("a ba execution claim already exists", text)
         self.assertIn("an active ba order group already exists", text)
         self.assertNotIn("insert into", text)

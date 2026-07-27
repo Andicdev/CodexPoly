@@ -38,7 +38,7 @@ BEGIN
           '0x9073468de3e2675f39232dfa39ec131ccb5d181807ce1c56432ebb8c2843100f'
       AND rule.status = 'SHADOW'
       AND clock_timestamp() <
-          TIMESTAMPTZ '2026-07-28 08:45:00+00'
+          TIMESTAMPTZ '2026-07-28 09:45:00+00'
       AND EXISTS (
           SELECT 1
           FROM resolution_execution_profiles AS profile
@@ -59,9 +59,9 @@ BEGIN
             AND schedule.profile_key = 'earnings-ba-2026q2'
             AND schedule.automation_mode = 'AUTO_LIVE'
             AND schedule.preflight_at =
-                TIMESTAMPTZ '2026-07-28 08:45:00+00'
+                TIMESTAMPTZ '2026-07-28 09:45:00+00'
             AND schedule.activate_at =
-                TIMESTAMPTZ '2026-07-28 09:00:00+00'
+                TIMESTAMPTZ '2026-07-28 10:00:00+00'
             AND schedule.deactivate_at =
                 TIMESTAMPTZ '2026-07-28 17:00:00+00'
             AND schedule.state = 'PENDING'

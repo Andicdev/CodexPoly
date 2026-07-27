@@ -4,7 +4,7 @@ BEGIN TRANSACTION READ ONLY;
 
 DO $verify$
 BEGIN
-    IF now() >= TIMESTAMPTZ '2026-07-28 08:45:00+00' THEN
+    IF now() >= TIMESTAMPTZ '2026-07-28 09:45:00+00' THEN
         RAISE EXCEPTION 'BA preflight has already started';
     END IF;
 
@@ -37,6 +37,12 @@ BEGIN
           AND schedule.schedule_key =
               'schedule:earnings-ba-2026q2'
           AND schedule.automation_mode = 'AUTO_LIVE'
+          AND schedule.preflight_at =
+              TIMESTAMPTZ '2026-07-28 09:45:00+00'
+          AND schedule.activate_at =
+              TIMESTAMPTZ '2026-07-28 10:00:00+00'
+          AND schedule.deactivate_at =
+              TIMESTAMPTZ '2026-07-28 17:00:00+00'
           AND schedule.state = 'PENDING'
     ) THEN
         RAISE EXCEPTION 'BA PR Newswire source is not safely configured';
