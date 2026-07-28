@@ -14,12 +14,18 @@ Neither Compose file publishes a host port. PostgreSQL is available only as
 `postgres:5432` to containers that explicitly join the matching internal
 network.
 
-## Database and roles
+## Databases and roles
 
-- Database: `codexpoly`
+- Core database: `codexpoly`
+- Isolated neg-risk strategy database: `codexpoly_neg_risk`
 - Administrator and migration role: `codexpoly_admin`
 - Runtime role: `codexpoly_app`
 - Application tables: intentionally not created by infrastructure setup
+
+Both database names exist independently in staging and production. The
+neg-risk database starts empty: its application schema and services belong to
+the separate strategy development task, and live trading must remain disabled
+until its preflight is complete.
 
 `codexpoly_app` is not a superuser and cannot create databases or roles.
 Tables created by `codexpoly_admin` inherit default CRUD and sequence
@@ -106,7 +112,8 @@ migration is committed.
 
 ## Backups
 
-Production logical backups run daily through
+Production logical backups of both `codexpoly` and `codexpoly_neg_risk` run
+daily through
 `codexpoly-postgres-backup.timer` and are retained for 14 days:
 
 ```text

@@ -20,8 +20,11 @@ esac
 umask 077
 install -d -m 0700 "${backup_directory}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-temporary_file="$(mktemp "${backup_directory}/.${environment_name}.XXXXXX")"
-destination="${backup_directory}/codexpoly-${timestamp}.dump"
+temporary_file=""
+readonly database_names=(
+    codexpoly
+    codexpoly_neg_risk
+)
 
 cleanup() {
     if [[ -n "${temporary_file:-}" && -e "${temporary_file}" ]]; then
@@ -30,23 +33,36 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-docker compose \
-    -f "${compose_file}" \
-    exec -T postgres \
-    pg_dump \
-    --username codexpoly_admin \
-    --dbname codexpoly \
-    --format custom \
-    --no-owner \
-    --file - >"${temporary_file}"
+for database_name in "${database_names[@]}"; do
+    temporary_file="$(
+        mktemp \
+            "${backup_directory}/.${environment_name}-${database_name}.XXXXXX"
+    )"
+    destination="${backup_directory}/${database_name}-${timestamp}.dump"
 
-chmod 0600 "${temporary_file}"
-mv -- "${temporary_file}" "${destination}"
-temporary_file=""
+    docker compose \
+        -f "${compose_file}" \
+        exec -T postgres \
+        pg_dump \
+        --username codexpoly_admin \
+        --dbname "${database_name}" \
+        --format custom \
+        --no-owner >"${temporary_file}"
+
+    if [[ ! -s "${temporary_file}" ]]; then
+        printf 'PostgreSQL backup is empty for %s (%s).\n' \
+            "${environment_name}" "${database_name}" >&2
+        exit 1
+    fi
+
+    chmod 0600 "${temporary_file}"
+    mv -- "${temporary_file}" "${destination}"
+    temporary_file=""
+done
 
 find "${backup_directory}" \
     -type f \
-    -name 'codexpoly-*.dump' \
+    -name 'codexpoly*.dump' \
     -mtime +14 \
     -delete
 
