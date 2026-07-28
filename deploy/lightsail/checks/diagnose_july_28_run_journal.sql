@@ -25,7 +25,8 @@ WHERE journal_key IN (
     'earnings:IVZ:2026Q2:2026-07-28',
     'earnings:PYPL:2026Q2:2026-07-28',
     'earnings:JBLU:2026Q2:2026-07-28',
-    'earnings:SPGI:2026Q2:2026-07-28'
+    'earnings:SPGI:2026Q2:2026-07-28',
+    'earnings:BA:2026Q2:2026-07-28'
 )
 ORDER BY journal_key;
 

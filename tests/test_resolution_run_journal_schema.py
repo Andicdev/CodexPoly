@@ -60,6 +60,13 @@ _SPGI_ERROR = (
     / "live"
     / "012_record_spgi_run_journal_error.sql"
 )
+_BA_RUN = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "013_record_and_complete_ba_run.sql"
+)
 
 
 class ResolutionRunJournalSchemaTests(unittest.TestCase):
@@ -184,6 +191,19 @@ class ResolutionRunJournalSchemaTests(unittest.TestCase):
         self.assertNotIn("UPDATE EARNINGS_MARKET_RULES", upper)
         self.assertNotIn("DELETE FROM", upper)
         self.assertNotIn("CANCEL", upper)
+
+    def test_ba_run_records_no_outcome_and_leaves_order_open(self) -> None:
+        text = _BA_RUN.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("'EARNINGS:BA:2026Q2'", upper)
+        self.assertIn("SELECTED_OUTCOME = 'NO'", upper)
+        self.assertIn("OVERALL_RESULT = 'LATENCY_MISS'", upper)
+        self.assertIn("'ACCEPTED_ORDER_LEFT_UNCHANGED', TRUE", upper)
+        self.assertNotIn("UPDATE RESOLUTION_ORDER_GROUP_ORDERS", upper)
+        self.assertNotIn("UPDATE RESOLUTION_ORDER_GROUPS", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL_ORDERS", upper)
 
 
 if __name__ == "__main__":

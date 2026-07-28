@@ -20,7 +20,8 @@ WHERE groups.template_id IN (
     'numeric_threshold:earnings-rcl-2026q2:YES',
     'numeric_threshold:earnings-ko-2026q2:YES',
     'numeric_threshold:earnings-pypl-2026q2:YES',
-    'numeric_threshold:earnings-jblu-2026q2:YES'
+    'numeric_threshold:earnings-jblu-2026q2:YES',
+    'numeric_threshold:earnings-ba-2026q2:NO'
 )
 ORDER BY observations.observed_at, groups.template_id;
 
