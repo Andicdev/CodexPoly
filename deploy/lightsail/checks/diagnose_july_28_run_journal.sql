@@ -20,7 +20,9 @@ FROM resolution_run_journal
 WHERE journal_key IN (
     'earnings:UPS:2026Q2:2026-07-28',
     'earnings:HLT:2026Q2:2026-07-28',
-    'earnings:RCL:2026Q2:2026-07-28'
+    'earnings:RCL:2026Q2:2026-07-28',
+    'earnings:KO:2026Q2:2026-07-28',
+    'earnings:IVZ:2026Q2:2026-07-28'
 )
 ORDER BY journal_key;
 

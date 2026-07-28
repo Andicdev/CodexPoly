@@ -1,13 +1,18 @@
 BEGIN TRANSACTION READ ONLY;
 
 SELECT format(
-    'event=%s:%s:%s:filed=%s:received=%s:created=%s:source=%s',
+    'event=%s:%s:%s:filed=%s:received=%s:created=%s:error=%s:source=%s',
     ticker,
     provider,
     status,
     filed_at,
     received_at,
     created_at,
+    CASE
+        WHEN error IS NULL THEN 'none'
+        WHEN error ~ '^[a-z0-9_]+$' THEN error
+        ELSE 'redacted'
+    END,
     source_url
 )
 FROM earnings_source_events

@@ -18,6 +18,20 @@ _BACKFILL = (
     / "live"
     / "006_backfill_july_28_run_journal.sql"
 )
+_KO_IVZ = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "007_record_ko_ivz_run_journal.sql"
+)
+_KO_COMPLETE = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "008_complete_ko_premarket_profile.sql"
+)
 
 
 class ResolutionRunJournalSchemaTests(unittest.TestCase):
@@ -62,6 +76,31 @@ class ResolutionRunJournalSchemaTests(unittest.TestCase):
         self.assertIn("MATCHED_QUANTITY", upper)
         self.assertIn("ON CONFLICT (JOURNAL_KEY) DO UPDATE", upper)
         self.assertNotIn("UPDATE RESOLUTION_EXECUTION_CLAIMS", upper)
+        self.assertNotIn("RESOLUTION_ORDER_GROUP", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL", upper)
+
+    def test_ko_ivz_followup_records_reprice_and_parser_error(self) -> None:
+        text = _KO_IVZ.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("'EARNINGS:KO:2026Q2'", upper)
+        self.assertIn("'EARNINGS:IVZ:2026Q2'", upper)
+        self.assertIn("'DOCUMENT_ENCODING_INVALID'", upper)
+        self.assertIn("'CURRENT_EFFECTIVE_PRICE'", upper)
+        self.assertIn("'REPRICE_COUNT'", upper)
+        self.assertIn("'RECOVERY_PENDING'", upper)
+        self.assertNotIn("UPDATE RESOLUTION_EXECUTION_CLAIMS", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL", upper)
+
+    def test_ko_completion_does_not_touch_accepted_order(self) -> None:
+        text = _KO_COMPLETE.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("AUTOMATION_MODE = 'MANUAL'", upper)
+        self.assertIn("STATE = 'EXPIRED'", upper)
+        self.assertIn("'ACCEPTED_ORDER_LEFT_UNCHANGED'", upper)
         self.assertNotIn("RESOLUTION_ORDER_GROUP", upper)
         self.assertNotIn("DELETE FROM", upper)
         self.assertNotIn("CANCEL", upper)
