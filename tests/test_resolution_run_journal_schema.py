@@ -46,6 +46,13 @@ _PYPL_JBLU_COMPLETE = (
     / "live"
     / "010_complete_pypl_jblu_premarket_profiles.sql"
 )
+_JBLU_PARTIAL_FILL = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "011_record_jblu_partial_fill.sql"
+)
 
 
 class ResolutionRunJournalSchemaTests(unittest.TestCase):
@@ -141,6 +148,21 @@ class ResolutionRunJournalSchemaTests(unittest.TestCase):
         self.assertNotIn("RESOLUTION_ORDER_GROUP", upper)
         self.assertNotIn("DELETE FROM", upper)
         self.assertNotIn("CANCEL", upper)
+
+    def test_jblu_partial_fill_is_success_with_slow_remainder(self) -> None:
+        text = _JBLU_PARTIAL_FILL.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("EXECUTION_STATUS = 'PARTIALLY_FILLED'", upper)
+        self.assertIn("OVERALL_RESULT = 'SUCCESS'", upper)
+        self.assertIn("LATENCY_STATUS = 'TOO_SLOW'", upper)
+        self.assertIn("'PARTIAL_FILL_OBSERVED'", upper)
+        self.assertIn("MATCHED_QUANTITY = 16", upper)
+        self.assertIn("REMAINING_QUANTITY = 34", upper)
+        self.assertNotIn("UPDATE RESOLUTION_ORDER_GROUP_ORDERS", upper)
+        self.assertNotIn("UPDATE RESOLUTION_ORDER_GROUPS", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL_ORDERS", upper)
 
 
 if __name__ == "__main__":
