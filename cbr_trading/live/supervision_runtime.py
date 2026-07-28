@@ -121,6 +121,11 @@ class OrderSupervisionRuntime:
         self._idle_release.set()
         self._notify()
 
+    def notify_watch_set_changed(self) -> None:
+        """Wake the runtime after a durable order-group registration."""
+
+        self._notify()
+
     def wait(self, timeout: float | None = None) -> None:
         thread = self._thread
         if thread is None:
@@ -193,6 +198,10 @@ class OrderSupervisionRuntime:
         next_reconciliation = 0.0
         try:
             while not self._stop_requested.is_set():
+                # Clear before loading durable state. A registration wakeup
+                # that arrives during the load then remains set and forces an
+                # immediate second pass instead of being lost.
+                wake.clear()
                 now = loop.time()
                 if now >= next_reconciliation:
                     await self._reconcile()
@@ -260,7 +269,6 @@ class OrderSupervisionRuntime:
                         next_reconciliation - loop.time(),
                     ),
                 )
-                wake.clear()
                 try:
                     await asyncio.wait_for(
                         wake.wait(),

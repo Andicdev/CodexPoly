@@ -78,6 +78,7 @@ _XML_BUILTIN_ENTITIES = frozenset(
 _PUBLIC_LISTING_KINDS = frozenset(
     {"html_listing", "rss", "wordpress_rest"}
 )
+_DEFAULT_RELEASE_LOOKBACK_HOURS = 48
 
 
 class PublicReleaseSourceError(RuntimeError):
@@ -98,6 +99,7 @@ class PublicReleaseWatch:
     title_all: tuple[str, ...]
     title_none: tuple[str, ...] = ()
     listing_utc_offset_minutes: int = 0
+    published_not_before: datetime | None = None
 
     def __post_init__(self) -> None:
         for name in ("scope_id", "ticker", "cik"):
@@ -158,6 +160,20 @@ class PublicReleaseWatch:
             "listing_utc_offset_minutes",
             listing_utc_offset_minutes,
         )
+        published_not_before = self.published_not_before
+        if (
+            published_not_before is not None
+            and published_not_before.tzinfo is None
+        ):
+            raise ValueError(
+                "published_not_before must be timezone-aware"
+            )
+        if published_not_before is not None:
+            object.__setattr__(
+                self,
+                "published_not_before",
+                published_not_before.astimezone(timezone.utc),
+            )
 
 
 @dataclass(frozen=True)
@@ -212,6 +228,16 @@ def public_release_watches_from_rules(
                 raise ValueError(
                     f"{policy_name} provider is unsupported"
                 ) from None
+            lookback_hours = int(
+                raw_policy.get(
+                    "release_lookback_hours",
+                    _DEFAULT_RELEASE_LOOKBACK_HOURS,
+                )
+            )
+            if not 1 <= lookback_hours <= 168:
+                raise ValueError(
+                    f"{policy_name} release lookback is invalid"
+                )
             watches.append(
                 PublicReleaseWatch(
                     scope_id=rule.scope_id,
@@ -236,6 +262,12 @@ def public_release_watches_from_rules(
                             "listing_utc_offset_minutes",
                             0,
                         )
+                    ),
+                    published_not_before=(
+                        rule.estimated_release_at.astimezone(
+                            timezone.utc
+                        )
+                        - timedelta(hours=lookback_hours)
                     ),
                 )
             )
@@ -358,6 +390,12 @@ class PublicReleaseFeedClient:
                 successes += 1
                 for watch in feed_watches:
                     for item in items:
+                        if (
+                            watch.published_not_before is not None
+                            and item.published_at
+                            < watch.published_not_before
+                        ):
+                            continue
                         if not _title_matches(item.title, watch):
                             continue
                         try:

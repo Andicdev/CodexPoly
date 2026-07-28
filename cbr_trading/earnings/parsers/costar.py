@@ -95,7 +95,7 @@ def csgp_q2_2026_shadow_rule() -> EarningsMarketRule:
                 "allowed_document_hosts": [
                     "investors.costargroup.com",
                 ],
-                "title_all": ["CoStar Group"],
+                "title_all": ["CoStar Group", "Q2"],
                 "title_none": [
                     "to report",
                     "will report",

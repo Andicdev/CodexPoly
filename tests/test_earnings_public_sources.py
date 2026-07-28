@@ -136,7 +136,7 @@ _BA_PR_NEWSWIRE_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
       </guid>
       <link>https://www.prnewswire.com/news-releases/boeing-reports-second-quarter-results-302516005.html</link>
       <title>Boeing Reports Second Quarter Results</title>
-      <pubDate>Tue, 29 Jul 2025 11:30:00 GMT</pubDate>
+      <pubDate>Tue, 28 Jul 2026 11:30:00 GMT</pubDate>
     </item>
     <item>
       <link>https://www.prnewswire.com/news-releases/boeing-announces-second-quarter-deliveries-302499301.html</link>
@@ -228,6 +228,34 @@ class EarningsPublicSourceTests(unittest.TestCase):
         self.assertTrue(
             all(watch.kind == "rss" for watch in self.watches)
         )
+        self.assertTrue(
+            all(
+                watch.published_not_before is not None
+                for watch in self.watches
+            )
+        )
+
+    def test_ignores_matching_release_older_than_rule_lookback(
+        self,
+    ) -> None:
+        company_watch = self.by_provider[EarningsProvider.COMPANY_IR]
+        stale_feed = _IR_FEED.replace(
+            b"Mon, 27 Jul 2026 16:00:00 -0400",
+            b"Wed, 01 Jul 2026 16:00:00 -0400",
+        )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                stale_feed,
+                url=request.full_url,
+            ),
+        ).poll((company_watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(result.candidates, ())
 
     def test_routes_woodward_wordpress_candidate(self) -> None:
         watches = public_release_watches_from_rules(

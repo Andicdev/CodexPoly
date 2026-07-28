@@ -68,7 +68,9 @@ that set is empty. Each transport persists its own source event and validated
 fact; all of them resolve through the same event-scoped earnings signal.
 Different feeds are polled concurrently so a slow IR host cannot delay its
 wire peer. A failing feed receives its own bounded exponential retry backoff
-while healthy feeds retain the configured polling interval. The RSS parser
+while healthy feeds retain the configured polling interval. Production uses
+a half-second cadence only while at least one reviewed earnings profile is
+enabled and in-window. The RSS parser
 accepts known HTML character entities emitted by common IR platforms while
 continuing to reject DTD and entity declarations. Responses with a valid
 `Content-Length` are read to that exact bound instead of waiting for a broken

@@ -65,7 +65,8 @@ VALUES (
                 "Results"
             ],
             "title_none": [
-                "to report"
+                "to report",
+                "conference call"
             ]
         },
         "press_wire": {
@@ -81,7 +82,8 @@ VALUES (
                 "Results"
             ],
             "title_none": [
-                "to report"
+                "to report",
+                "conference call"
             ]
         }
     }'::jsonb,

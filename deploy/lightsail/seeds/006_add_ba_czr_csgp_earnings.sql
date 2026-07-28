@@ -151,7 +151,7 @@ VALUES
             "feed_url": "https://investors.costargroup.com/rss/news-releases.xml",
             "kind": "rss",
             "provider": "company_ir",
-            "title_all": ["CoStar Group"],
+            "title_all": ["CoStar Group", "Q2"],
             "title_none": [
                 "to report",
                 "will report",

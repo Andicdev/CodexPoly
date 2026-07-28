@@ -157,6 +157,45 @@ class SupervisedPreparedExecutorTests(unittest.TestCase):
             [(result.handle, template.lifecycle_policy)],
         )
 
+    def test_wakes_watch_runtime_after_durable_registration(self) -> None:
+        template = _template()
+        result = _result(template)
+        supervisor = _Supervisor()
+        wake_calls: list[str] = []
+        executor = SupervisedPreparedExecutor(
+            _Delegate(result),
+            supervisor=supervisor,
+            on_registered=lambda: wake_calls.append("wake"),
+        )
+
+        actual = executor.execute(
+            (result.intent,),
+            signal=_signal(),
+        )
+
+        self.assertEqual(actual, (result,))
+        self.assertEqual(wake_calls, ["wake"])
+
+    def test_wakeup_failure_keeps_accepted_order_result(self) -> None:
+        template = _template()
+        result = _result(template)
+
+        def fail_wakeup() -> None:
+            raise RuntimeError("wake failed")
+
+        executor = SupervisedPreparedExecutor(
+            _Delegate(result),
+            supervisor=_Supervisor(),
+            on_registered=fail_wakeup,
+        )
+
+        actual = executor.execute(
+            (result.intent,),
+            signal=_signal(),
+        )
+
+        self.assertEqual(actual, (result,))
+
     def test_keep_open_result_is_not_persisted_for_supervision(self) -> None:
         template = _template(policy=KeepOpenPolicy())
         result = _result(template)

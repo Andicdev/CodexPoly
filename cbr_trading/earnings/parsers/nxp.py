@@ -212,7 +212,7 @@ def nxpi_q2_2026_shadow_rule() -> EarningsMarketRule:
                     "Second Quarter 2026",
                     "Results",
                 ],
-                "title_none": ["to report"],
+                "title_none": ["to report", "conference call"],
             },
             "press_wire": {
                 "kind": "rss",
@@ -232,7 +232,7 @@ def nxpi_q2_2026_shadow_rule() -> EarningsMarketRule:
                     "Second Quarter 2026",
                     "Results",
                 ],
-                "title_none": ["to report"],
+                "title_none": ["to report", "conference call"],
             },
         },
         fallback_policy={

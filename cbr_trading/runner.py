@@ -244,6 +244,11 @@ def main() -> int:
                 SupervisedPreparedExecutor(
                     live_adapter,
                     supervisor=supervisor,
+                    on_registered=getattr(
+                        supervision_runtime,
+                        "notify_watch_set_changed",
+                        None,
+                    ),
                 )
                 if supervisor is not None
                 else live_adapter

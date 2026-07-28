@@ -573,6 +573,11 @@ class FedHostedResolutionWorker:
             return SupervisedPreparedExecutor(
                 delegate,
                 supervisor=self._supervisor,
+                on_registered=getattr(
+                    self._supervision_runtime,
+                    "notify_watch_set_changed",
+                    None,
+                ),
             )
         return delegate
 

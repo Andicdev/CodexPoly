@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Sequence
+from typing import Callable, Sequence
 
 from cbr_trading.domain.intents import (
     OrderIntent,
@@ -33,9 +33,11 @@ class SupervisedPreparedExecutor:
         delegate: PreparedExecutor,
         *,
         supervisor: OrderSupervisor,
+        on_registered: Callable[[], None] | None = None,
     ):
         self._delegate = delegate
         self._supervisor = supervisor
+        self._on_registered = on_registered
 
     def prepare(
         self,
@@ -55,6 +57,7 @@ class SupervisedPreparedExecutor:
             self._delegate.execute(intents, signal=signal)
         )
         supervised: list[OrderExecutionResult] = []
+        registered = False
         for result in results:
             policy = result.intent.lifecycle_policy
             if (
@@ -73,6 +76,7 @@ class SupervisedPreparedExecutor:
                         result.handle,
                         policy=policy,
                     )
+                    registered = True
                 except Exception as exc:
                     supervised.append(
                         replace(
@@ -86,6 +90,14 @@ class SupervisedPreparedExecutor:
                     )
                     continue
             supervised.append(result)
+        if registered and self._on_registered is not None:
+            # Registration is durable. A failed best-effort wakeup must not
+            # turn an accepted live order into an ambiguous execution; the
+            # periodic watch refresh remains the fallback.
+            try:
+                self._on_registered()
+            except Exception:
+                pass
         return tuple(supervised)
 
     def close(self) -> None:

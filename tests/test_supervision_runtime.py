@@ -179,6 +179,36 @@ class OrderSupervisionRuntimeTests(unittest.TestCase):
         runtime.wait(timeout=2)
         self.assertEqual(supervisor.close_calls, 1)
 
+    def test_registration_notification_bypasses_long_refresh_interval(
+        self,
+    ) -> None:
+        repository = _Repository()
+        supervisor = _Supervisor()
+        factory = _ChannelFactory()
+        runtime = OrderSupervisionRuntime(
+            repository=repository,
+            supervisor=supervisor,
+            watch_refresh_interval=30,
+            reconciliation_interval=30,
+            channel_factory=factory,
+        )
+
+        runtime.start()
+        initial_load_calls = repository.load_calls
+        repository.update(
+            watches=(_watch("asset-yes"),),
+            pending=True,
+        )
+        runtime.notify_watch_set_changed()
+
+        _wait_for(lambda: len(factory.channels) == 1)
+        self.assertTrue(factory.channels[0].started.wait(1))
+        self.assertGreater(repository.load_calls, initial_load_calls)
+
+        repository.update(watches=(), pending=False)
+        runtime.release_when_idle()
+        runtime.wait(timeout=2)
+
     def test_restarts_subscription_handle_that_ends(self) -> None:
         repository = _Repository()
         repository.update(
