@@ -77,6 +77,16 @@ continuing to reject DTD and entity declarations. Responses with a valid
 CDN connection close. The NVTS company feed uses the official
 `navitassemi.gcs-web.com` endpoint rather than the unstable vanity-host alias.
 
+`EARNINGS_SEC_CURRENT_POLL_ENABLED=true` adds the official
+`data.sec.gov/submissions/CIK##########.json` API as a low-latency fallback to
+the always-connected SEC-API WebSocket. It is gated by the same enabled,
+in-window earnings scopes and makes no SEC HTTP request while that set is
+empty. Requests use conditional validators and a shared five-request-per-
+second pacer, leaving headroom below the SEC ten-request-per-second
+fair-access ceiling. A new initial `8-K` must contain Item 2.02, fall inside
+the bounded release lookback, and expose exactly one `EX-99.1` on the official
+filing-detail page before it enters the existing SEC router and parser.
+
 The resolution worker also owns the checked-in July 2026 FOMC decision
 source. It makes no Federal Reserve request unless at least one in-window
 `fed_fomc` profile is enabled. While active, it races the Board statement,
