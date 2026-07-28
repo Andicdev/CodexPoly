@@ -468,8 +468,26 @@ def _sec_rule(
     )
 
 
+def _businesswire_policy(
+    *,
+    title_all: tuple[str, ...],
+    title_none: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "allowed_document_hosts": ["www.businesswire.com"],
+        "feed_url": (
+            "https://feed.businesswire.com/rss/home/"
+            "?rss=G1QFDERJXkJeGVtQWw=="
+        ),
+        "kind": "rss",
+        "provider": "businesswire",
+        "title_all": list(title_all),
+        "title_none": list(title_none),
+    }
+
+
 def sofi_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="SOFI",
         cik=SOFI_CIK,
         fiscal_quarter=2,
@@ -485,10 +503,24 @@ def sofi_q2_2026_shadow_rule() -> EarningsMarketRule:
         condition_id=SOFI_Q2_2026_CONDITION_ID,
         metric_selection="reported_gaap_diluted_eps",
     )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "press_wire": _businesswire_policy(
+                title_all=(
+                    "SoFi",
+                    "Reports Second Quarter",
+                    "2026",
+                ),
+                title_none=("Schedules",),
+            ),
+        },
+    )
 
 
 def pg_q4_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="PG",
         cik=PROCTER_GAMBLE_CIK,
         fiscal_quarter=4,
@@ -505,6 +537,21 @@ def pg_q4_2026_shadow_rule() -> EarningsMarketRule:
         metric_selection=(
             "quarterly_primary_headline_non_gaap_core_eps"
         ),
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "press_wire": _businesswire_policy(
+                title_all=(
+                    "P&G",
+                    "Fourth Quarter",
+                    "Fiscal Year 2026",
+                    "Results",
+                ),
+                title_none=("Webcast",),
+            ),
+        },
     )
 
 
@@ -601,7 +648,7 @@ def wing_q2_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def arcc_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="ARCC",
         cik=ARES_CAPITAL_CIK,
         fiscal_quarter=2,
@@ -616,6 +663,20 @@ def arcc_q2_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=ARES_CAPITAL_Q2_2026_CONDITION_ID,
         metric_selection="operating_results_core_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "press_wire": _businesswire_policy(
+                title_all=(
+                    "Ares Capital Corporation",
+                    "June 30, 2026",
+                    "Financial Results",
+                ),
+                title_none=("Schedules",),
+            ),
+        },
     )
 
 

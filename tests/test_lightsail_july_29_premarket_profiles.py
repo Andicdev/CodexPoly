@@ -55,9 +55,14 @@ class July29PremarketProfileSqlTests(unittest.TestCase):
             "https://ir.cbre.com/press-releases/rss",
             "https://humana.gcs-web.com/rss/news-releases.xml",
             "https://www.prnewswire.com/rss/news-releases-list.rss",
+            (
+                "https://feed.businesswire.com/rss/home/"
+                "?rss=G1QFDERJXkJeGVtQWw=="
+            ),
         ):
             self.assertIn(endpoint, text)
         self.assertIn('"provider": "globenewswire"', text)
+        self.assertIn('"provider": "businesswire"', text)
         self.assertIn('"provider": "sec_api"', text)
         self.assertIn('"provider": "sec"', text)
 

@@ -109,7 +109,20 @@ INSERT INTO july29_premarket_additions VALUES
     'operating_results_core_eps',
     'https://arcc.ares.com/news/ares-capital-corporation-schedules-earnings-release-for-the-second-quarter-ended-june-30-2026/e249695c-8669-49db-9d91-391c9212f9b2',
     TIMESTAMPTZ '2026-07-29 16:00:00+00',
-    '{}'::jsonb,
+    '{
+        "press_wire": {
+            "allowed_document_hosts": ["www.businesswire.com"],
+            "feed_url": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtQWw==",
+            "kind": "rss",
+            "provider": "businesswire",
+            "title_all": [
+                "Ares Capital Corporation",
+                "June 30, 2026",
+                "Financial Results"
+            ],
+            "title_none": ["Schedules"]
+        }
+    }'::jsonb,
     '[
         {
             "delivery": "websocket",
@@ -120,6 +133,11 @@ INSERT INTO july29_premarket_additions VALUES
             "delivery": "polling",
             "provider": "sec",
             "status": "available"
+        },
+        {
+            "delivery": "rss",
+            "provider": "businesswire",
+            "status": "verified"
         }
     ]'::jsonb
 ),
@@ -644,6 +662,55 @@ WHERE rule_key = 'hum-2026q2-nongaap-eps-7pt00'
   AND scope_id = 'earnings:HUM:2026Q2'
   AND status = 'SHADOW';
 
+UPDATE earnings_market_rules
+SET
+    source_policy = jsonb_set(
+        source_policy,
+        '{press_wire}',
+        '{
+            "allowed_document_hosts": ["www.businesswire.com"],
+            "feed_url": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtQWw==",
+            "kind": "rss",
+            "provider": "businesswire",
+            "title_all": [
+                "SoFi",
+                "Reports Second Quarter",
+                "2026"
+            ],
+            "title_none": ["Schedules"]
+        }'::jsonb,
+        true
+    ),
+    updated_at = now()
+WHERE rule_key = 'sofi-2026q2-gaap-eps-0pt11'
+  AND scope_id = 'earnings:SOFI:2026Q2'
+  AND status = 'SHADOW';
+
+UPDATE earnings_market_rules
+SET
+    source_policy = jsonb_set(
+        source_policy,
+        '{press_wire}',
+        '{
+            "allowed_document_hosts": ["www.businesswire.com"],
+            "feed_url": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtQWw==",
+            "kind": "rss",
+            "provider": "businesswire",
+            "title_all": [
+                "P&G",
+                "Fourth Quarter",
+                "Fiscal Year 2026",
+                "Results"
+            ],
+            "title_none": ["Webcast"]
+        }'::jsonb,
+        true
+    ),
+    updated_at = now()
+WHERE rule_key = 'pg-2026q4-nongaap-eps-1pt41'
+  AND scope_id = 'earnings:PG:2026Q4'
+  AND status = 'SHADOW';
+
 UPDATE earnings_release_catalog
 SET
     source_options = '[
@@ -667,6 +734,33 @@ SET
     verified_at = now(),
     updated_at = now()
 WHERE event_key = 'HUM:2026-07-29';
+
+UPDATE earnings_release_catalog
+SET
+    source_options = '[
+        {
+            "delivery": "websocket",
+            "provider": "sec_api",
+            "status": "available"
+        },
+        {
+            "delivery": "polling",
+            "provider": "sec",
+            "status": "available"
+        },
+        {
+            "delivery": "rss",
+            "provider": "businesswire",
+            "status": "verified"
+        }
+    ]'::jsonb,
+    notes = 'SEC WebSocket, official SEC polling, and Business Wire RSS prepared.',
+    verified_at = now(),
+    updated_at = now()
+WHERE event_key IN (
+    'SOFI:2026-07-29',
+    'PG:2026-07-29'
+);
 
 DO $verification$
 DECLARE
@@ -764,12 +858,24 @@ BEGIN
     IF (
         SELECT count(*)
         FROM earnings_market_rules
-        WHERE rule_key = 'hum-2026q2-nongaap-eps-7pt00'
-          AND source_policy -> 'company_ir' ->> 'provider' =
-              'company_ir'
-          AND source_policy -> 'company_ir' ->> 'kind' = 'rss'
-    ) <> 1 THEN
-        RAISE EXCEPTION 'Humana company IR source mismatch';
+        WHERE (
+            rule_key = 'hum-2026q2-nongaap-eps-7pt00'
+            AND source_policy -> 'company_ir' ->> 'provider' =
+                'company_ir'
+            AND source_policy -> 'company_ir' ->> 'kind' = 'rss'
+        )
+        OR (
+            rule_key IN (
+                'sofi-2026q2-gaap-eps-0pt11',
+                'pg-2026q4-nongaap-eps-1pt41',
+                'arcc-2026q2-nongaap-eps-0pt47'
+            )
+            AND source_policy -> 'press_wire' ->> 'provider' =
+                'businesswire'
+            AND source_policy -> 'press_wire' ->> 'kind' = 'rss'
+        )
+    ) <> 4 THEN
+        RAISE EXCEPTION 'July 29 added public source mismatch';
     END IF;
 
     SELECT SUM(

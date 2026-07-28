@@ -42,6 +42,15 @@ BEGIN
                 'company_ir'
         )
         OR (
+            rule_key IN (
+                'sofi-2026q2-gaap-eps-0pt11',
+                'pg-2026q4-nongaap-eps-1pt41',
+                'arcc-2026q2-nongaap-eps-0pt47'
+            )
+            AND source_policy -> 'press_wire' ->> 'provider' =
+                'businesswire'
+        )
+        OR (
             rule_key = 'wing-2026q2-gaap-eps-1pt03'
             AND source_policy ? 'company_ir'
             AND source_policy ? 'press_wire'
@@ -64,7 +73,7 @@ BEGIN
             rule_key = 'pag-2026q2-gaap-eps-3pt39'
             AND source_policy ? 'press_wire'
         )
-    ) <> 6 THEN
+    ) <> 9 THEN
         RAISE EXCEPTION 'July 29 public source set mismatch';
     END IF;
 

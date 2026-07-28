@@ -18,6 +18,8 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     hum_q2_2026_shadow_rule,
     iart_q2_2026_shadow_rule,
     pag_q2_2026_shadow_rule,
+    pg_q4_2026_shadow_rule,
+    sofi_q2_2026_shadow_rule,
     wing_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.navitas import (
@@ -174,6 +176,49 @@ _HLT_STORIES_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
   </channel>
 </rss>
 """
+_BUSINESS_WIRE_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid isPermaLink="true">
+        https://www.businesswire.com/news/home/arcc-q2-2026
+      </guid>
+      <link>https://www.businesswire.com/news/home/arcc-q2-2026</link>
+      <title>
+        Ares Capital Corporation Announces June 30, 2026 Financial
+        Results and Declares Third Quarter 2026 Dividend
+      </title>
+      <pubDate>Wed, 29 Jul 2026 11:00:01 GMT</pubDate>
+    </item>
+    <item>
+      <guid isPermaLink="true">
+        https://www.businesswire.com/news/home/sofi-q2-2026
+      </guid>
+      <link>https://www.businesswire.com/news/home/sofi-q2-2026</link>
+      <title>SoFi Reports Second Quarter 2026 Results</title>
+      <pubDate>Wed, 29 Jul 2026 11:00:02 GMT</pubDate>
+    </item>
+    <item>
+      <guid isPermaLink="true">
+        https://www.businesswire.com/news/home/pg-q4-2026
+      </guid>
+      <link>https://www.businesswire.com/news/home/pg-q4-2026</link>
+      <title>
+        P&amp;G Announces Fourth Quarter and Fiscal Year 2026 Results
+      </title>
+      <pubDate>Wed, 29 Jul 2026 11:00:03 GMT</pubDate>
+    </item>
+    <item>
+      <guid isPermaLink="true">
+        https://www.businesswire.com/news/home/sofi-schedule
+      </guid>
+      <link>https://www.businesswire.com/news/home/sofi-schedule</link>
+      <title>SoFi Schedules Second Quarter 2026 Results Call</title>
+      <pubDate>Wed, 01 Jul 2026 12:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
 
 
 class _Response:
@@ -250,7 +295,7 @@ class EarningsPublicSourceTests(unittest.TestCase):
                 EarningsProvider.COMPANY_IR,
                 EarningsProvider.PR_NEWSWIRE,
             },
-            "ARCC": set(),
+            "ARCC": {EarningsProvider.BUSINESS_WIRE},
             "IART": {
                 EarningsProvider.COMPANY_IR,
                 EarningsProvider.GLOBE_NEWSWIRE,
@@ -262,6 +307,8 @@ class EarningsPublicSourceTests(unittest.TestCase):
             "CBRE": {EarningsProvider.COMPANY_IR},
             "PAG": {EarningsProvider.PR_NEWSWIRE},
             "HUM": {EarningsProvider.COMPANY_IR},
+            "SOFI": {EarningsProvider.BUSINESS_WIRE},
+            "PG": {EarningsProvider.BUSINESS_WIRE},
         }
         rules = (
             wing_q2_2026_shadow_rule(),
@@ -271,6 +318,8 @@ class EarningsPublicSourceTests(unittest.TestCase):
             cbre_q2_2026_shadow_rule(),
             pag_q2_2026_shadow_rule(),
             hum_q2_2026_shadow_rule(),
+            sofi_q2_2026_shadow_rule(),
+            pg_q4_2026_shadow_rule(),
         )
 
         for rule in rules:
@@ -469,6 +518,48 @@ class EarningsPublicSourceTests(unittest.TestCase):
             candidate.source_url,
         )
         self.assertNotIn("earnings-date", candidate.source_url)
+
+    def test_businesswire_feed_routes_each_premarket_issuer(self) -> None:
+        rules = (
+            arcc_q2_2026_shadow_rule(),
+            sofi_q2_2026_shadow_rule(),
+            pg_q4_2026_shadow_rule(),
+        )
+        received_at = datetime(
+            2026,
+            7,
+            29,
+            11,
+            0,
+            5,
+            tzinfo=timezone.utc,
+        )
+
+        for rule in rules:
+            with self.subTest(ticker=rule.ticker):
+                watches = public_release_watches_from_rules((rule,))
+                self.assertEqual(len(watches), 1)
+                watch = watches[0]
+                self.assertEqual(
+                    watch.provider,
+                    EarningsProvider.BUSINESS_WIRE,
+                )
+                result = PublicReleaseFeedClient(
+                    user_agent="CodexPoly test@example.com",
+                    timeout=3,
+                    opener=lambda request, **_kwargs: _Response(
+                        _BUSINESS_WIRE_FEED,
+                        url=request.full_url,
+                    ),
+                ).poll((watch,), received_at=received_at)
+
+                self.assertEqual(result.success_count, 1)
+                self.assertEqual(result.error_count, 0)
+                self.assertEqual(len(result.candidates), 1)
+                self.assertIn(
+                    rule.ticker.casefold(),
+                    result.candidates[0].source_url.casefold(),
+                )
 
     def test_rejects_non_array_wordpress_listing(self) -> None:
         company_watch = next(
