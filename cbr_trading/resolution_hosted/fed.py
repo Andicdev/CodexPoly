@@ -236,6 +236,13 @@ class FedHostedResolutionWorker:
                         or "executor_preparation_not_ready"
                     )
                     failures.append(f"{profile.profile_key}: {error}")
+                    self._logger.error(
+                        "Hosted FED preparation failed "
+                        "profile=%s scope=%s error=%s",
+                        profile.profile_key,
+                        profile.scope_id,
+                        error,
+                    )
                     results.append(
                         HostedPreparation(
                             profile_key=profile.profile_key,
@@ -266,6 +273,13 @@ class FedHostedResolutionWorker:
             except Exception as exc:
                 error = redact_exception(exc)
                 failures.append(f"{profile.profile_key}: {error}")
+                self._logger.error(
+                    "Hosted FED preparation failed "
+                    "profile=%s scope=%s error=%s",
+                    profile.profile_key,
+                    profile.scope_id,
+                    error,
+                )
                 results.append(
                     HostedPreparation(
                         profile_key=profile.profile_key,

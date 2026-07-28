@@ -118,6 +118,7 @@ class SqlAlchemyTradingAccountRepository:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
+                from sqlalchemy.pool import NullPool
             except ImportError as exc:
                 raise TradingAccountLoadError(
                     "Account loading requires SQLAlchemy and a "
@@ -131,6 +132,7 @@ class SqlAlchemyTradingAccountRepository:
                     pool_recycle=300,
                     pool_reset_on_return="rollback",
                     hide_parameters=True,
+                    poolclass=NullPool,
                 )
                 session_factory = sessionmaker(
                     bind=self._engine,
@@ -321,6 +323,7 @@ class SqlAlchemyRuntimeSecretTradingAccountRepository:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
+                from sqlalchemy.pool import NullPool
             except ImportError as exc:
                 raise TradingAccountLoadError(
                     "Account loading requires SQLAlchemy and a "
@@ -333,6 +336,7 @@ class SqlAlchemyRuntimeSecretTradingAccountRepository:
                     pool_recycle=300,
                     pool_reset_on_return="rollback",
                     hide_parameters=True,
+                    poolclass=NullPool,
                 )
                 session_factory = sessionmaker(
                     bind=self._engine,

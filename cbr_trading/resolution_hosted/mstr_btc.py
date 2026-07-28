@@ -246,6 +246,14 @@ class MstrBtcHostedResolutionWorker:
                     failures.append(
                         f"{profile.profile_key}: {error}"
                     )
+                    self._logger.error(
+                        "Hosted MSTR preparation failed "
+                        "profile=%s scope=%s rule=%s error=%s",
+                        profile.profile_key,
+                        profile.scope_id,
+                        rule.rule_key,
+                        error,
+                    )
                     results.append(
                         HostedPreparation(
                             profile_key=profile.profile_key,
@@ -283,6 +291,13 @@ class MstrBtcHostedResolutionWorker:
                 error = redact_exception(exc)
                 failures.append(
                     f"{profile.profile_key}: {error}"
+                )
+                self._logger.error(
+                    "Hosted MSTR preparation failed "
+                    "profile=%s scope=%s error=%s",
+                    profile.profile_key,
+                    profile.scope_id,
+                    error,
                 )
                 results.append(
                     HostedPreparation(

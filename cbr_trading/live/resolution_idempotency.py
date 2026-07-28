@@ -391,6 +391,7 @@ class SqlAlchemyResolutionExecutionLedger:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
+                from sqlalchemy.pool import NullPool
             except ImportError as exc:
                 raise ResolutionExecutionLedgerError(
                     "Resolution execution ledger requires SQLAlchemy "
@@ -403,6 +404,7 @@ class SqlAlchemyResolutionExecutionLedger:
                     pool_recycle=300,
                     pool_reset_on_return="rollback",
                     hide_parameters=True,
+                    poolclass=NullPool,
                 )
                 session_factory = sessionmaker(
                     bind=self._engine,

@@ -236,6 +236,14 @@ class EarningsHostedResolutionWorker:
                     failures.append(
                         f"{profile.profile_key}: {error}"
                     )
+                    self._logger.error(
+                        "Hosted earnings preparation failed "
+                        "profile=%s scope=%s ticker=%s error=%s",
+                        profile.profile_key,
+                        profile.scope_id,
+                        rule.ticker,
+                        error,
+                    )
                     results.append(
                         HostedPreparation(
                             profile_key=profile.profile_key,
@@ -273,6 +281,18 @@ class EarningsHostedResolutionWorker:
                 error = redact_exception(exc)
                 failures.append(
                     f"{profile.profile_key}: {error}"
+                )
+                self._logger.error(
+                    "Hosted earnings preparation failed "
+                    "profile=%s scope=%s ticker=%s error=%s",
+                    profile.profile_key,
+                    profile.scope_id,
+                    (
+                        rules_by_scope[profile.scope_id].ticker
+                        if profile.scope_id in rules_by_scope
+                        else "UNKNOWN"
+                    ),
+                    error,
                 )
                 results.append(
                     HostedPreparation(
