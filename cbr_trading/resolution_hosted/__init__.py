@@ -5,6 +5,9 @@ from cbr_trading.resolution_hosted.earnings import (
     HostedPreparation,
     HostedPollResult,
 )
+from cbr_trading.resolution_hosted.fed import (
+    FedHostedResolutionWorker,
+)
 from cbr_trading.resolution_hosted.mstr_btc import (
     MstrBtcHostedResolutionWorker,
 )
@@ -19,6 +22,7 @@ from cbr_trading.resolution_hosted.runtime_repository import (
 
 __all__ = [
     "EarningsHostedResolutionWorker",
+    "FedHostedResolutionWorker",
     "HostedPreparation",
     "HostedPollResult",
     "HostedResolutionMode",

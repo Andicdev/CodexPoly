@@ -15,6 +15,15 @@ from cbr_trading.sources.earnings import (
     EarningsResolutionSource,
     resolution_signal_from_earnings_fact,
 )
+from cbr_trading.sources.fed import (
+    FED_RATE_CHANGE_METRIC,
+    FED_SOURCE_NAME,
+    FedResolutionSource,
+    fed_signal_subject,
+    fed_rate_bucket,
+    normalize_fed_delta_bps,
+    resolution_signal_from_fed_observation,
+)
 from cbr_trading.sources.manual import ManualResolutionSource
 from cbr_trading.sources.mstr_btc import (
     MSTR_BTC_ACQUIRED_METRIC,
@@ -34,6 +43,9 @@ __all__ = [
     "EARNINGS_NON_GAAP_EPS_METRIC",
     "EARNINGS_SOURCE_NAME",
     "EarningsResolutionSource",
+    "FED_RATE_CHANGE_METRIC",
+    "FED_SOURCE_NAME",
+    "FedResolutionSource",
     "ManualResolutionSource",
     "MSTR_BTC_ACQUIRED_METRIC",
     "MSTR_BTC_SOLD_METRIC",
@@ -43,7 +55,11 @@ __all__ = [
     "cbr_signal_id_for_url",
     "resolution_signal_from_discovery",
     "resolution_signal_from_earnings_fact",
+    "resolution_signal_from_fed_observation",
     "resolution_signal_from_mstr_btc_fact",
     "mstr_btc_signal_metric",
     "mstr_btc_signal_subject",
+    "fed_rate_bucket",
+    "fed_signal_subject",
+    "normalize_fed_delta_bps",
 ]

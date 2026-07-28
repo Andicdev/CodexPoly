@@ -10,6 +10,9 @@ from decimal import Decimal, InvalidOperation
 
 from cbr_trading.earnings import SqlAlchemyEarningsStore
 from cbr_trading.mstr_btc import SqlAlchemyMstrBtcAuditStore
+from cbr_trading.notifications import (
+    SqlAlchemyNotificationOutboxStore,
+)
 from cbr_trading.orchestration import (
     SqlAlchemyResolutionProfileStore,
 )
@@ -18,6 +21,9 @@ from cbr_trading.profile_lifecycle import (
 )
 from cbr_trading.resolution_hosted.earnings import (
     EarningsHostedResolutionWorker,
+)
+from cbr_trading.resolution_hosted.fed import (
+    FedHostedResolutionWorker,
 )
 from cbr_trading.resolution_hosted.mstr_btc import (
     MstrBtcHostedResolutionWorker,
@@ -70,6 +76,12 @@ def main() -> int:
     mstr_profile_store = SqlAlchemyResolutionProfileStore(
         database_url=settings.database_url
     )
+    fed_profile_store = SqlAlchemyResolutionProfileStore(
+        database_url=settings.database_url
+    )
+    notification_outbox = SqlAlchemyNotificationOutboxStore(
+        database_url=settings.database_url
+    )
     runtime_store = SqlAlchemyResolutionRuntimeStore(
         database_url=settings.database_url
     )
@@ -94,11 +106,21 @@ def main() -> int:
             "cbr_trading.resolution_hosted.mstr_btc"
         ),
     )
+    fed_worker = FedHostedResolutionWorker(
+        settings=settings,
+        profile_store=fed_profile_store,
+        lifecycle_store=lifecycle_store,
+        notification_outbox=notification_outbox,
+        logger=logging.getLogger(
+            "cbr_trading.resolution_hosted.fed"
+        ),
+    )
     try:
         asyncio.run(
             _run_workers(
                 earnings_worker,
                 mstr_worker,
+                fed_worker,
                 runtime_store=runtime_store,
                 settings=settings,
                 trading_enabled=trading_enabled,
@@ -128,10 +150,15 @@ def main() -> int:
                     try:
                         mstr_worker.close()
                     finally:
-                        mstr_profile_store.close()
-                        mstr_audit_store.close()
-                        earnings_profile_store.close()
-                        earnings_store.close()
+                        try:
+                            fed_worker.close()
+                        finally:
+                            notification_outbox.close()
+                            fed_profile_store.close()
+                            mstr_profile_store.close()
+                            mstr_audit_store.close()
+                            earnings_profile_store.close()
+                            earnings_store.close()
     return 0
 
 

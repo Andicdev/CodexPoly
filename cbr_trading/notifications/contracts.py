@@ -9,6 +9,7 @@ from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
     EarningsMarketRule,
 )
+from cbr_trading.fed.contracts import FedMarketBinding
 from cbr_trading.mstr_btc.contracts import MstrBtcFactCandidate
 from cbr_trading.profile_lifecycle.contracts import (
     ProfileScheduleState,
@@ -159,6 +160,62 @@ def source_event_notification_from_mstr(
         event_kind="mstr_btc",
         message_text=_redact_notification_text(message),
         source_url=fact.source_url,
+    )
+
+
+def source_event_notification_from_fed(
+    *,
+    signal: ResolutionSignal,
+    bindings: Sequence[FedMarketBinding],
+) -> SourceEventNotification:
+    rows = tuple(bindings)
+    if not rows:
+        raise ValueError("at least one FED market binding is required")
+    evidence = signal.evidence[0] if signal.evidence else None
+    if evidence is None:
+        raise ValueError("FED signal must contain source evidence")
+    lines = [
+        "CodexPoly: FED rate decision confirmed",
+        f"Provider: {signal.attributes.get('provider')}",
+        f"Source document: {evidence.source_url}",
+        (
+            "Target range before: "
+            f"{signal.attributes.get('previous_lower_percent')}%-"
+            f"{signal.attributes.get('previous_upper_percent')}%"
+        ),
+        (
+            "Target range after: "
+            f"{signal.attributes.get('current_lower_percent')}%-"
+            f"{signal.attributes.get('current_upper_percent')}%"
+        ),
+        (
+            "Rate change: "
+            f"{signal.attributes.get('normalized_delta_bps')} bps"
+        ),
+        f"Resolved bucket: {signal.attributes.get('bucket')}",
+        f"Market rules evaluated: {len(rows)}",
+    ]
+    for binding in rows:
+        outcome = _numeric_outcome(
+            signal.value,
+            operator=binding.comparison_op,
+            threshold=binding.strike_bps,
+        )
+        lines.append(
+            f"- {binding.bucket.value}: {signal.value} "
+            f"{binding.comparison_op} {binding.strike_bps} "
+            f"-> {'YES' if outcome else 'NO'}"
+        )
+    lines.append(
+        "Trading path and Telegram delivery are decoupled."
+    )
+    return SourceEventNotification(
+        notification_key=f"fed:{signal.signal_id}",
+        source_name=signal.source,
+        scope_id=str(signal.attributes.get("decision_id") or signal.subject),
+        event_kind="fed_rate_decision",
+        message_text=_redact_notification_text("\n".join(lines)),
+        source_url=evidence.source_url,
     )
 
 

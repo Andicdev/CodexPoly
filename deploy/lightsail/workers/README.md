@@ -75,6 +75,16 @@ continuing to reject DTD and entity declarations. Responses with a valid
 CDN connection close. The NVTS company feed uses the official
 `navitassemi.gcs-web.com` endpoint rather than the unstable vanity-host alias.
 
+The resolution worker also owns the checked-in July 2026 FOMC decision
+source. It makes no Federal Reserve request unless at least one in-window
+`fed_fomc` profile is enabled. While active, it races the Board statement,
+Board implementation note, New York Fed PDF mirror, and the Board monetary
+policy RSS feed; the first document that yields one unambiguous target range
+wins. One canonical rate-change signal is then fanned out to the five
+Polymarket buckets through separate scopes and the common prepared executor.
+The Telegram summary is enqueued only after all five trading coordinators
+have been evaluated and includes the winning official source URL.
+
 | Environment | Compose source | Installed path |
 | --- | --- | --- |
 | staging | `compose.staging.yml` | `/opt/codexpoly/staging/apps/workers/compose.yml` |

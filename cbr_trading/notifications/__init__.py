@@ -3,6 +3,7 @@
 from cbr_trading.notifications.contracts import (
     SourceEventNotification,
     source_event_notification_from_earnings,
+    source_event_notification_from_fed,
     source_event_notification_from_mstr,
     source_event_notification_from_profile_lifecycle,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "SqlAlchemyNotificationOutboxStore",
     "StoredNotification",
     "source_event_notification_from_earnings",
+    "source_event_notification_from_fed",
     "source_event_notification_from_mstr",
     "source_event_notification_from_profile_lifecycle",
 ]
