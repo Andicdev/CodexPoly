@@ -123,7 +123,7 @@ BEGIN
           AND schedule.automation_mode = 'AUTO_LIVE'
           AND schedule.state = 'BLOCKED'
           AND profile.status = 'DISABLED'
-          AND rule.status = 'WATCHING'
+          AND rule.status IN ('SHADOW', 'WATCHING')
     ) OR (
         SELECT count(*)
         FROM earnings_fact_candidates
