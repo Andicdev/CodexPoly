@@ -53,6 +53,13 @@ _JBLU_PARTIAL_FILL = (
     / "live"
     / "011_record_jblu_partial_fill.sql"
 )
+_SPGI_ERROR = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "012_record_spgi_run_journal_error.sql"
+)
 
 
 class ResolutionRunJournalSchemaTests(unittest.TestCase):
@@ -163,6 +170,20 @@ class ResolutionRunJournalSchemaTests(unittest.TestCase):
         self.assertNotIn("UPDATE RESOLUTION_ORDER_GROUPS", upper)
         self.assertNotIn("DELETE FROM", upper)
         self.assertNotIn("CANCEL_ORDERS", upper)
+
+    def test_spgi_parser_error_is_recorded_without_disarming(self) -> None:
+        text = _SPGI_ERROR.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("'EARNINGS:SPGI:2026Q2'", upper)
+        self.assertIn("'DOCUMENT_ENCODING_INVALID'", upper)
+        self.assertIn("'PARSER_QUARANTINED'", upper)
+        self.assertIn("'RECOVERY_PENDING', TRUE", upper)
+        self.assertNotIn("UPDATE RESOLUTION_EXECUTION_PROFILES", upper)
+        self.assertNotIn("UPDATE RESOLUTION_PROFILE_SCHEDULES", upper)
+        self.assertNotIn("UPDATE EARNINGS_MARKET_RULES", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL", upper)
 
 
 if __name__ == "__main__":
