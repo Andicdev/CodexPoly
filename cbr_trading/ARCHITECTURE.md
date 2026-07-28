@@ -408,6 +408,15 @@ worst-selected-outcome notional cap before an atomic transition to
 are append-only audited; notification delivery remains outside the trading
 hot path.
 
+Earnings schedules are grouped into independent `PRE_MARKET` and
+`POST_MARKET` live blocks through the schedule metadata keys `live_block` and
+`block_id`. A block is a lifecycle, preparation-capacity, observability, and
+risk boundary, while the same universal resolution worker and executor may
+serve both sessions. Only one reviewed earnings block is armed at a time:
+starting a pre-market block does not implicitly arm the post-market block,
+and switching sessions requires a separate guarded production transition.
+See `deploy/lightsail/LIVE_MARKET_BLOCKS.md`.
+
 The hosted service defaults to `shadow`, where the complete decision path
 ends at a non-submitting executor. `preflight` authenticates and pre-signs
 both alternatives without creating execution claims. `live` uses

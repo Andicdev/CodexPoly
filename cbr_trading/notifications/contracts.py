@@ -225,6 +225,13 @@ def source_event_notification_from_profile_lifecycle(
     """Describe scheduler eligibility without claiming an order was sent."""
 
     state_messages = {
+        ProfileScheduleState.PENDING: (
+            "Profile returned to pending",
+            (
+                "Profile status is DISABLED while authenticated "
+                "preflight is pending."
+            ),
+        ),
         ProfileScheduleState.PREFLIGHTING: (
             "Authenticated preflight requested",
             "Profile status remains DISABLED.",

@@ -41,6 +41,7 @@ class LabelledEpsParserConfig:
     evidence_title: str
     resolution_basis: str
     forbidden_prefixes: tuple[str, ...] = ()
+    forbidden_prefix_lookback: int = 48
     forbidden_tails: tuple[str, ...] = ()
 
 
@@ -187,7 +188,14 @@ class LabelledEpsParser:
         found: list[tuple[Decimal, str]] = []
         for pattern in self._config.label_patterns:
             for label in pattern.finditer(value):
-                prefix = value[max(0, label.start() - 48):label.start()]
+                prefix = value[
+                    max(
+                        0,
+                        label.start()
+                        - self._config.forbidden_prefix_lookback,
+                    ):
+                    label.start()
+                ]
                 if any(
                     forbidden.casefold() in prefix.casefold()
                     for forbidden in self._config.forbidden_prefixes

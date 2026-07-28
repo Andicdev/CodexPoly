@@ -80,6 +80,9 @@ def _config(
     accepted_reason: str,
     evidence_title: str,
     resolution_basis: str,
+    parser_version: str = "1",
+    forbidden_prefixes: tuple[str, ...] = (),
+    forbidden_prefix_lookback: int = 48,
 ) -> LabelledEpsParserConfig:
     return LabelledEpsParserConfig(
         ticker=ticker,
@@ -88,12 +91,14 @@ def _config(
         basis=EpsBasis.DILUTED,
         label_patterns=(eps_label(label),),
         parser_name=parser_name,
-        parser_version="1",
+        parser_version=parser_version,
         accepted_reason=accepted_reason,
         missing_reason=f"{parser_name}_not_found",
         conflicting_reason=f"conflicting_{parser_name}_values",
         evidence_title=evidence_title,
         resolution_basis=resolution_basis,
+        forbidden_prefixes=forbidden_prefixes,
+        forbidden_prefix_lookback=forbidden_prefix_lookback,
         forbidden_tails=(
             "is defined",
             "most directly comparable",
@@ -160,6 +165,12 @@ class HiltonAdjustedDilutedEpsParser(LabelledEpsParser):
                 resolution_basis=(
                     "reported_diluted_eps_adjusted_for_special_items"
                 ),
+                parser_version="2",
+                forbidden_prefixes=(
+                    "six months ended",
+                    "year ended",
+                ),
+                forbidden_prefix_lookback=160,
             )
         )
 

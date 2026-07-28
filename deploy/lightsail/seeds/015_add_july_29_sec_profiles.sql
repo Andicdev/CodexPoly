@@ -426,7 +426,11 @@ SELECT
     expires_at,
     jsonb_build_object(
         'seed', '015_add_july_29_sec_profiles',
-        'preflight_lead_minutes', 15
+        'preflight_lead_minutes', 15,
+        'live_block', market_session,
+        'block_id',
+            '2026-07-29-'
+            || replace(lower(market_session), '_', '-')
     ),
     'PENDING'
 FROM july29_sec_batch
@@ -490,6 +494,11 @@ BEGIN
               batch.prepare_from - interval '15 minutes'
           AND schedule.activate_at = batch.prepare_from
           AND schedule.deactivate_at = batch.expires_at
+          AND schedule.metadata ->> 'live_block' =
+              batch.market_session
+          AND schedule.metadata ->> 'block_id' =
+              '2026-07-29-'
+              || replace(lower(batch.market_session), '_', '-')
     ) <> 8 THEN
         RAISE EXCEPTION 'July 29 AUTO_PREFLIGHT schedule batch mismatch';
     END IF;

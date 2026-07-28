@@ -44,6 +44,9 @@ class July29SecProfileSqlTests(unittest.TestCase):
         self.assertNotIn("'ENABLED'", text)
         self.assertIn("'AUTO_PREFLIGHT'", text)
         self.assertNotIn("'AUTO_LIVE'", text)
+        self.assertIn("'live_block', market_session", text)
+        self.assertIn("'block_id'", text)
+        self.assertIn("replace(lower(market_session), '_', '-')", text)
         self.assertIn("'abccbaq'", text)
         self.assertIn("0.999", text)
         self.assertIn("quantity", text)
@@ -58,6 +61,8 @@ class July29SecProfileSqlTests(unittest.TestCase):
         self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
         self.assertIn("ROLLBACK", upper)
         self.assertIn("AUTO_PREFLIGHT", upper)
+        self.assertIn("LIVE_BLOCK", upper)
+        self.assertIn("BLOCK_ID", upper)
         self.assertIn("EXECUTION CLAIM MUST NOT EXIST", upper)
         self.assertNotIn("SELECT *", upper)
 

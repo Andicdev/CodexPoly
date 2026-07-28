@@ -75,6 +75,14 @@ BEGIN
         )
           AND automation_mode = 'AUTO_PREFLIGHT'
           AND state = 'PENDING'
+          AND metadata ->> 'live_block' IN (
+              'PRE_MARKET',
+              'POST_MARKET'
+          )
+          AND metadata ->> 'block_id' IN (
+              '2026-07-29-pre-market',
+              '2026-07-29-post-market'
+          )
     ) <> 8 THEN
         RAISE EXCEPTION 'July 29 schedule set mismatch';
     END IF;

@@ -198,6 +198,12 @@ Only one live resolution worker may exist across Northflank and Lightsail. The
 two databases do not share execution claims, so simultaneous live workers are
 not protected from one another by idempotency.
 
+Earnings automation is operated as separate `PRE_MARKET` and `POST_MARKET`
+live blocks. The blocks share the universal worker but never share an
+implicit activation: the non-selected session stays `MANUAL` and its profiles
+stay `DISABLED`. Required metadata, completion semantics, and production
+checks are documented in `deploy/lightsail/LIVE_MARKET_BLOCKS.md`.
+
 For the first authenticated NVTS preflight, use the guarded SQL files in
 `deploy/lightsail/preflight` in numeric order. The first file refuses to run
 when any profile is already enabled, the second verifies exactly one

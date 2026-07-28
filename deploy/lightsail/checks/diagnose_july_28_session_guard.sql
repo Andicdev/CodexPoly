@@ -83,4 +83,16 @@ SELECT format(
 FROM resolution_runtime_heartbeats
 WHERE runtime_key = 'hosted-resolution';
 
+SELECT format(
+    'unnotified=%s:%s:%s:%s',
+    id,
+    event_key,
+    next_state,
+    event_kind
+)
+FROM resolution_profile_schedule_events
+WHERE notification_enqueued_at IS NULL
+ORDER BY id
+LIMIT 20;
+
 ROLLBACK;

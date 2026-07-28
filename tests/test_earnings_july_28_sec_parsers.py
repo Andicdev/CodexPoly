@@ -94,12 +94,18 @@ class July28SecParserTests(unittest.TestCase):
                 hlt_q2_2026_shadow_rule(),
                 (
                     "Hilton reported its second quarter 2026 results. "
-                    "Diluted EPS was $1.66, and diluted EPS, adjusted "
-                    "for special items, was $2.01. Diluted EPS, "
+                    "Diluted EPS was $2.10 for the second quarter, and "
+                    "diluted EPS, adjusted for special items, was "
+                    "$2.29. For the three months ended June 30, 2026, "
+                    "diluted EPS was $2.10 and diluted EPS, adjusted "
+                    "for special items, was $2.29. For the six months "
+                    "ended June 30, 2026, diluted EPS was $3.76 and "
+                    "diluted EPS, adjusted for special items, was "
+                    "$4.30. Diluted EPS, "
                     "adjusted for special items, is projected to be "
                     "between $2.18 and $2.24."
                 ),
-                "2.01",
+                "2.29",
             ),
             (
                 InvescoAdjustedDilutedEpsParser(),
@@ -216,6 +222,22 @@ class July28SecParserTests(unittest.TestCase):
         self.assertEqual(result.status, ParseStatus.ACCEPTED)
         self.assertIsNotNone(result.candidate)
         self.assertEqual(str(result.candidate.value), "2.01")
+
+    def test_hilton_six_month_value_is_not_a_quarter_result(self) -> None:
+        rule = hlt_q2_2026_shadow_rule()
+        result = HiltonAdjustedDilutedEpsParser().parse(
+            (
+                "Hilton reported its second quarter 2026 results. "
+                "For the six months ended June 30, 2026, diluted EPS "
+                "was $3.76 and diluted EPS, adjusted for special "
+                "items, was $4.30."
+            ),
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.NO_MATCH)
 
     def test_guidance_and_wrong_metric_fail_closed(self) -> None:
         cases = (

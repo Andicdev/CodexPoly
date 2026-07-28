@@ -1,13 +1,14 @@
 BEGIN TRANSACTION READ ONLY;
 
 SELECT format(
-    'event=%s:%s:%s:filed=%s:received=%s:created=%s',
+    'event=%s:%s:%s:filed=%s:received=%s:created=%s:source=%s',
     ticker,
     provider,
     status,
     filed_at,
     received_at,
-    created_at
+    created_at,
+    source_url
 )
 FROM earnings_source_events
 WHERE scope_id IN (

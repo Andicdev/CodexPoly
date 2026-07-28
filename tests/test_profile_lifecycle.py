@@ -158,6 +158,20 @@ class ProfileLifecycleContractTests(unittest.TestCase):
             notification.message_text,
         )
 
+    def test_pending_notification_is_supported_for_manual_rearm(self) -> None:
+        notification = source_event_notification_from_profile_lifecycle(
+            _transition(ProfileScheduleState.PENDING)
+        )
+
+        self.assertIn(
+            "CodexPoly: Profile returned to pending",
+            notification.message_text,
+        )
+        self.assertIn(
+            "authenticated preflight is pending",
+            notification.message_text,
+        )
+
 
 class _LifecycleStore:
     def __init__(self):
