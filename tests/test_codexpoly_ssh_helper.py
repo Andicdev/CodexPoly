@@ -12,6 +12,15 @@ _HELPER = (
 
 
 class CodexPolySshHelperTests(unittest.TestCase):
+    def test_target_selection_preserves_primary_default(self) -> None:
+        text = _HELPER.read_text(encoding="utf-8")
+
+        self.assertIn('[ValidateSet("host01", "host02")]', text)
+        self.assertIn('[string]$Target = "host01"', text)
+        self.assertIn('host01 = "52.16.49.33"', text)
+        self.assertIn('host02 = "54.73.200.228"', text)
+        self.assertIn('$sshArguments += "codexdeploy@$targetHost"', text)
+
     def test_stdin_mode_is_restricted_to_sql_files(self) -> None:
         text = _HELPER.read_text(encoding="utf-8")
 

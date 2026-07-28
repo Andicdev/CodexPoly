@@ -2,9 +2,11 @@
 
 ## Server roles
 
-- Host: `codexpoly-host-01`
-- Region: AWS Lightsail `eu-west-1` (Dublin)
-- Static IPv4: `52.16.49.33`
+| Target | Host | Purpose | Region | Static IPv4 |
+| --- | --- | --- | --- | --- |
+| `host01` | `codexpoly-host-01` | Primary earnings and resolution services | AWS Lightsail `eu-west-1` (Dublin) | `52.16.49.33` |
+| `host02` | `codexpoly-host-02` | Isolated trading account and separate strategy services | AWS Lightsail `eu-west-1` (Dublin) | `54.73.200.228` |
+
 - Deployment account: `codexdeploy`
 - Local SSH helper: `scripts/codexpoly_ssh.ps1`
 - Staging workspace: `/opt/codexpoly/staging`
@@ -161,6 +163,8 @@ directory.
 The development task may:
 
 - connect as `codexdeploy`;
+- select the isolated strategy server with
+  `scripts/codexpoly_ssh.ps1 -Target host02`;
 - use `sudo -n` for production deployment, Docker, migration, and recovery
   operations;
 - use
