@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -19,6 +20,12 @@ from cbr_trading.earnings.parsers._labelled_eps import (
 SOFI_CIK = "1818874"
 PROCTER_GAMBLE_CIK = "80424"
 HUMANA_CIK = "49071"
+WINGSTOP_CIK = "1636222"
+ARES_CAPITAL_CIK = "1287750"
+INTEGRA_LIFESCIENCES_CIK = "917520"
+GARMIN_CIK = "1121788"
+CBRE_CIK = "1138118"
+PENSKE_AUTOMOTIVE_CIK = "1019849"
 QUALCOMM_CIK = "804328"
 MICROSOFT_CIK = "789019"
 META_CIK = "1326801"
@@ -36,6 +43,30 @@ PROCTER_GAMBLE_Q4_2026_CONDITION_ID = (
 HUMANA_Q2_2026_CONDITION_ID = (
     "0xdc4eaee1d80f2b50f30d35f6e8209e"
     "2e47dc283de1e77980f399cc206dcb019e"
+)
+WINGSTOP_Q2_2026_CONDITION_ID = (
+    "0x364b6da0b6c766eb072c3be8ded36b6"
+    "fc39e5b8c831346fd2e277d2c1d07714a"
+)
+ARES_CAPITAL_Q2_2026_CONDITION_ID = (
+    "0xc1d7ebaa2951adedf0e111c0555e29426"
+    "755d005dedb43ce71bf7d1c065a22b8"
+)
+INTEGRA_LIFESCIENCES_Q2_2026_CONDITION_ID = (
+    "0x105f7e63b07c079be5e52a3c15ba8ce1"
+    "5022c45b189ea9a54d23c31bd972eb1f"
+)
+GARMIN_Q2_2026_CONDITION_ID = (
+    "0xa8799cc9d0d491c736c76d6906e9cf9c"
+    "f10913d285bcf50ca834ff4d50753116"
+)
+CBRE_Q2_2026_CONDITION_ID = (
+    "0x27211249b8125a43a4b850ce763030142"
+    "709ee1402ebac8b3a8543bee0cd9d22"
+)
+PENSKE_AUTOMOTIVE_Q2_2026_CONDITION_ID = (
+    "0xdb3c1e0e76010fb23f1c29d2adf701c"
+    "1e56eadc2d0d45282863296367ba64e71"
 )
 QUALCOMM_Q3_2026_CONDITION_ID = (
     "0xe13b3b5087385775af2dbacd02af3386"
@@ -147,6 +178,127 @@ class HumanaAdjustedEpsParser(LabelledEpsParser):
                 accepted_reason="official_humana_adjusted_eps",
                 evidence_title="Humana official earnings release",
                 resolution_basis="headline_adjusted_non_gaap_eps",
+            )
+        )
+
+
+class WingstopGaapEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="WING",
+                cik=WINGSTOP_CIK,
+                metric=EarningsMetric.GAAP_EPS,
+                labels=(
+                    r"\bnet\s+income\s+of\s+(?:\$\s*)?"
+                    r"\d+(?:\.\d+)?\s+million,\s+or\b",
+                ),
+                parser_name="wingstop_gaap_eps",
+                accepted_reason="official_wingstop_gaap_diluted_eps",
+                evidence_title="Wingstop official earnings release",
+                resolution_basis="headline_gaap_diluted_eps",
+            )
+        )
+
+
+class AresCapitalCoreEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="ARCC",
+                cik=ARES_CAPITAL_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                labels=(
+                    r"\bcore\s+eps(?:\s*\(\s*\d+\s*\))?",
+                ),
+                parser_name="ares_capital_core_eps",
+                accepted_reason="official_ares_capital_core_eps",
+                evidence_title="Ares Capital official earnings release",
+                resolution_basis="operating_results_core_eps",
+            )
+        )
+
+
+class IntegraAdjustedDilutedEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="IART",
+                cik=INTEGRA_LIFESCIENCES_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                labels=(
+                    r"\badjusted\s+earnings\s+per\s+diluted\s+"
+                    r"share\s+of\b",
+                    r"\badjusted\s+diluted\s+net\s+income\s+"
+                    r"per\s+share\b",
+                ),
+                parser_name="integra_adjusted_diluted_eps",
+                accepted_reason="official_integra_adjusted_diluted_eps",
+                evidence_title="Integra LifeSciences official earnings release",
+                resolution_basis="reported_adjusted_diluted_eps",
+            )
+        )
+
+
+class GarminProFormaDilutedEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="GRMN",
+                cik=GARMIN_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                labels=(
+                    r"\bpro\s+forma\s+eps(?:\s*\(\s*\d+\s*\))?"
+                    r"\s+of\b",
+                    r"\bpro\s+forma\s+diluted\s+eps"
+                    r"(?:\s*\(\s*\d+\s*\))?\b",
+                ),
+                parser_name="garmin_pro_forma_diluted_eps",
+                accepted_reason="official_garmin_pro_forma_diluted_eps",
+                evidence_title="Garmin official earnings release",
+                resolution_basis="reported_pro_forma_diluted_eps",
+            )
+        )
+
+
+class CbreGaapEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="CBRE",
+                cik=CBRE_CIK,
+                metric=EarningsMetric.GAAP_EPS,
+                labels=(
+                    r"\bgaap\s+eps\s+(?:up|down)"
+                    r"[^.;]{0,64}\bto\b",
+                ),
+                parser_name="cbre_gaap_eps",
+                accepted_reason="official_cbre_gaap_diluted_eps",
+                evidence_title="CBRE official earnings release",
+                resolution_basis="headline_gaap_diluted_eps",
+            )
+        )
+
+
+class PenskeAutomotiveGaapEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="PAG",
+                cik=PENSKE_AUTOMOTIVE_CIK,
+                metric=EarningsMetric.GAAP_EPS,
+                labels=(
+                    r"(?<!adjusted\s)\bearnings\s+per\s+share\s+of\b",
+                    r"\brelated\s+earnings\s+per\s+share\s+was\b",
+                ),
+                parser_name="penske_automotive_gaap_eps",
+                accepted_reason=(
+                    "official_penske_automotive_gaap_diluted_eps"
+                ),
+                evidence_title=(
+                    "Penske Automotive official earnings release"
+                ),
+                resolution_basis="reported_gaap_diluted_eps",
             )
         )
 
@@ -357,7 +509,7 @@ def pg_q4_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def hum_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="HUM",
         cik=HUMANA_CIK,
         fiscal_quarter=2,
@@ -372,6 +524,294 @@ def hum_q2_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=HUMANA_Q2_2026_CONDITION_ID,
         metric_selection="headline_adjusted_non_gaap_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["humana.gcs-web.com"],
+                "feed_url": (
+                    "https://humana.gcs-web.com/"
+                    "rss/news-releases.xml"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Humana",
+                    "Second Quarter",
+                    "Financial Results",
+                ],
+                "title_none": ["to release"],
+            },
+        },
+    )
+
+
+def wing_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="WING",
+        cik=WINGSTOP_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 27),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T07:45:00-04:00"
+        ),
+        metric=EarningsMetric.GAAP_EPS,
+        strike=Decimal("1.03"),
+        market_slug=(
+            "wing-quarterly-earnings-gaap-eps-07-29-2026-1pt03"
+        ),
+        condition_id=WINGSTOP_Q2_2026_CONDITION_ID,
+        metric_selection="headline_gaap_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["ir.wingstop.com"],
+                "feed_url": "https://ir.wingstop.com/feed/",
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Wingstop",
+                    "Second Quarter",
+                    "Financial Results",
+                ],
+                "title_none": ["to announce"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": ["www.prnewswire.com"],
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "kind": "rss",
+                "provider": "prnewswire",
+                "title_all": [
+                    "Wingstop",
+                    "Second Quarter",
+                    "Financial Results",
+                ],
+                "title_none": ["to announce"],
+            },
+        },
+    )
+
+
+def arcc_q2_2026_shadow_rule() -> EarningsMarketRule:
+    return _sec_rule(
+        ticker="ARCC",
+        cik=ARES_CAPITAL_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T07:00:00-04:00"
+        ),
+        metric=EarningsMetric.NON_GAAP_EPS,
+        strike=Decimal("0.47"),
+        market_slug=(
+            "arcc-quarterly-earnings-nongaap-eps-07-29-2026-0pt47"
+        ),
+        condition_id=ARES_CAPITAL_Q2_2026_CONDITION_ID,
+        metric_selection="operating_results_core_eps",
+    )
+
+
+def iart_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="IART",
+        cik=INTEGRA_LIFESCIENCES_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T06:00:00-04:00"
+        ),
+        metric=EarningsMetric.NON_GAAP_EPS,
+        strike=Decimal("0.48"),
+        market_slug=(
+            "iart-quarterly-earnings-nongaap-eps-07-29-2026-0pt48"
+        ),
+        condition_id=INTEGRA_LIFESCIENCES_Q2_2026_CONDITION_ID,
+        metric_selection="reported_adjusted_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": [
+                    "investor.integralife.com"
+                ],
+                "feed_url": (
+                    "https://investor.integralife.com/"
+                    "rss/news-releases.xml"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Integra LifeSciences",
+                    "Second Quarter",
+                    "Financial Results",
+                ],
+                "title_none": ["to host"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": [
+                    "www.globenewswire.com"
+                ],
+                "feed_url": (
+                    "https://www.globenewswire.com/RssFeed/"
+                    "subjectcode/13-Earnings%20Releases%20And%20"
+                    "Operating%20Results/feedTitle/GlobeNewswire%20-%20"
+                    "Earnings%20Releases%20And%20Operating%20Results"
+                ),
+                "kind": "rss",
+                "provider": "globenewswire",
+                "title_all": [
+                    "Integra LifeSciences",
+                    "Second Quarter",
+                    "Financial Results",
+                ],
+                "title_none": ["to host"],
+            },
+        },
+    )
+
+
+def grmn_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="GRMN",
+        cik=GARMIN_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 27),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T07:00:00-04:00"
+        ),
+        metric=EarningsMetric.NON_GAAP_EPS,
+        strike=Decimal("2.29"),
+        market_slug=(
+            "grmn-quarterly-earnings-nongaap-eps-07-29-2026-2pt29"
+        ),
+        condition_id=GARMIN_Q2_2026_CONDITION_ID,
+        metric_selection="reported_pro_forma_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["www.garmin.com"],
+                "feed_url": (
+                    "https://www.garmin.com/en-US/newsroom/feed/"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Garmin",
+                    "Second Quarter",
+                    "2026",
+                    "Results",
+                ],
+                "title_none": ["schedules"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": ["www.prnewswire.com"],
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "kind": "rss",
+                "provider": "prnewswire",
+                "title_all": [
+                    "Garmin",
+                    "Second Quarter",
+                    "2026",
+                    "Results",
+                ],
+                "title_none": ["schedules"],
+            },
+        },
+    )
+
+
+def cbre_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="CBRE",
+        cik=CBRE_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T06:55:00-04:00"
+        ),
+        metric=EarningsMetric.GAAP_EPS,
+        strike=Decimal("1.32"),
+        market_slug=(
+            "cbre-quarterly-earnings-gaap-eps-07-29-2026-1pt32"
+        ),
+        condition_id=CBRE_Q2_2026_CONDITION_ID,
+        metric_selection="headline_gaap_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["ir.cbre.com"],
+                "feed_url": "https://ir.cbre.com/press-releases/rss",
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "CBRE",
+                    "Reports",
+                    "Financial Results",
+                    "2026",
+                ],
+                "title_none": ["conference call"],
+            }
+        },
+    )
+
+
+def pag_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="PAG",
+        cik=PENSKE_AUTOMOTIVE_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T08:00:00-04:00"
+        ),
+        metric=EarningsMetric.GAAP_EPS,
+        strike=Decimal("3.39"),
+        market_slug=(
+            "pag-quarterly-earnings-gaap-eps-07-29-2026-3pt39"
+        ),
+        condition_id=PENSKE_AUTOMOTIVE_Q2_2026_CONDITION_ID,
+        metric_selection="reported_gaap_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "press_wire": {
+                "allowed_document_hosts": ["www.prnewswire.com"],
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "kind": "rss",
+                "provider": "prnewswire",
+                "title_all": [
+                    "Penske Automotive Group",
+                    "Reports",
+                    "Quarter",
+                    "Results",
+                ],
+                "title_none": ["schedules"],
+            }
+        },
     )
 
 

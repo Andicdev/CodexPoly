@@ -303,19 +303,23 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_connection_cycle()
 
-        self.assertEqual(result.watch_count, 26)
+        self.assertEqual(result.watch_count, 32)
         self.assertEqual(
             {watch.ticker for watch in captured},
             {
+                "ARCC",
                 "BA",
                 "BBBY",
+                "CBRE",
                 "CSGP",
                 "CZR",
                 "EBAY",
                 "F",
+                "GRMN",
                 "HLT",
                 "HOOD",
                 "HUM",
+                "IART",
                 "IVZ",
                 "JBLU",
                 "KO",
@@ -323,6 +327,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
                 "MSFT",
                 "NVTS",
                 "NXPI",
+                "PAG",
                 "PG",
                 "PYPL",
                 "QCOM",
@@ -332,6 +337,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "WING",
                 "WWD",
             },
         )

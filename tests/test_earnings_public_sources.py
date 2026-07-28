@@ -11,6 +11,15 @@ from cbr_trading.earnings.parsers.boeing import (
 from cbr_trading.earnings.parsers.july_28_sec import (
     hlt_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.july_29_sec import (
+    arcc_q2_2026_shadow_rule,
+    cbre_q2_2026_shadow_rule,
+    grmn_q2_2026_shadow_rule,
+    hum_q2_2026_shadow_rule,
+    iart_q2_2026_shadow_rule,
+    pag_q2_2026_shadow_rule,
+    wing_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -234,6 +243,43 @@ class EarningsPublicSourceTests(unittest.TestCase):
                 for watch in self.watches
             )
         )
+
+    def test_july_29_premarket_public_source_matrix(self) -> None:
+        expected = {
+            "WING": {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.PR_NEWSWIRE,
+            },
+            "ARCC": set(),
+            "IART": {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.GLOBE_NEWSWIRE,
+            },
+            "GRMN": {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.PR_NEWSWIRE,
+            },
+            "CBRE": {EarningsProvider.COMPANY_IR},
+            "PAG": {EarningsProvider.PR_NEWSWIRE},
+            "HUM": {EarningsProvider.COMPANY_IR},
+        }
+        rules = (
+            wing_q2_2026_shadow_rule(),
+            arcc_q2_2026_shadow_rule(),
+            iart_q2_2026_shadow_rule(),
+            grmn_q2_2026_shadow_rule(),
+            cbre_q2_2026_shadow_rule(),
+            pag_q2_2026_shadow_rule(),
+            hum_q2_2026_shadow_rule(),
+        )
+
+        for rule in rules:
+            with self.subTest(ticker=rule.ticker):
+                providers = {
+                    watch.provider
+                    for watch in public_release_watches_from_rules((rule,))
+                }
+                self.assertEqual(providers, expected[rule.ticker])
 
     def test_ignores_matching_release_older_than_rule_lookback(
         self,

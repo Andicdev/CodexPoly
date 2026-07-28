@@ -16,15 +16,19 @@ class EarningsParserRegistryTests(unittest.TestCase):
         self.assertEqual(
             {rule.ticker for rule in rules},
             {
+                "ARCC",
                 "BA",
                 "BBBY",
+                "CBRE",
                 "CSGP",
                 "CZR",
                 "EBAY",
                 "F",
+                "GRMN",
                 "HLT",
                 "HOOD",
                 "HUM",
+                "IART",
                 "IVZ",
                 "JBLU",
                 "KO",
@@ -32,6 +36,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "MSFT",
                 "NVTS",
                 "NXPI",
+                "PAG",
                 "PG",
                 "PYPL",
                 "QCOM",
@@ -41,21 +46,26 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "WING",
                 "WWD",
             },
         )
         self.assertEqual(
             set(parsers),
             {
+                "ARCC",
                 "BA",
                 "BBBY",
+                "CBRE",
                 "CSGP",
                 "CZR",
                 "EBAY",
                 "F",
+                "GRMN",
                 "HLT",
                 "HOOD",
                 "HUM",
+                "IART",
                 "IVZ",
                 "JBLU",
                 "KO",
@@ -63,6 +73,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "MSFT",
                 "NVTS",
                 "NXPI",
+                "PAG",
                 "PG",
                 "PYPL",
                 "QCOM",
@@ -72,6 +83,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "WING",
                 "WWD",
             },
         )
@@ -80,7 +92,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            26,
+            32,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(

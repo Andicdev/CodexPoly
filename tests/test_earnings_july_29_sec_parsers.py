@@ -11,22 +11,34 @@ from cbr_trading.earnings.contracts import (
     SourceAuthority,
 )
 from cbr_trading.earnings.parsers.july_29_sec import (
+    AresCapitalCoreEpsParser,
+    CbreGaapEpsParser,
     EbayNonGaapEpsParser,
+    GarminProFormaDilutedEpsParser,
     HumanaAdjustedEpsParser,
+    IntegraAdjustedDilutedEpsParser,
     MetaGaapEpsParser,
     MicrosoftGaapEpsParser,
+    PenskeAutomotiveGaapEpsParser,
     ProcterGambleCoreEpsParser,
     QualcommNonGaapEpsParser,
     RobinhoodGaapEpsParser,
     SofiGaapEpsParser,
+    WingstopGaapEpsParser,
+    arcc_q2_2026_shadow_rule,
+    cbre_q2_2026_shadow_rule,
     ebay_q2_2026_shadow_rule,
+    grmn_q2_2026_shadow_rule,
     hood_q2_2026_shadow_rule,
     hum_q2_2026_shadow_rule,
+    iart_q2_2026_shadow_rule,
     meta_q2_2026_shadow_rule,
     msft_q4_2026_shadow_rule,
+    pag_q2_2026_shadow_rule,
     pg_q4_2026_shadow_rule,
     qcom_q3_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
+    wing_q2_2026_shadow_rule,
 )
 
 
@@ -89,6 +101,75 @@ class July29SecParserTests(unittest.TestCase):
                     "Adjusted FY 2026 EPS guidance is at least $9.00."
                 ),
                 "7.15",
+            ),
+            (
+                WingstopGaapEpsParser(),
+                wing_q2_2026_shadow_rule(),
+                (
+                    "Wingstop reports fiscal second quarter 2026 "
+                    "financial results for the quarter ended "
+                    "June 27, 2026. Net income of $31.2 million, "
+                    "or $1.08 per diluted share. Adjusted earnings "
+                    "per diluted share were $1.17."
+                ),
+                "1.08",
+            ),
+            (
+                AresCapitalCoreEpsParser(),
+                arcc_q2_2026_shadow_rule(),
+                (
+                    "Ares Capital Corporation announces June 30, "
+                    "2026 financial results for the second quarter "
+                    "of 2026. Operating Results. Core EPS(2) "
+                    "$0.49. GAAP net income per share $0.13."
+                ),
+                "0.49",
+            ),
+            (
+                IntegraAdjustedDilutedEpsParser(),
+                iart_q2_2026_shadow_rule(),
+                (
+                    "Integra LifeSciences reports second quarter "
+                    "2026 financial results for the quarter ending "
+                    "June 30, 2026. GAAP earnings per diluted share "
+                    "were $0.04. Adjusted earnings per diluted share "
+                    "of $0.51."
+                ),
+                "0.51",
+            ),
+            (
+                GarminProFormaDilutedEpsParser(),
+                grmn_q2_2026_shadow_rule(),
+                (
+                    "Garmin announces second quarter 2026 results "
+                    "for the 13-weeks ended June 27, 2026. GAAP EPS "
+                    "of $2.20 and pro forma EPS(1) of $2.31."
+                ),
+                "2.31",
+            ),
+            (
+                CbreGaapEpsParser(),
+                cbre_q2_2026_shadow_rule(),
+                (
+                    "CBRE Group reports financial results for Q2 "
+                    "2026 for the quarter ended June 30, 2026. "
+                    "GAAP EPS up 23% to $1.35 and Core EPS up 18% "
+                    "to $2.01."
+                ),
+                "1.35",
+            ),
+            (
+                PenskeAutomotiveGaapEpsParser(),
+                pag_q2_2026_shadow_rule(),
+                (
+                    "Penske Automotive Group reports quarterly "
+                    "results for the second quarter ended June 30, "
+                    "2026. Adjusted earnings per share of $3.10. "
+                    "Earnings Before Taxes of $320 Million; Net "
+                    "Income of $225 Million; Earnings Per Share of "
+                    "$3.42."
+                ),
+                "3.42",
             ),
             (
                 QualcommNonGaapEpsParser(),
@@ -184,6 +265,24 @@ class July29SecParserTests(unittest.TestCase):
                     "GAAP EPS was $2.10."
                 ),
             ),
+            (
+                WingstopGaapEpsParser(),
+                wing_q2_2026_shadow_rule(),
+                (
+                    "Wingstop second quarter 2026 outlook for the "
+                    "quarter ending June 27, 2026. Adjusted earnings "
+                    "per diluted share guidance is $1.20."
+                ),
+            ),
+            (
+                GarminProFormaDilutedEpsParser(),
+                grmn_q2_2026_shadow_rule(),
+                (
+                    "Garmin second quarter 2026 results for the "
+                    "quarter ended June 27, 2026. GAAP diluted EPS "
+                    "was $2.40."
+                ),
+            ),
         )
 
         for parser, rule, document in cases:
@@ -201,6 +300,12 @@ class July29SecParserTests(unittest.TestCase):
             sofi_q2_2026_shadow_rule(),
             pg_q4_2026_shadow_rule(),
             hum_q2_2026_shadow_rule(),
+            wing_q2_2026_shadow_rule(),
+            arcc_q2_2026_shadow_rule(),
+            iart_q2_2026_shadow_rule(),
+            grmn_q2_2026_shadow_rule(),
+            cbre_q2_2026_shadow_rule(),
+            pag_q2_2026_shadow_rule(),
             qcom_q3_2026_shadow_rule(),
             msft_q4_2026_shadow_rule(),
             meta_q2_2026_shadow_rule(),
@@ -208,7 +313,7 @@ class July29SecParserTests(unittest.TestCase):
             hood_q2_2026_shadow_rule(),
         )
 
-        self.assertEqual(len({rule.condition_id for rule in rules}), 8)
+        self.assertEqual(len({rule.condition_id for rule in rules}), 14)
         self.assertTrue(
             all(
                 rule.source_policy["sec"]["form_type"] == "8-K"
@@ -219,11 +324,19 @@ class July29SecParserTests(unittest.TestCase):
         )
         self.assertEqual(
             {rule.ticker for rule in rules if rule.metric is EarningsMetric.GAAP_EPS},
-            {"SOFI", "MSFT", "META", "HOOD"},
+            {"SOFI", "WING", "CBRE", "PAG", "MSFT", "META", "HOOD"},
         )
         self.assertEqual(
             {rule.ticker for rule in rules if rule.metric is EarningsMetric.NON_GAAP_EPS},
-            {"PG", "HUM", "QCOM", "EBAY"},
+            {
+                "PG",
+                "HUM",
+                "ARCC",
+                "IART",
+                "GRMN",
+                "QCOM",
+                "EBAY",
+            },
         )
         self.assertEqual(
             hum_q2_2026_shadow_rule().estimated_release_at.isoformat(),
