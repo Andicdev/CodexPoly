@@ -25,8 +25,25 @@ BEGIN
           AND source_policy -> 'sec' ->> 'form_type' = '8-K'
           AND source_policy -> 'sec' ->> 'required_item' = '2.02'
           AND source_policy -> 'sec' ->> 'document_type' = 'EX-99.1'
-          AND NOT source_policy ? 'company_ir'
-          AND NOT source_policy ? 'press_wire'
+          AND (
+              (
+                  rule_key =
+                      'hlt-2026q2-nongaap-eps-2pt25'
+                  AND source_policy -> 'company_ir' ->> 'provider' =
+                      'company_ir'
+                  AND source_policy -> 'company_ir' ->> 'kind' =
+                      'rss'
+                  AND source_policy -> 'company_ir' ->> 'feed_url' =
+                      'https://stories.hilton.com/feed/'
+                  AND NOT source_policy ? 'press_wire'
+              )
+              OR (
+                  rule_key <>
+                      'hlt-2026q2-nongaap-eps-2pt25'
+                  AND NOT source_policy ? 'company_ir'
+                  AND NOT source_policy ? 'press_wire'
+              )
+          )
     ) <> 10 THEN
         RAISE EXCEPTION 'July earnings SEC rule set mismatch';
     END IF;
