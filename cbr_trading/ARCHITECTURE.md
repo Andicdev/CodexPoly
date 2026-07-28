@@ -384,7 +384,7 @@ or execution.
 The `default` row is copied when an execution profile is created or updated;
 editing it never mutates existing profiles. Per-profile overrides remain
 available for exceptional markets. The seeded default uses desired price
-`0.999` for either outcome, share quantity `50`, and the `0.01 -> 0.001`
+`0.999` for either outcome, share quantity `100`, and the `0.01 -> 0.001`
 single-reprice policy.
 
 `resolution_profile_schedules` is another additive layer and never replaces

@@ -23,6 +23,12 @@ _MIGRATION = (
     / "migrations"
     / "006_add_resolution_profile_templates.sql"
 )
+_DEFAULT_UPDATE_MIGRATION = (
+    _ROOT
+    / "cbr_trading"
+    / "migrations"
+    / "015_set_default_resolution_profile_quantity_100.sql"
+)
 
 
 def _default_template() -> ResolutionProfileTemplate:
@@ -30,7 +36,7 @@ def _default_template() -> ResolutionProfileTemplate:
         template_key="default",
         yes_desired_price=Decimal("0.999"),
         no_desired_price=Decimal("0.999"),
-        quantity=Decimal("50"),
+        quantity=Decimal("100"),
         lifecycle_policy=RepriceOnTickChange(
             old_tick=Decimal("0.01"),
             new_tick=Decimal("0.001"),
@@ -64,6 +70,18 @@ class ResolutionProfileTemplateTests(unittest.TestCase):
             statements,
         )
 
+    def test_later_migration_updates_operator_default_to_100(self) -> None:
+        sql = _DEFAULT_UPDATE_MIGRATION.read_text(encoding="utf-8")
+        statements = "\n".join(
+            line
+            for line in sql.splitlines()
+            if not line.lstrip().startswith("--")
+        ).upper()
+
+        self.assertNotIn("DROP TABLE", statements)
+        self.assertIn("QUANTITY = 100", statements)
+        self.assertIn("WHERE TEMPLATE_KEY = 'DEFAULT'", statements)
+
     def test_earnings_profile_uses_stored_template_by_default(self) -> None:
         args = _build_parser().parse_args(
             [
@@ -92,7 +110,7 @@ class ResolutionProfileTemplateTests(unittest.TestCase):
             profile.no_desired_price,
             Decimal("0.999"),
         )
-        self.assertEqual(profile.quantity, Decimal("50"))
+        self.assertEqual(profile.quantity, Decimal("100"))
         self.assertEqual(
             profile.metadata["profile_template_key"],
             "default",
@@ -132,7 +150,7 @@ class ResolutionProfileTemplateTests(unittest.TestCase):
             profile.no_desired_price,
             Decimal("0.999"),
         )
-        self.assertEqual(profile.quantity, Decimal("50"))
+        self.assertEqual(profile.quantity, Decimal("100"))
 
     def test_template_update_retains_omitted_values(self) -> None:
         args = _build_parser().parse_args(

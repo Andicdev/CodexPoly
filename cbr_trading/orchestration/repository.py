@@ -25,6 +25,7 @@ _MIGRATION_PATHS = tuple(
     for name in (
         "005_add_resolution_execution_profiles.sql",
         "006_add_resolution_profile_templates.sql",
+        "015_set_default_resolution_profile_quantity_100.sql",
     )
 )
 

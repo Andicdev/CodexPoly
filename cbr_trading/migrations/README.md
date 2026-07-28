@@ -102,6 +102,11 @@ source, parser, preparation, submission, supervision, or notification errors
 remain queryable for the next reporting cycle. Journal updates are
 asynchronous and do not add work to the trading hot path.
 
+`015_set_default_resolution_profile_quantity_100.sql` updates only the
+operator-managed `default` template from quantity `50` to `100`. Existing
+execution profiles remain unchanged and must be explicitly reviewed before
+adopting the larger quantity.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

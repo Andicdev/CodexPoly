@@ -190,16 +190,16 @@ prices, quantity, lifecycle policy, and a mandatory preparation/expiry
 window. New and updated profiles remain `DISABLED`; an enabled profile outside
 its time window is not loaded.
 
-Apply migrations 005 and 006 explicitly:
+Apply migrations 005, 006, and 015 explicitly:
 
 ```text
 python -m scripts.manage_resolution_profiles --apply
 ```
 
-Migration 006 adds `resolution_profile_templates` and seeds the operator
-template `default` with YES/NO desired price `0.999`, quantity `50`, and the
-`0.01 -> 0.001` repricing policy. Reapplying the migration never overwrites
-an operator-edited template. Existing execution profiles also remain
+Migration 006 adds `resolution_profile_templates` with the original
+quantity-50 default. Migration 015 upgrades the reviewed operator template
+`default` to YES/NO desired price `0.999`, quantity `100`, and the
+`0.01 -> 0.001` repricing policy. Existing execution profiles remain
 unchanged when the template is edited.
 
 Inspect or update the non-secret default through the management command:
@@ -212,7 +212,7 @@ python -m scripts.manage_resolution_profiles \
   --set-template default \
   --yes-price 0.999 \
   --no-price 0.999 \
-  --quantity 50
+  --quantity 100
 ```
 
 Configure each earnings market with its account and time window.

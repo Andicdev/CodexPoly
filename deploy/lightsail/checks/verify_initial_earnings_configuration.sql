@@ -131,7 +131,7 @@ BEGIN
         WHERE template_key = 'default'
           AND yes_desired_price = 0.999
           AND no_desired_price = 0.999
-          AND quantity = 50
+          AND quantity = 100
           AND lifecycle_kind = 'reprice_on_tick_change'
           AND old_tick = 0.01
           AND new_tick = 0.001
