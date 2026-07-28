@@ -93,6 +93,15 @@ authenticated, non-submitting readiness check but cannot enable a profile.
 readiness result, an in-window schedule, and an aggregate notional cap.
 Lifecycle Telegram messages use the existing durable notification outbox.
 
+`014_add_resolution_run_journal.sql` adds a source-neutral current-summary
+table and an append-only timeline table for post-run evaluation. The journal
+separates execution, latency, and direction status so an accepted but
+unmatched `0.99`/`0.999` order can be classified as a latency miss, a filled
+order with the correct direction can be classified as success, and sanitized
+source, parser, preparation, submission, supervision, or notification errors
+remain queryable for the next reporting cycle. Journal updates are
+asynchronous and do not add work to the trading hot path.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in
