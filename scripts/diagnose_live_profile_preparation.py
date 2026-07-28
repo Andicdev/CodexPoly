@@ -112,6 +112,11 @@ def main(
                 },
             ),
         )
+        item_errors = tuple(
+            safe_error
+            for item in preparation.items
+            if (safe_error := _safe(item.error)) is not None
+        )
         payload = {
             "ok": preparation.ready,
             "mode": "live_profile_prepare_only",
@@ -122,7 +127,7 @@ def main(
             "claim_reserved": False,
             "preparation": {
                 "ready": preparation.ready,
-                "error": _safe(preparation.error),
+                "error": item_errors[0] if item_errors else None,
                 "maximum_notional": str(executor.maximum_notional),
                 "items": [
                     {
@@ -130,7 +135,7 @@ def main(
                         "status": item.status.value,
                         "error": _safe(item.error),
                     }
-                    for item in preparation.summary.items
+                    for item in preparation.items
                 ],
             },
             "markets": [

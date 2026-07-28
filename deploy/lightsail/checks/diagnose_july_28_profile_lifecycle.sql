@@ -1,12 +1,15 @@
 BEGIN TRANSACTION READ ONLY;
 
 SELECT format(
-    'profile=%s,schedule=%s,mode=%s,state=%s,profile_status=%s,error=%s',
+    'profile=%s,schedule=%s,mode=%s,state=%s,profile_status=%s,preflight=%s,activate=%s,deactivate=%s,error=%s',
     profile.profile_key,
     schedule.schedule_key,
     schedule.automation_mode,
     schedule.state,
     profile.status,
+    schedule.preflight_at,
+    schedule.activate_at,
+    schedule.deactivate_at,
     coalesce(schedule.last_error_code, 'none')
 )
 FROM resolution_profile_schedules AS schedule

@@ -23,6 +23,8 @@ class LiveProfilePreparationDiagnosticTests(unittest.TestCase):
         self.assertNotIn(".post_orders(", text)
         self.assertNotIn(".reserve_many(", text)
         self.assertNotIn("encrypted_private_key", text)
+        self.assertNotIn("preparation.error", text)
+        self.assertNotIn("preparation.summary", text)
 
 
 if __name__ == "__main__":
