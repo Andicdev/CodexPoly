@@ -59,7 +59,25 @@ SET
     overall_result = 'SUCCESS',
     quantity = observed.original_quantity,
     matched_quantity = observed.matched_quantity,
-    last_order_observed_at = observed.observed_at,
+    first_order_observed_at = (
+        SELECT min(orders.opened_at)
+        FROM resolution_order_group_orders AS orders
+        JOIN resolution_order_groups AS groups
+          ON groups.order_group_id = orders.order_group_id
+        WHERE groups.template_id =
+            'numeric_threshold:earnings-jblu-2026q2:YES'
+    ),
+    last_order_observed_at = greatest(
+        observed.observed_at,
+        (
+            SELECT max(orders.opened_at)
+            FROM resolution_order_group_orders AS orders
+            JOIN resolution_order_groups AS groups
+              ON groups.order_group_id = orders.order_group_id
+            WHERE groups.template_id =
+                'numeric_threshold:earnings-jblu-2026q2:YES'
+        )
+    ),
     classification_reason =
         'correct_direction_partial_fill_with_slow_open_remainder',
     details = journal.details || jsonb_build_object(
