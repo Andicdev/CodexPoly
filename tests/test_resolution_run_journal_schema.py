@@ -32,6 +32,20 @@ _KO_COMPLETE = (
     / "live"
     / "008_complete_ko_premarket_profile.sql"
 )
+_PYPL_JBLU = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "009_record_pypl_jblu_run_journal.sql"
+)
+_PYPL_JBLU_COMPLETE = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "010_complete_pypl_jblu_premarket_profiles.sql"
+)
 
 
 class ResolutionRunJournalSchemaTests(unittest.TestCase):
@@ -96,6 +110,29 @@ class ResolutionRunJournalSchemaTests(unittest.TestCase):
 
     def test_ko_completion_does_not_touch_accepted_order(self) -> None:
         text = _KO_COMPLETE.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("AUTOMATION_MODE = 'MANUAL'", upper)
+        self.assertIn("STATE = 'EXPIRED'", upper)
+        self.assertIn("'ACCEPTED_ORDER_LEFT_UNCHANGED'", upper)
+        self.assertNotIn("RESOLUTION_ORDER_GROUP", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL", upper)
+
+    def test_pypl_jblu_followup_accepts_either_live_tick(self) -> None:
+        text = _PYPL_JBLU.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("'EARNINGS:PYPL:2026Q2'", upper)
+        self.assertIn("'EARNINGS:JBLU:2026Q2'", upper)
+        self.assertIn("EFFECTIVE_PRICE IN (0.99, 0.999)", upper)
+        self.assertIn("'CURRENT_EFFECTIVE_PRICE'", upper)
+        self.assertNotIn("UPDATE RESOLUTION_EXECUTION_CLAIMS", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("CANCEL", upper)
+
+    def test_pypl_jblu_completion_leaves_order_groups_alone(self) -> None:
+        text = _PYPL_JBLU_COMPLETE.read_text(encoding="utf-8")
         upper = text.upper()
 
         self.assertIn("AUTOMATION_MODE = 'MANUAL'", upper)
