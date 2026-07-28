@@ -134,16 +134,24 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
             _fact(by_ticker["BA"], "-0.31"),
             _fact(by_ticker["CSGP"], "0.11"),
             _fact(by_ticker["CZR"], "0.06"),
+            _fact(by_ticker["EBAY"], "1.52"),
             _fact(by_ticker["F"], "0.36"),
             _fact(by_ticker["HLT"], "2.26"),
+            _fact(by_ticker["HOOD"], "0.44"),
+            _fact(by_ticker["HUM"], "7.01"),
             _fact(by_ticker["IVZ"], "0.67"),
             _fact(by_ticker["JBLU"], "-0.67"),
             _fact(by_ticker["KO"], "0.94"),
+            _fact(by_ticker["META"], "7.21"),
+            _fact(by_ticker["MSFT"], "4.22"),
             _fact(by_ticker["NVTS"], "-0.03"),
             _fact(by_ticker["NXPI"], "3.54"),
+            _fact(by_ticker["PG"], "1.42"),
             _fact(by_ticker["PYPL"], "1.29"),
+            _fact(by_ticker["QCOM"], "2.24"),
             _fact(by_ticker["RCL"], "3.98"),
             _fact(by_ticker["SBUX"], "0.70"),
+            _fact(by_ticker["SOFI"], "0.12"),
             _fact(by_ticker["SPGI"], "4.96"),
             _fact(by_ticker["UPS"], "1.67"),
             _fact(by_ticker["V"], "3.23"),
@@ -165,14 +173,14 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         preparations = worker.prepare()
         result = worker.poll_once()
 
-        self.assertEqual(len(preparations), 18)
+        self.assertEqual(len(preparations), 26)
         self.assertTrue(all(item.ready for item in preparations))
         self.assertTrue(
             all(item.template_count == 2 for item in preparations)
         )
-        self.assertEqual(worker.managed_count, 18)
-        self.assertEqual(result.fact_count, 18)
-        self.assertEqual(result.completed_count, 18)
+        self.assertEqual(worker.managed_count, 26)
+        self.assertEqual(result.fact_count, 26)
+        self.assertEqual(result.completed_count, 26)
         self.assertEqual(result.failed_count, 0)
         worker.close()
 
