@@ -38,6 +38,7 @@ $guard$;
 
 WITH observed AS (
     SELECT
+        observations.original_quantity,
         observations.matched_quantity,
         observations.remaining_quantity,
         observations.observed_at
@@ -56,6 +57,7 @@ UPDATE resolution_run_journal AS journal
 SET
     execution_status = 'PARTIALLY_FILLED',
     overall_result = 'SUCCESS',
+    quantity = observed.original_quantity,
     matched_quantity = observed.matched_quantity,
     last_order_observed_at = observed.observed_at,
     classification_reason =
