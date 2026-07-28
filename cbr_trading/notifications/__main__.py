@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 
+from cbr_trading.db_runtime import SharedSqlAlchemyRuntime
 from cbr_trading.notifications.hosted_worker import (
     NotificationHostedWorker,
     build_telegram_sender,
@@ -32,8 +33,22 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     logger = logging.getLogger("cbr_trading.notifications")
+    try:
+        database_runtime = SharedSqlAlchemyRuntime(
+            database_url=settings.database_url or "",
+            application_name="codexpoly-notifications",
+            pool_size=1,
+            max_overflow=1,
+        )
+    except Exception as exc:
+        logger.error(
+            "Notification database runtime failed error=%s",
+            redact_exception(RuntimeError(type(exc).__name__)),
+        )
+        return 3
     store = SqlAlchemyNotificationOutboxStore(
-        database_url=settings.database_url
+        database_url=settings.database_url,
+        session_factory=database_runtime.session_factory,
     )
     worker = NotificationHostedWorker(
         settings=settings,
@@ -54,6 +69,7 @@ def main() -> int:
         return 5
     finally:
         store.close()
+        database_runtime.close()
     return 0
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import logging
 import threading
 import unittest
@@ -27,10 +28,13 @@ class _Response:
         *,
         url: str,
         content_type: str = "text/html",
+        content_encoding: str | None = None,
     ):
         self._document = document
         self._url = url
         self.headers = _Headers({"Content-Type": content_type})
+        if content_encoding is not None:
+            self.headers["Content-Encoding"] = content_encoding
 
     def __enter__(self):
         return self
@@ -281,6 +285,60 @@ class SecDocumentFetcherTests(unittest.TestCase):
             fetcher.fetch(_source(nvts_q2_2026_shadow_rule())),
             b"<html>valid earnings release</html>",
         )
+
+    def test_gzip_encoded_sec_document_is_decoded_before_parsing(self) -> None:
+        payload = b"<html>valid compressed earnings release</html>"
+
+        def direct_opener(request, *, timeout: float):
+            return _Response(
+                gzip.compress(payload),
+                url=request.full_url,
+                content_encoding="gzip",
+            )
+
+        def archive_opener(*_args, **_kwargs):
+            raise RuntimeError("archive unavailable")
+
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="CodexPoly test@example.com",
+            timeout=5,
+            max_bytes=4096,
+            direct_opener=direct_opener,
+            archive_opener=archive_opener,
+        )
+
+        self.assertEqual(
+            fetcher.fetch(_source(nvts_q2_2026_shadow_rule())),
+            payload,
+        )
+
+    def test_rejects_gzip_document_exceeding_uncompressed_limit(self) -> None:
+        payload = gzip.compress(b"x" * 1025)
+
+        def opener(request, **_kwargs):
+            return _Response(
+                payload,
+                url=request.full_url,
+                content_encoding="gzip",
+            )
+
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="test",
+            timeout=5,
+            max_bytes=1024,
+            direct_opener=opener,
+            archive_opener=opener,
+        )
+
+        with self.assertRaisesRegex(
+            SecDocumentFetchError,
+            "all configured routes",
+        ):
+            fetcher.fetch(
+                _source(nvts_q2_2026_shadow_rule())
+            )
 
 
 if __name__ == "__main__":

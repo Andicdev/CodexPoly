@@ -89,6 +89,7 @@ class PolymarketPreparedExecutor:
         account_repository: Any | None = None,
         market_gateway: Any | None = None,
         ledger: Any | None = None,
+        db_session_factory: Callable[[], Any] | None = None,
         client_factory: Callable[[str, str], Any] | None = None,
         decryptor: Callable[[bytes, str], str] | None = None,
     ):
@@ -97,6 +98,7 @@ class PolymarketPreparedExecutor:
         self._account_repository = account_repository
         self._market_gateway = market_gateway
         self._ledger = ledger
+        self._db_session_factory = db_session_factory
         self._client_factory = client_factory
         self._decryptor = decryptor or decrypt_private_key
         self._context: PreparationContext | None = None
@@ -509,13 +511,15 @@ class PolymarketPreparedExecutor:
     def _resolve_dependencies(self) -> None:
         if self._account_repository is None:
             self._account_repository = build_trading_account_repository(
-                database_url=self._database_url
+                database_url=self._database_url,
+                session_factory=self._db_session_factory,
             )
         if self._market_gateway is None:
             self._market_gateway = PolymarketMarketGateway()
         if self._ledger is None:
             self._ledger = SqlAlchemyResolutionExecutionLedger(
-                database_url=self._database_url
+                database_url=self._database_url,
+                session_factory=self._db_session_factory,
             )
 
     def _reserve_execution_claims(self) -> None:

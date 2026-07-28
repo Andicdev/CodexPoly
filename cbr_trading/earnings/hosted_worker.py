@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from cbr_trading.db_runtime import SharedSqlAlchemyRuntime
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
     EarningsMarketRule,
@@ -1001,26 +1002,44 @@ def main(
         ),
     )
     logger = logging.getLogger("cbr_trading.earnings")
+    try:
+        database_runtime = SharedSqlAlchemyRuntime(
+            database_url=settings.database_url or "",
+            application_name="codexpoly-earnings",
+            pool_size=3,
+            max_overflow=1,
+        )
+    except Exception as exc:
+        logger.error(
+            "Earnings database runtime failed error=%s",
+            redact_exception(RuntimeError(type(exc).__name__)),
+        )
+        return 3
+    session_factory = database_runtime.session_factory
     store = SqlAlchemyEarningsStore(
-        database_url=settings.database_url
+        database_url=settings.database_url,
+        session_factory=session_factory,
     )
     mstr_store = (
         SqlAlchemyMstrBtcHoldingsStore(
-            database_url=settings.database_url
+            database_url=settings.database_url,
+            session_factory=session_factory,
         )
         if settings.mstr_btc_shadow_enabled
         else None
     )
     mstr_audit_store = (
         SqlAlchemyMstrBtcAuditStore(
-            database_url=settings.database_url
+            database_url=settings.database_url,
+            session_factory=session_factory,
         )
         if settings.mstr_btc_shadow_enabled
         else None
     )
     profile_store = (
         SqlAlchemyResolutionProfileStore(
-            database_url=settings.database_url
+            database_url=settings.database_url,
+            session_factory=session_factory,
         )
         if (
             settings.mstr_btc_ledger_enabled
@@ -1047,7 +1066,8 @@ def main(
         else None
     )
     notification_store = SqlAlchemyNotificationOutboxStore(
-        database_url=settings.database_url
+        database_url=settings.database_url,
+        session_factory=session_factory,
     )
     worker = EarningsHostedShadowWorker(
         settings=settings,
@@ -1081,6 +1101,7 @@ def main(
         if profile_store is not None:
             profile_store.close()
         notification_store.close()
+        database_runtime.close()
     return 0
 
 

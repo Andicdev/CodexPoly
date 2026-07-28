@@ -40,12 +40,14 @@ class PolymarketSupervisionOrderGateway:
         database_url: str = "",
         safety: LiveSafetySettings,
         account_repository: Any | None = None,
+        db_session_factory: Callable[[], Any] | None = None,
         client_factory: Callable[[str, str], Any] | None = None,
         decryptor: Callable[[bytes, str], str] | None = None,
     ):
         self._database_url = str(database_url or "").strip()
         self._safety = safety
         self._account_repository = account_repository
+        self._db_session_factory = db_session_factory
         self._client_factory = client_factory
         self._decryptor = decryptor or decrypt_private_key
         self._clients: dict[str, Any] = {}
@@ -240,7 +242,8 @@ class PolymarketSupervisionOrderGateway:
                     "Trading database URL is not configured"
                 )
             self._account_repository = build_trading_account_repository(
-                database_url=self._database_url
+                database_url=self._database_url,
+                session_factory=self._db_session_factory,
             )
         try:
             account: TradingAccountRecord = (

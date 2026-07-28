@@ -172,7 +172,9 @@ services:
       DATABASE_USER: codexpoly_app
       DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
       RESOLUTION_ORCHESTRATOR_MODE: shadow
-      RESOLUTION_ORCHESTRATOR_POLL_SEC: "0.25"
+      # Interim low-latency bridge until cross-process fact wakeups replace
+      # database polling. Only workers with managed profiles hit the store.
+      RESOLUTION_ORCHESTRATOR_POLL_SEC: "0.05"
       RESOLUTION_ORCHESTRATOR_HEARTBEAT_SEC: "30"
       RESOLUTION_ORCHESTRATOR_NO_PROFILES_SEC: "30"
       RESOLUTION_ORCHESTRATOR_PROFILE_REFRESH_SEC: "2"

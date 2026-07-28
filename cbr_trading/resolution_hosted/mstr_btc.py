@@ -95,6 +95,7 @@ class MstrBtcHostedResolutionWorker:
         audit_store: SqlAlchemyMstrBtcAuditStore,
         profile_store: SqlAlchemyResolutionProfileStore,
         lifecycle_store: Any | None = None,
+        db_session_factory: Callable[[], Any] | None = None,
         rules: Sequence[MstrBtcResolutionRule] | None = None,
         bindings: Sequence[MstrBtcMarketBinding] | None = None,
         executor_factory: ExecutorFactory | None = None,
@@ -105,6 +106,7 @@ class MstrBtcHostedResolutionWorker:
         self._audit_store = audit_store
         self._profile_store = profile_store
         self._lifecycle_store = lifecycle_store
+        self._db_session_factory = db_session_factory
         self._rules = tuple(
             rules
             if rules is not None
@@ -613,10 +615,12 @@ class MstrBtcHostedResolutionWorker:
             return PolymarketPreflightPreparedExecutor(
                 database_url=self._settings.database_url or "",
                 safety=safety,
+                db_session_factory=self._db_session_factory,
             )
         delegate: PreparedExecutor = PolymarketPreparedExecutor(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         if isinstance(
             profile.lifecycle_policy,
@@ -638,10 +642,12 @@ class MstrBtcHostedResolutionWorker:
         safety = LiveSafetySettings.from_env()
         repository = SqlAlchemyOrderGroupRepository(
             database_url=self._settings.database_url,
+            session_factory=self._db_session_factory,
         )
         gateway = PolymarketSupervisionOrderGateway(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         supervisor = PersistentOrderSupervisor(
             repository=repository,

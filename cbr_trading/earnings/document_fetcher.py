@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import io
 import logging
 import time
 from collections.abc import Callable
@@ -204,7 +206,12 @@ class SecDocumentFetcher:
                     raise SecDocumentFetchError(
                         "SEC exhibit has an unsupported content type"
                     )
-                document = response.read(self._max_bytes + 1)
+                encoded_document = response.read(self._max_bytes + 1)
+                document = _decode_response_document(
+                    encoded_document,
+                    content_encoding=_content_encoding(response),
+                    max_bytes=self._max_bytes,
+                )
             if not document:
                 raise SecDocumentFetchError("SEC exhibit is empty")
             if len(document) > self._max_bytes:
@@ -341,6 +348,35 @@ def _reject_access_block(document: bytes) -> None:
         )
 
 
+def _decode_response_document(
+    document: bytes,
+    *,
+    content_encoding: str | None,
+    max_bytes: int,
+) -> bytes:
+    encoding = str(content_encoding or "").strip().casefold()
+    if encoding in {"", "identity"} and not document.startswith(
+        b"\x1f\x8b"
+    ):
+        return document
+    if encoding not in {"", "gzip", "x-gzip"}:
+        raise SecDocumentFetchError(
+            "SEC exhibit has an unsupported content encoding"
+        )
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(document)) as compressed:
+            decoded = compressed.read(max_bytes + 1)
+    except (EOFError, OSError) as exc:
+        raise SecDocumentFetchError(
+            "SEC exhibit gzip payload is invalid"
+        ) from exc
+    if len(decoded) > max_bytes:
+        raise SecDocumentFetchError(
+            "SEC exhibit exceeds the configured size limit"
+        )
+    return decoded
+
+
 class _RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, *_args: Any, **_kwargs: Any):
         raise SecDocumentFetchError(
@@ -359,4 +395,12 @@ def _content_type(response: Any) -> str | None:
     if hasattr(headers, "get_content_type"):
         return str(headers.get_content_type() or "").casefold() or None
     raw = str(headers.get("Content-Type") or "").split(";", 1)[0]
+    return raw.strip().casefold() or None
+
+
+def _content_encoding(response: Any) -> str | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = str(headers.get("Content-Encoding") or "")
     return raw.strip().casefold() or None

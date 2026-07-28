@@ -250,6 +250,7 @@ class SqlAlchemyRuntimeSecretTradingAccountRepository:
         *,
         database_url: str,
         environ: Mapping[str, str] | None = None,
+        session_factory: Callable[[], Any] | None = None,
     ) -> "SqlAlchemyRuntimeSecretTradingAccountRepository":
         env = environ if environ is not None else os.environ
         normalized_database_url = str(database_url or "").strip()
@@ -274,6 +275,7 @@ class SqlAlchemyRuntimeSecretTradingAccountRepository:
             database_url=normalized_database_url,
             configured_name=name,
             encrypted_private_key=str(encrypted_key).encode("utf-8"),
+            session_factory=session_factory,
         )
 
     def load_active(self, account_name: str) -> TradingAccountRecord:
@@ -369,6 +371,7 @@ def build_trading_account_repository(
     *,
     database_url: str = "",
     environ: Mapping[str, str] | None = None,
+    session_factory: Callable[[], Any] | None = None,
 ) -> TradingAccountRepository:
     """Select the legacy database or single-secret account provider."""
 
@@ -379,7 +382,12 @@ def build_trading_account_repository(
     ).lower()
     if source == "database":
         return SqlAlchemyTradingAccountRepository(
-            database_url=database_url
+            database_url=database_url,
+            **(
+                {"session_factory": session_factory}
+                if session_factory is not None
+                else {}
+            ),
         )
     if source == "single_secret":
         return RuntimeSecretTradingAccountRepository.from_env(env)
@@ -387,6 +395,11 @@ def build_trading_account_repository(
         return SqlAlchemyRuntimeSecretTradingAccountRepository.from_env(
             database_url=database_url,
             environ=env,
+            **(
+                {"session_factory": session_factory}
+                if session_factory is not None
+                else {}
+            ),
         )
     raise TradingAccountLoadError(
         f"Unsupported trading account source: {source!r}"

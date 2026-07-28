@@ -244,7 +244,8 @@ class SpGlobalAdjustedDilutedEpsParser(LabelledEpsParser):
                 cik=SP_GLOBAL_CIK,
                 metric=EarningsMetric.NON_GAAP_EPS,
                 label=(
-                    r"\badjusted\s+diluted\s+earnings\s+per\s+share"
+                    r"\badjusted\s+diluted\s+"
+                    r"(?:earnings\s+per\s+share|eps)"
                     r"\s+(?:increased|decreased)"
                     r"[^.;]{0,64}\bto\b"
                 ),
@@ -252,6 +253,7 @@ class SpGlobalAdjustedDilutedEpsParser(LabelledEpsParser):
                 accepted_reason="official_sp_global_adjusted_diluted_eps",
                 evidence_title="S&P Global official earnings release",
                 resolution_basis="reported_adjusted_diluted_eps",
+                parser_version="2",
             )
         )
 

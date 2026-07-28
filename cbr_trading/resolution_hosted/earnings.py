@@ -105,6 +105,7 @@ class EarningsHostedResolutionWorker:
         earnings_store: SqlAlchemyEarningsStore,
         profile_store: SqlAlchemyResolutionProfileStore,
         lifecycle_store: Any | None = None,
+        db_session_factory: Callable[[], Any] | None = None,
         executor_factory: ExecutorFactory | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
@@ -113,6 +114,7 @@ class EarningsHostedResolutionWorker:
         self._earnings_store = earnings_store
         self._profile_store = profile_store
         self._lifecycle_store = lifecycle_store
+        self._db_session_factory = db_session_factory
         self._executor_factory = executor_factory
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -594,10 +596,12 @@ class EarningsHostedResolutionWorker:
             return PolymarketPreflightPreparedExecutor(
                 database_url=self._settings.database_url or "",
                 safety=safety,
+                db_session_factory=self._db_session_factory,
             )
         delegate: PreparedExecutor = PolymarketPreparedExecutor(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         if isinstance(
             profile.lifecycle_policy,
@@ -619,10 +623,12 @@ class EarningsHostedResolutionWorker:
         safety = LiveSafetySettings.from_env()
         repository = SqlAlchemyOrderGroupRepository(
             database_url=self._settings.database_url,
+            session_factory=self._db_session_factory,
         )
         gateway = PolymarketSupervisionOrderGateway(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         supervisor = PersistentOrderSupervisor(
             repository=repository,

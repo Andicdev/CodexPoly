@@ -100,6 +100,7 @@ class FedHostedResolutionWorker:
         notification_outbox: (
             SqlAlchemyNotificationOutboxStore | None
         ) = None,
+        db_session_factory: Callable[[], Any] | None = None,
         spec: FedDecisionSpec | None = None,
         bindings: Sequence[FedMarketBinding] | None = None,
         poller: FedOfficialDocumentPoller | None = None,
@@ -111,6 +112,7 @@ class FedHostedResolutionWorker:
         self._profile_store = profile_store
         self._lifecycle_store = lifecycle_store
         self._notification_outbox = notification_outbox
+        self._db_session_factory = db_session_factory
         self._spec = spec or fed_july_2026_decision_spec()
         self._bindings = tuple(
             bindings
@@ -555,10 +557,12 @@ class FedHostedResolutionWorker:
             return PolymarketPreflightPreparedExecutor(
                 database_url=self._settings.database_url or "",
                 safety=safety,
+                db_session_factory=self._db_session_factory,
             )
         delegate: PreparedExecutor = PolymarketPreparedExecutor(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         if isinstance(
             profile.lifecycle_policy,
@@ -578,10 +582,12 @@ class FedHostedResolutionWorker:
         safety = LiveSafetySettings.from_env()
         repository = SqlAlchemyOrderGroupRepository(
             database_url=self._settings.database_url,
+            session_factory=self._db_session_factory,
         )
         gateway = PolymarketSupervisionOrderGateway(
             database_url=self._settings.database_url or "",
             safety=safety,
+            db_session_factory=self._db_session_factory,
         )
         supervisor = PersistentOrderSupervisor(
             repository=repository,

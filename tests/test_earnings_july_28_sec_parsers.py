@@ -142,10 +142,9 @@ class July28SecParserTests(unittest.TestCase):
                 spgi_q2_2026_shadow_rule(),
                 (
                     "S&P Global reports second quarter 2026 results. "
-                    "Adjusted diluted earnings per share increased "
-                    "14% to $4.97."
+                    "Adjusted diluted EPS increased 23% to $4.83."
                 ),
-                "4.97",
+                "4.83",
             ),
             (
                 StarbucksGaapEpsParser(),
