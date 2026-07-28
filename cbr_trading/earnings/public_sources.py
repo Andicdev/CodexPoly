@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import io
 import json
 import logging
 import re
@@ -22,6 +23,8 @@ from urllib.request import (
     build_opener,
 )
 from xml.etree import ElementTree
+
+from pypdf import PdfReader
 
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
@@ -62,6 +65,7 @@ _HTML_LISTING_CONTENT_TYPES = frozenset(
 )
 _DOCUMENT_CONTENT_TYPES = frozenset(
     {
+        "application/pdf",
         "application/xhtml+xml",
         "application/xml",
         "text/html",
@@ -76,7 +80,12 @@ _XML_BUILTIN_ENTITIES = frozenset(
     {b"amp", b"apos", b"gt", b"lt", b"quot"}
 )
 _PUBLIC_LISTING_KINDS = frozenset(
-    {"html_listing", "rss", "wordpress_rest"}
+    {
+        "direct_document",
+        "html_listing",
+        "rss",
+        "wordpress_rest",
+    }
 )
 _DEFAULT_RELEASE_LOOKBACK_HOURS = 48
 
@@ -193,6 +202,12 @@ class _FeedItem:
     link: str
     published_at: datetime
     contributor: str | None
+
+
+@dataclass(frozen=True)
+class _DirectDocumentProbe:
+    event_id: str
+    published_at: datetime
 
 
 def public_release_watches_from_rules(
@@ -371,6 +386,31 @@ class PublicReleaseFeedClient:
                 deferred += 1
                 continue
             try:
+                if kind == "direct_document":
+                    probe = self._probe_direct_document(
+                        feed_url,
+                        detected_at=detected_at,
+                    )
+                    self._clear_feed_failure(feed_url)
+                    if probe is None:
+                        not_modified += 1
+                        continue
+                    successes += 1
+                    for watch in feed_watches:
+                        candidates.append(
+                            _candidate_from_item(
+                                _FeedItem(
+                                    event_id=probe.event_id,
+                                    title=" ".join(watch.title_all),
+                                    link=feed_url,
+                                    published_at=probe.published_at,
+                                    contributor=None,
+                                ),
+                                watch=watch,
+                                received_at=detected_at,
+                            )
+                        )
+                    continue
                 document = self._fetch_listing(
                     feed_url,
                     kind=kind,
@@ -575,6 +615,105 @@ class PublicReleaseFeedClient:
         )
         return document
 
+    def _probe_direct_document(
+        self,
+        document_url: str,
+        *,
+        detected_at: datetime,
+    ) -> _DirectDocumentProbe | None:
+        document_host = _url_host(document_url)
+        _require_public_url(
+            document_url,
+            allowed_hosts=(document_host,),
+            label="direct document URL",
+        )
+        etag, modified = self._validators.get(
+            document_url,
+            (None, None),
+        )
+        headers = {
+            "User-Agent": self._user_agent,
+            "Accept": (
+                "application/pdf,text/html,"
+                "application/xhtml+xml;q=0.9,*/*;q=0.1"
+            ),
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
+        if etag:
+            headers["If-None-Match"] = etag
+        if modified:
+            headers["If-Modified-Since"] = modified
+        request = Request(
+            document_url,
+            headers=headers,
+            method="HEAD",
+        )
+        opener = self._opener or _allowlisted_opener((document_host,))
+        try:
+            response_context = opener(
+                request,
+                timeout=self._timeout,
+            )
+        except HTTPError as exc:
+            if exc.code in {304, 404}:
+                return None
+            raise PublicReleaseSourceError(
+                "direct public document probe failed"
+            ) from None
+        with response_context as response:
+            status = int(getattr(response, "status", 200))
+            if status == 304:
+                return None
+            if status == 404:
+                return None
+            if status != 200:
+                raise PublicReleaseSourceError(
+                    "direct public document returned a non-success status"
+                )
+            final_url = str(
+                response.geturl()
+                if hasattr(response, "geturl")
+                else document_url
+            )
+            _require_public_url(
+                final_url,
+                allowed_hosts=(document_host,),
+                label="direct document redirect",
+            )
+            content_type = _content_type(response)
+            if (
+                content_type
+                and content_type not in _DOCUMENT_CONTENT_TYPES
+            ):
+                raise PublicReleaseSourceError(
+                    "direct public document has unsupported content type"
+                )
+            response_headers = getattr(response, "headers", None)
+            next_etag = _header(response_headers, "ETag")
+            next_modified = _header(
+                response_headers,
+                "Last-Modified",
+            )
+        validator = next_etag or next_modified or document_url
+        published_at = detected_at
+        if next_modified:
+            try:
+                published_at = _parse_datetime(next_modified)
+            except (TypeError, ValueError):
+                published_at = detected_at
+        self._validators[document_url] = (
+            next_etag or etag,
+            next_modified or modified,
+        )
+        event_id = "direct:" + hashlib.sha256(
+            f"{document_url}|{validator}".encode("utf-8")
+        ).hexdigest()
+        return _DirectDocumentProbe(
+            event_id=event_id,
+            published_at=published_at,
+        )
+
     def close(self) -> None:
         return None
 
@@ -632,7 +771,8 @@ class PublicReleaseDocumentFetcher:
             headers={
                 "User-Agent": self._user_agent,
                 "Accept": (
-                    "text/html,application/xhtml+xml,"
+                    "application/pdf,text/html,"
+                    "application/xhtml+xml,"
                     "text/plain;q=0.9,*/*;q=0.1"
                 ),
                 "Cache-Control": "no-cache",
@@ -678,6 +818,14 @@ class PublicReleaseDocumentFetcher:
             raise PublicReleaseSourceError(
                 "public release document exceeds the size limit"
             )
+        if (
+            content_type == "application/pdf"
+            or document.startswith(b"%PDF-")
+        ):
+            return _extract_pdf_text(
+                document,
+                max_bytes=self._max_bytes,
+            )
         return document
 
 
@@ -698,6 +846,11 @@ def _candidate_from_item(
             f"{item.link}|{item.published_at.isoformat()}"
         ).encode("utf-8")
     ).hexdigest()
+    document_type = (
+        "PDF"
+        if urlparse(item.link).path.casefold().endswith(".pdf")
+        else "HTML"
+    )
     return EarningsDocumentCandidate(
         scope_id=watch.scope_id,
         provider=watch.provider,
@@ -706,7 +859,7 @@ def _candidate_from_item(
         cik=watch.cik,
         form_type="PRESS_RELEASE",
         items=(),
-        document_type="HTML",
+        document_type=document_type,
         source_url=item.link,
         filing_url=item.link,
         filed_at=item.published_at,
@@ -1234,3 +1387,36 @@ def _read_bounded_body(
             f"{label} body is incomplete"
         )
     return document
+
+
+def _extract_pdf_text(
+    document: bytes,
+    *,
+    max_bytes: int,
+) -> bytes:
+    try:
+        reader = PdfReader(io.BytesIO(document), strict=False)
+        if len(reader.pages) > 200:
+            raise PublicReleaseSourceError(
+                "public release PDF has too many pages"
+            )
+        text = "\n".join(
+            str(page.extract_text() or "")
+            for page in reader.pages
+        ).strip()
+    except PublicReleaseSourceError:
+        raise
+    except Exception:
+        raise PublicReleaseSourceError(
+            "public release PDF text extraction failed"
+        ) from None
+    if not text:
+        raise PublicReleaseSourceError(
+            "public release PDF contains no extractable text"
+        )
+    encoded = text.encode("utf-8")
+    if len(encoded) > max_bytes:
+        raise PublicReleaseSourceError(
+            "public release PDF text exceeds the size limit"
+        )
+    return encoded

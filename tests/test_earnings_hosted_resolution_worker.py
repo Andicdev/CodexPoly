@@ -337,6 +337,25 @@ class HostedResolutionSettingsTests(unittest.TestCase):
             HostedResolutionMode.SHADOW,
         )
         self.assertFalse(settings.supervision_enabled)
+        self.assertEqual(
+            settings.run_journal_reconcile_interval,
+            2,
+        )
+
+    def test_configures_run_journal_reconcile_interval(self) -> None:
+        settings = HostedResolutionSettings.from_env(
+            {
+                "DATABASE_URL_SERVER_EXT": (
+                    "postgresql://unused"
+                ),
+                "RESOLUTION_RUN_JOURNAL_RECONCILE_SEC": "0.5",
+            }
+        )
+
+        self.assertEqual(
+            settings.run_journal_reconcile_interval,
+            0.5,
+        )
 
     def test_rejects_unknown_mode(self) -> None:
         with self.assertRaisesRegex(

@@ -285,6 +285,41 @@ class CostarGaapEpsParserTests(unittest.TestCase):
         self.assertEqual(result.candidate.value, Decimal("0.12"))
         self.assertEqual(result.candidate.metric.value, "gaap_eps")
 
+    def test_selects_current_quarter_headline_over_prior_periods(
+        self,
+    ) -> None:
+        rule = csgp_q2_2026_shadow_rule()
+        result = CostarGaapEpsParser().parse(
+            (
+                "<h1>CoStar Group Q2 2026 Results</h1>"
+                "<p>For the quarter ended June 30, 2026.</p>"
+                "<p>Net income was $55 million and earnings per "
+                "diluted share was $0.14 for the second quarter "
+                "of 2026, compared with net income of $6 million, "
+                "and earnings per diluted share of $0.01, in the "
+                "prior year period.</p>"
+                "<table><tr><td>Net income per diluted share</td>"
+                "<td>$0.14</td><td>$0.01</td></tr>"
+                "<tr><td>Net loss per diluted share</td>"
+                "<td>$(0.02)</td><td>$(0.05)</td></tr></table>"
+            ),
+            source=_source(
+                ticker="CSGP",
+                cik=COSTAR_CIK,
+                scope_id=rule.scope_id,
+            ),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.value, Decimal("0.14"))
+        self.assertEqual(
+            result.candidate.parser_version,
+            "2",
+        )
+
     def test_conflicting_gaap_values_are_quarantined(self) -> None:
         rule = csgp_q2_2026_shadow_rule()
         result = CostarGaapEpsParser().parse(

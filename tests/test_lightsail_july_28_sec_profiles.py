@@ -22,7 +22,7 @@ _CHECK = (
 
 
 class LightsailJuly28SecProfilesTests(unittest.TestCase):
-    def test_seed_is_idempotent_sec_only_and_disarmed(self) -> None:
+    def test_seed_is_idempotent_with_ford_ir_and_disarmed(self) -> None:
         text = _SEED.read_text(encoding="utf-8").lower()
 
         self.assertEqual(
@@ -37,7 +37,9 @@ class LightsailJuly28SecProfilesTests(unittest.TestCase):
         self.assertNotIn("insert into resolution_execution_claims", text)
         self.assertNotIn("delete from", text)
         self.assertNotIn("drop table", text)
-        self.assertNotIn("'company_ir'", text)
+        self.assertEqual(text.count("'company_ir'"), 2)
+        self.assertIn("'direct_document'", text)
+        self.assertIn("'s205.q4cdn.com'", text)
         self.assertNotIn("'press_wire'", text)
 
         for ticker in (

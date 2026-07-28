@@ -34,6 +34,9 @@ from cbr_trading.resolution_hosted.settings import (
     HostedResolutionSettings,
 )
 from cbr_trading.runtime_secrets import runtime_secret_present
+from cbr_trading.run_journal import (
+    SqlAlchemyResolutionRunJournalStore,
+)
 from cbr_trading.resolution_hosted.runtime_repository import (
     SqlAlchemyResolutionRuntimeStore,
 )
@@ -111,11 +114,16 @@ def main() -> int:
         database_url=settings.database_url,
         session_factory=session_factory,
     )
+    run_journal_store = SqlAlchemyResolutionRunJournalStore(
+        database_url=settings.database_url,
+        session_factory=session_factory,
+    )
     earnings_worker = EarningsHostedResolutionWorker(
         settings=settings,
         earnings_store=earnings_store,
         profile_store=earnings_profile_store,
         lifecycle_store=lifecycle_store,
+        run_journal_store=run_journal_store,
         db_session_factory=session_factory,
         logger=logging.getLogger(
             "cbr_trading.resolution_hosted.earnings"
@@ -174,18 +182,21 @@ def main() -> int:
                     lifecycle_store.close()
                 finally:
                     try:
-                        mstr_worker.close()
+                        run_journal_store.close()
                     finally:
                         try:
-                            fed_worker.close()
+                            mstr_worker.close()
                         finally:
-                            notification_outbox.close()
-                            fed_profile_store.close()
-                            mstr_profile_store.close()
-                            mstr_audit_store.close()
-                            earnings_profile_store.close()
-                            earnings_store.close()
-                            database_runtime.close()
+                            try:
+                                fed_worker.close()
+                            finally:
+                                notification_outbox.close()
+                                fed_profile_store.close()
+                                mstr_profile_store.close()
+                                mstr_audit_store.close()
+                                earnings_profile_store.close()
+                                earnings_store.close()
+                                database_runtime.close()
     return 0
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,6 +16,7 @@ from cbr_trading.earnings.parsers._labelled_eps import (
     LabelledEpsParserConfig,
     eps_label,
 )
+from cbr_trading.earnings.parsers._common import accounting_values
 
 
 PAYPAL_CIK = "1633917"
@@ -307,11 +309,43 @@ class FordAdjustedDilutedEpsParser(LabelledEpsParser):
                     r"\(\s*non[\s\u2010-\u2015-]*gaap\s*\)"
                 ),
                 parser_name="ford_adjusted_diluted_eps",
+                parser_version="2",
                 accepted_reason="official_ford_adjusted_diluted_eps",
                 evidence_title="Ford official earnings release",
                 resolution_basis="adjusted_non_gaap_diluted_eps",
             )
         )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        prior_year = rule.fiscal_year - 1
+        header = re.search(
+            rf"\bsecond\s+quarter\s+(?:first\s+half\s+)?"
+            rf"{prior_year}\s+"
+            rf"{rule.fiscal_year}\s+change\b",
+            value,
+            re.IGNORECASE,
+        )
+        if header is None:
+            return ()
+        label = re.search(
+            r"\badjusted\s+eps\s*\(\s*diluted\s*\)",
+            value[header.end():header.end() + 6000],
+            re.IGNORECASE,
+        )
+        if label is None:
+            return ()
+        label_start = header.end() + label.start()
+        label_end = header.end() + label.end()
+        values = accounting_values(value[label_end:label_end + 240])
+        if len(values) < 2:
+            return ()
+        excerpt = value[label_start:label_end + 240].strip()[:400]
+        return ((values[1], excerpt),)
 
 
 def _sec_rule(
@@ -590,7 +624,7 @@ def visa_q3_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def ford_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="F",
         cik=FORD_CIK,
         fiscal_quarter=2,
@@ -606,4 +640,27 @@ def ford_q2_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=FORD_Q2_2026_CONDITION_ID,
         metric_selection="adjusted_non_gaap_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **dict(rule.source_policy),
+            "company_ir": {
+                "kind": "direct_document",
+                "provider": "company_ir",
+                "feed_url": (
+                    "https://s205.q4cdn.com/882619693/files/"
+                    "doc_financials/2026/q2/"
+                    "Ford-Motor-Company-Q2-2026-Press-Release.pdf"
+                ),
+                "allowed_document_hosts": ["s205.q4cdn.com"],
+                "title_all": [
+                    "Ford",
+                    "Second Quarter",
+                    "2026",
+                    "Press Release",
+                ],
+                "title_none": [],
+            },
+        },
     )

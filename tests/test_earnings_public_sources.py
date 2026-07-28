@@ -3,12 +3,14 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from email.message import Message
+from unittest.mock import patch
 
 from cbr_trading.earnings.contracts import EarningsProvider
 from cbr_trading.earnings.parsers.boeing import (
     ba_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.july_28_sec import (
+    ford_q2_2026_shadow_rule,
     hlt_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.july_29_sec import (
@@ -288,6 +290,88 @@ class EarningsPublicSourceTests(unittest.TestCase):
                 for watch in self.watches
             )
         )
+
+    def test_direct_document_probe_routes_ford_pdf(self) -> None:
+        watch = public_release_watches_from_rules(
+            (ford_q2_2026_shadow_rule(),)
+        )[0]
+        requests = []
+
+        def opener(request, *, timeout):
+            requests.append((request, timeout))
+            return _Response(
+                b"",
+                url=request.full_url,
+                content_type="application/pdf",
+                extra_headers={
+                    "ETag": '"ford-q2-2026"',
+                    "Last-Modified": (
+                        "Tue, 28 Jul 2026 20:06:18 GMT"
+                    ),
+                },
+            )
+
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=2,
+            opener=opener,
+        ).poll((watch,), received_at=_RECEIVED_AT)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(candidate.document_type, "PDF")
+        self.assertEqual(
+            candidate.filed_at.isoformat(),
+            "2026-07-28T20:06:18+00:00",
+        )
+        self.assertEqual(requests[0][0].method, "HEAD")
+        self.assertEqual(requests[0][1], 2)
+
+    def test_public_pdf_is_converted_to_parser_text(self) -> None:
+        watch = public_release_watches_from_rules(
+            (ford_q2_2026_shadow_rule(),)
+        )[0]
+        candidate = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=2,
+            opener=lambda request, **_kwargs: _Response(
+                b"",
+                url=request.full_url,
+                content_type="application/pdf",
+                extra_headers={
+                    "Last-Modified": (
+                        "Tue, 28 Jul 2026 20:06:18 GMT"
+                    ),
+                },
+            ),
+        ).poll((watch,), received_at=_RECEIVED_AT).candidates[0]
+        page = type(
+            "_Page",
+            (),
+            {"extract_text": lambda self: "Adjusted EPS $0.42"},
+        )()
+        reader = type("_Reader", (), {"pages": [page]})()
+        fetcher = PublicReleaseDocumentFetcher(
+            watches=(watch,),
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            max_bytes=4096,
+            opener=lambda request, **_kwargs: _Response(
+                b"%PDF-test",
+                url=request.full_url,
+                content_type="application/pdf",
+            ),
+        )
+
+        with patch(
+            "cbr_trading.earnings.public_sources.PdfReader",
+            return_value=reader,
+        ):
+            document = fetcher.fetch(candidate)
+
+        self.assertEqual(document, b"Adjusted EPS $0.42")
 
     def test_july_29_premarket_public_source_matrix(self) -> None:
         expected = {

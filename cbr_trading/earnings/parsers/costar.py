@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -13,6 +14,9 @@ from cbr_trading.earnings.parsers._labelled_eps import (
     LabelledEpsParser,
     LabelledEpsParserConfig,
     eps_label,
+)
+from cbr_trading.earnings.parsers._common import (
+    parse_accounting_decimal,
 )
 
 
@@ -39,7 +43,7 @@ class CostarGaapEpsParser(LabelledEpsParser):
                     ),
                 ),
                 parser_name="costar_gaap_diluted_eps",
-                parser_version="1",
+                parser_version="2",
                 accepted_reason="official_costar_gaap_diluted_eps",
                 missing_reason="costar_gaap_diluted_eps_not_found",
                 conflicting_reason=(
@@ -50,6 +54,38 @@ class CostarGaapEpsParser(LabelledEpsParser):
                 forbidden_prefixes=("adjusted", "non-gaap", "core"),
             )
         )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        quarter_name = {
+            1: "first",
+            2: "second",
+            3: "third",
+            4: "fourth",
+        }[rule.fiscal_quarter]
+        pattern = re.compile(
+            r"\bearnings\s+per\s+diluted\s+share\s+was\s+"
+            r"(?P<value>"
+            r"\(\s*(?:\$\s*)?\d+(?:\.\d+)?\s*\)"
+            r"|-?\s*\$?\s*\d+(?:\.\d+)?"
+            r")"
+            rf"\s+for\s+the\s+{quarter_name}\s+quarter\s+of\s+"
+            rf"{rule.fiscal_year}\b",
+            re.IGNORECASE,
+        )
+        matches: list[tuple[Decimal, str]] = []
+        for match in pattern.finditer(value):
+            matches.append(
+                (
+                    parse_accounting_decimal(match.group("value")),
+                    match.group(0).strip()[:400],
+                )
+            )
+        return tuple(matches)
 
 
 def csgp_q2_2026_shadow_rule() -> EarningsMarketRule:

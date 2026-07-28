@@ -28,6 +28,7 @@ class HostedResolutionSettings:
     no_profiles_retry_delay: float = 30.0
     profile_refresh_interval: float = 2.0
     runtime_heartbeat_interval: float = 5.0
+    run_journal_reconcile_interval: float = 2.0
     supervision_enabled: bool = False
     supervision_watch_refresh_interval: float = 5.0
     supervision_reconciliation_interval: float = 5.0
@@ -95,6 +96,14 @@ class HostedResolutionSettings:
                 )
                 or "5"
             ),
+            run_journal_reconcile_interval=float(
+                _clean(
+                    env.get(
+                        "RESOLUTION_RUN_JOURNAL_RECONCILE_SEC"
+                    )
+                )
+                or "2"
+            ),
             supervision_enabled=_bool(
                 env.get("RESOLUTION_SUPERVISION_ENABLED"),
                 default=False,
@@ -146,6 +155,7 @@ class HostedResolutionSettings:
             "no_profiles_retry_delay",
             "profile_refresh_interval",
             "runtime_heartbeat_interval",
+            "run_journal_reconcile_interval",
             "supervision_watch_refresh_interval",
             "supervision_reconciliation_interval",
             "supervision_stale_after",

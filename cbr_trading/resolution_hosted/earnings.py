@@ -105,6 +105,7 @@ class EarningsHostedResolutionWorker:
         earnings_store: SqlAlchemyEarningsStore,
         profile_store: SqlAlchemyResolutionProfileStore,
         lifecycle_store: Any | None = None,
+        run_journal_store: Any | None = None,
         db_session_factory: Callable[[], Any] | None = None,
         executor_factory: ExecutorFactory | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -114,6 +115,7 @@ class EarningsHostedResolutionWorker:
         self._earnings_store = earnings_store
         self._profile_store = profile_store
         self._lifecycle_store = lifecycle_store
+        self._run_journal_store = run_journal_store
         self._db_session_factory = db_session_factory
         self._executor_factory = executor_factory
         self._clock = clock or (
@@ -423,6 +425,11 @@ class EarningsHostedResolutionWorker:
 
     async def run_forever(self) -> None:
         heartbeat = asyncio.create_task(self._heartbeat_loop())
+        journal = (
+            asyncio.create_task(self._run_journal_loop())
+            if self._run_journal_store is not None
+            else None
+        )
         next_refresh = 0.0
         next_empty_log = 0.0
         try:
@@ -468,10 +475,41 @@ class EarningsHostedResolutionWorker:
                 await asyncio.to_thread(self.poll_once)
                 await asyncio.sleep(self._settings.poll_interval)
         finally:
-            heartbeat.cancel()
+            background = [heartbeat]
+            if journal is not None:
+                background.append(journal)
+            for task in background:
+                task.cancel()
             await asyncio.gather(
-                heartbeat,
+                *background,
                 return_exceptions=True,
+            )
+
+    async def _run_journal_loop(self) -> None:
+        while True:
+            try:
+                changed = await asyncio.to_thread(
+                    self._run_journal_store.reconcile_earnings
+                )
+                if changed:
+                    self._logger.info(
+                        "Resolution run journal reconciled rows=%s",
+                        changed,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Journal persistence is deliberately outside the trading
+                # path and must never delay or stop resolution execution.
+                self._logger.warning(
+                    "Resolution run journal reconcile failed "
+                    "error=%s",
+                    redact_exception(
+                        RuntimeError(type(exc).__name__)
+                    ),
+                )
+            await asyncio.sleep(
+                self._settings.run_journal_reconcile_interval
             )
 
     def close(self) -> None:

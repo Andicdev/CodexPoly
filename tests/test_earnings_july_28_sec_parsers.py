@@ -222,6 +222,35 @@ class July28SecParserTests(unittest.TestCase):
         self.assertIsNotNone(result.candidate)
         self.assertEqual(str(result.candidate.value), "2.01")
 
+    def test_ford_official_pdf_table_selects_current_year_column(
+        self,
+    ) -> None:
+        rule = ford_q2_2026_shadow_rule()
+        result = FordAdjustedDilutedEpsParser().parse(
+            (
+                "Ford second quarter 2026 results. "
+                "Second Quarter First Half "
+                "2025 2026 Change 2025 2026 Change "
+                "Adjusted EPS (Diluted) "
+                "$0.37 $0.42 $0.05 $0.51 $1.08 $0.57"
+            ),
+            source=_source(
+                rule,
+                provider=EarningsProvider.COMPANY_IR,
+                source_url=(
+                    "https://s205.q4cdn.com/882619693/files/"
+                    "doc_financials/2026/q2/"
+                    "Ford-Motor-Company-Q2-2026-Press-Release.pdf"
+                ),
+            ),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(str(result.candidate.value), "0.42")
+
     def test_hilton_six_month_value_is_not_a_quarter_result(self) -> None:
         rule = hlt_q2_2026_shadow_rule()
         result = HiltonAdjustedDilutedEpsParser().parse(
@@ -310,8 +339,16 @@ class July28SecParserTests(unittest.TestCase):
             all(
                 "company_ir" not in rule.source_policy
                 for rule in rules
-                if rule.ticker != "HLT"
+                if rule.ticker not in {"F", "HLT"}
             )
+        )
+        ford_source = ford_q2_2026_shadow_rule().source_policy[
+            "company_ir"
+        ]
+        self.assertEqual(ford_source["kind"], "direct_document")
+        self.assertEqual(
+            ford_source["allowed_document_hosts"],
+            ["s205.q4cdn.com"],
         )
         self.assertEqual(
             sbux_q3_2026_shadow_rule().metric,

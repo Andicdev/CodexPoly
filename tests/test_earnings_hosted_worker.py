@@ -627,11 +627,15 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 **base,
                 "EARNINGS_PUBLIC_SOURCES_ENABLED": "true",
                 "EARNINGS_PUBLIC_POLL_SEC": "0.5",
+                "EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC": "1.5",
+                "EARNINGS_PUBLIC_DOCUMENT_TIMEOUT_SEC": "4",
             }
         )
 
         self.assertTrue(enabled.public_sources_enabled)
         self.assertEqual(enabled.public_poll_interval, 0.5)
+        self.assertEqual(enabled.public_listing_timeout, 1.5)
+        self.assertEqual(enabled.public_document_timeout, 4)
         with self.assertRaisesRegex(
             ValueError,
             "EARNINGS_PUBLIC_POLL_SEC",
@@ -640,6 +644,16 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 {
                     **base,
                     "EARNINGS_PUBLIC_POLL_SEC": "0.1",
+                }
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    **base,
+                    "EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC": "0.1",
                 }
             )
 

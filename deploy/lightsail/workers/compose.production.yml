@@ -29,6 +29,10 @@ services:
       # Public polling is profile-window gated. Half-second cadence keeps
       # official IR/wire detection competitive without running continuously.
       EARNINGS_PUBLIC_POLL_SEC: "0.5"
+      # Fail fast per host so a degraded IR site cannot block candidates
+      # that already arrived from another official source.
+      EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC: "2"
+      EARNINGS_PUBLIC_DOCUMENT_TIMEOUT_SEC: "5"
       # Official SEC submissions polling is also profile-window gated.
       # Requests are paced globally below the SEC fair-access ceiling.
       EARNINGS_SEC_CURRENT_POLL_ENABLED: "true"
@@ -186,6 +190,7 @@ services:
       RESOLUTION_ORCHESTRATOR_NO_PROFILES_SEC: "30"
       RESOLUTION_ORCHESTRATOR_PROFILE_REFRESH_SEC: "2"
       RESOLUTION_RUNTIME_HEARTBEAT_SEC: "5"
+      RESOLUTION_RUN_JOURNAL_RECONCILE_SEC: "2"
       RESOLUTION_SUPERVISION_ENABLED: "0"
     secrets:
       - source: database_app_password

@@ -221,7 +221,29 @@ SELECT
             'form_type', '8-K',
             'required_item', '2.02'
         )
-    ),
+    ) || CASE
+        WHEN ticker = 'F' THEN jsonb_build_object(
+            'company_ir', jsonb_build_object(
+                'kind', 'direct_document',
+                'provider', 'company_ir',
+                'feed_url',
+                    'https://s205.q4cdn.com/882619693/files/'
+                    'doc_financials/2026/q2/'
+                    'Ford-Motor-Company-Q2-2026-Press-Release.pdf',
+                'allowed_document_hosts',
+                    jsonb_build_array('s205.q4cdn.com'),
+                'title_all',
+                    jsonb_build_array(
+                        'Ford',
+                        'Second Quarter',
+                        '2026',
+                        'Press Release'
+                    ),
+                'title_none', '[]'::jsonb
+            )
+        )
+        ELSE '{}'::jsonb
+    END,
     jsonb_build_object(
         CASE
             WHEN metric_kind = 'gaap_eps'

@@ -242,7 +242,7 @@ class EarningsHostedShadowWorker:
             else (
                 PublicReleaseFeedClient(
                     user_agent=settings.http_user_agent,
-                    timeout=settings.fetch_timeout,
+                    timeout=settings.public_listing_timeout,
                     logger=logger,
                 )
                 if settings.public_sources_enabled
@@ -847,7 +847,7 @@ class EarningsHostedShadowWorker:
         return PublicReleaseDocumentFetcher(
             watches=watches,
             user_agent=self._settings.http_user_agent,
-            timeout=self._settings.fetch_timeout,
+            timeout=self._settings.public_document_timeout,
             max_bytes=self._settings.max_document_bytes,
         )
 
@@ -897,90 +897,80 @@ class EarningsHostedShadowWorker:
                 ),
                 [],
             ).append(watch)
-        poll_results = await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    self._public_release_client.poll,
-                    tuple(feed_watches),
-                )
-                for _, feed_watches
-                in sorted(watches_by_feed.items())
-            )
-        )
         self._public_poll_count += 1
-        self._public_feed_success_count += (
-            sum(
-                result.success_count
-                for result in poll_results
-            )
-        )
-        self._error_count += sum(
-            result.error_count
-            for result in poll_results
-        )
-        candidates = tuple(
-            candidate
-            for result in poll_results
-            for candidate in result.candidates
-        )
-        if not candidates:
-            return 0
-
         fetcher = self._public_document_fetcher_builder(watches)
         processor = EarningsShadowProcessor(
             store=self._store,
             rules=active_rules,
             parsers=self._parsers,
             document_fetcher=fetcher,
-            max_fetch_attempts=self._settings.max_fetch_attempts,
-            fetch_retry_delay=self._settings.fetch_retry_delay,
+            # A slow public document must not block every other source for
+            # three full transport timeouts. The unchanged candidate is
+            # retried by the next profile-gated polling cycle.
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
         )
         processed = 0
-        for candidate in candidates:
-            event_key = (
-                candidate.scope_id,
-                candidate.provider.value,
-                candidate.provider_event_id,
-                candidate.source_url,
-            )
-            if event_key in self._public_completed_events:
-                continue
-            processed += 1
-            self._public_candidate_count += 1
-            result = await asyncio.to_thread(
-                processor.process,
-                candidate,
-            )
-            if result.status is ShadowProcessingStatus.SIGNAL:
-                self._public_signal_count += 1
-                await self._enqueue_notification(
-                    source_event_notification_from_earnings(
-                        candidate=candidate,
-                        signal=result.signal,
-                        rule=rules_by_scope[candidate.scope_id],
-                    )
+        poll_tasks = tuple(
+            asyncio.create_task(
+                asyncio.to_thread(
+                    self._public_release_client.poll,
+                    tuple(feed_watches),
                 )
-            if result.status is ShadowProcessingStatus.ERROR:
-                self._error_count += 1
-            else:
-                self._public_completed_events.add(event_key)
-            self._logger.info(
-                "Public earnings document processed "
-                "provider=%s scope=%s ticker=%s status=%s "
-                "reason=%s event_id=%s fact_id=%s value=%s",
-                candidate.provider.value,
-                result.scope_id,
-                candidate.ticker,
-                result.status.value,
-                result.reason,
-                result.event_id,
-                result.fact_id,
-                (
-                    result.signal.value
-                    if result.signal is not None
-                    else None
-                ),
             )
+            for _, feed_watches in sorted(watches_by_feed.items())
+        )
+        for completed in asyncio.as_completed(poll_tasks):
+            poll_result = await completed
+            self._public_feed_success_count += (
+                poll_result.success_count
+            )
+            self._error_count += poll_result.error_count
+            for candidate in poll_result.candidates:
+                event_key = (
+                    candidate.scope_id,
+                    candidate.provider.value,
+                    candidate.provider_event_id,
+                    candidate.source_url,
+                )
+                if event_key in self._public_completed_events:
+                    continue
+                processed += 1
+                self._public_candidate_count += 1
+                result = await asyncio.to_thread(
+                    processor.process,
+                    candidate,
+                )
+                if result.status is ShadowProcessingStatus.SIGNAL:
+                    self._public_signal_count += 1
+                    await self._enqueue_notification(
+                        source_event_notification_from_earnings(
+                            candidate=candidate,
+                            signal=result.signal,
+                            rule=rules_by_scope[candidate.scope_id],
+                        )
+                    )
+                if result.status is ShadowProcessingStatus.ERROR:
+                    self._error_count += 1
+                else:
+                    self._public_completed_events.add(event_key)
+                self._logger.info(
+                    "Public earnings document processed "
+                    "provider=%s scope=%s ticker=%s status=%s "
+                    "reason=%s event_id=%s fact_id=%s value=%s",
+                    candidate.provider.value,
+                    result.scope_id,
+                    candidate.ticker,
+                    result.status.value,
+                    result.reason,
+                    result.event_id,
+                    result.fact_id,
+                    (
+                        result.signal.value
+                        if result.signal is not None
+                        else None
+                    ),
+                )
         return processed
 
     async def _public_poll_loop(self) -> None:

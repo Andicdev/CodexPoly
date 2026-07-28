@@ -96,7 +96,12 @@ class LabelledEpsParser:
                 reason="fiscal_period_not_confirmed",
             )
 
-        matches = self._extract_values(normalized_text)
+        matches = self._preferred_matches(
+            normalized_text,
+            rule=rule,
+        )
+        if not matches:
+            matches = self._extract_values(normalized_text)
         if not matches:
             return EarningsParseResult(
                 status=ParseStatus.NO_MATCH,
@@ -158,6 +163,16 @@ class LabelledEpsParser:
             reason=self._config.accepted_reason,
             candidate=candidate,
         )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        """Return company-specific current-period matches when available."""
+
+        return ()
 
     def _validate_context(
         self,

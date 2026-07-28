@@ -29,6 +29,8 @@ class EarningsWorkerSettings:
     heartbeat_interval: float = 60.0
     public_sources_enabled: bool = False
     public_poll_interval: float = 1.0
+    public_listing_timeout: float = 2.0
+    public_document_timeout: float = 5.0
     sec_current_polling_enabled: bool = False
     sec_current_poll_interval: float = 0.25
     sec_current_max_requests_per_second: float = 5.0
@@ -116,6 +118,22 @@ class EarningsWorkerSettings:
             public_poll_interval=float(
                 _clean(env.get("EARNINGS_PUBLIC_POLL_SEC"))
                 or "1"
+            ),
+            public_listing_timeout=float(
+                _clean(
+                    env.get(
+                        "EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC"
+                    )
+                )
+                or "2"
+            ),
+            public_document_timeout=float(
+                _clean(
+                    env.get(
+                        "EARNINGS_PUBLIC_DOCUMENT_TIMEOUT_SEC"
+                    )
+                )
+                or "5"
             ),
             sec_current_polling_enabled=_bool_value(
                 env.get("EARNINGS_SEC_CURRENT_POLL_ENABLED"),
@@ -224,6 +242,16 @@ class EarningsWorkerSettings:
         if not 0.25 <= self.public_poll_interval <= 60:
             raise ValueError(
                 "EARNINGS_PUBLIC_POLL_SEC must be between 0.25 and 60"
+            )
+        if not 0.25 <= self.public_listing_timeout <= 30:
+            raise ValueError(
+                "EARNINGS_PUBLIC_LISTING_TIMEOUT_SEC must be "
+                "between 0.25 and 30"
+            )
+        if not 0.25 <= self.public_document_timeout <= 30:
+            raise ValueError(
+                "EARNINGS_PUBLIC_DOCUMENT_TIMEOUT_SEC must be "
+                "between 0.25 and 30"
             )
         if not 0.1 <= self.sec_current_poll_interval <= 60:
             raise ValueError(
