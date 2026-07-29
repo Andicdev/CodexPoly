@@ -1,6 +1,9 @@
 # Earnings source telemetry — step 2
 
-Status: implemented locally; not applied to staging or production.
+Status: deployed to staging and production on 2026-07-29 as part of the
+profile-lifecycle completion rollout. Migration 016 was applied before the
+completion-aware image. No historical source, fact, profile, claim, or order
+row was removed.
 
 ## Purpose
 
@@ -70,9 +73,8 @@ updates also persist stage timings in their current round trip.
 
 ## Operational verification
 
-After migration 016 and the matching image are explicitly approved and
-deployed, use the guarded read-only query:
+For post-deployment analysis, use the guarded read-only query:
 
 `deploy/lightsail/checks/diagnose_earnings_source_telemetry.sql`
 
-No production mutation is part of step 2.
+The rollout itself did not synthesize or replay a production source event.
