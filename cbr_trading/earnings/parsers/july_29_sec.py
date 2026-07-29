@@ -100,6 +100,7 @@ def _config(
     accepted_reason: str,
     evidence_title: str,
     resolution_basis: str,
+    parser_version: str = "1",
 ) -> LabelledEpsParserConfig:
     return LabelledEpsParserConfig(
         ticker=ticker,
@@ -108,7 +109,7 @@ def _config(
         basis=EpsBasis.DILUTED,
         label_patterns=tuple(eps_label(label) for label in labels),
         parser_name=parser_name,
-        parser_version="1",
+        parser_version=parser_version,
         accepted_reason=accepted_reason,
         missing_reason=f"{parser_name}_not_found",
         conflicting_reason=f"conflicting_{parser_name}_values",
@@ -192,8 +193,12 @@ class WingstopGaapEpsParser(LabelledEpsParser):
                 labels=(
                     r"\bnet\s+income\s+of\s+(?:\$\s*)?"
                     r"\d+(?:\.\d+)?\s+million,\s+or\b",
+                    r"\bnet\s+income\s*,\s*"
+                    r"(?:increased|decreased)\b"
+                    r".{0,100}?\bor\b",
                 ),
                 parser_name="wingstop_gaap_eps",
+                parser_version="2",
                 accepted_reason="official_wingstop_gaap_diluted_eps",
                 evidence_title="Wingstop official earnings release",
                 resolution_basis="headline_gaap_diluted_eps",
@@ -271,8 +276,11 @@ class CbreGaapEpsParser(LabelledEpsParser):
                 labels=(
                     r"\bgaap\s+eps\s+(?:up|down)"
                     r"[^.;]{0,64}\bto\b",
+                    r"\bkey\s+highlights\s*:\s*"
+                    r"gaap\s+eps\s+of\b",
                 ),
                 parser_name="cbre_gaap_eps",
+                parser_version="2",
                 accepted_reason="official_cbre_gaap_diluted_eps",
                 evidence_title="CBRE official earnings release",
                 resolution_basis="headline_gaap_diluted_eps",

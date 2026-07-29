@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from cbr_trading.earnings.contracts import (
@@ -239,6 +240,74 @@ class July29SecParserTests(unittest.TestCase):
                 self.assertIsNotNone(result.candidate)
                 self.assertEqual(str(result.candidate.value), expected)
 
+    def test_july_29_official_ir_release_replays(self) -> None:
+        cases = (
+            (
+                CbreGaapEpsParser(),
+                cbre_q2_2026_shadow_rule(),
+                (
+                    "CBRE Group, Inc. today reported financial "
+                    "results for the second quarter ended June 30, "
+                    "2026. Key Highlights: GAAP EPS of $0.69 and "
+                    "Core EPS of $1.56. Revenue up 16%."
+                ),
+                "0.69",
+                "2",
+            ),
+            (
+                WingstopGaapEpsParser(),
+                wing_q2_2026_shadow_rule(),
+                (
+                    "Wingstop Inc. Reports Fiscal Second Quarter "
+                    "Financial Results for the quarter ended "
+                    "June 27, 2026. Q2 2026 Highlights. Net income, "
+                    "increased 16.9% to $31.3 million, or $1.15 per "
+                    "diluted share. Adjusted earnings per diluted "
+                    "share increased to $1.18."
+                ),
+                "1.15",
+                "2",
+            ),
+            (
+                IntegraAdjustedDilutedEpsParser(),
+                iart_q2_2026_shadow_rule(),
+                (
+                    "Integra LifeSciences Reports Second Quarter "
+                    "2026 Financial Results for the quarter ending "
+                    "June 30, 2026. Second quarter GAAP earnings "
+                    "per diluted share of $0.06. Adjusted earnings "
+                    "per diluted share of $0.56, compared to $0.45 "
+                    "in the prior year."
+                ),
+                "0.56",
+                "1",
+            ),
+        )
+
+        for parser, rule, document, expected, version in cases:
+            with self.subTest(ticker=rule.ticker):
+                source = replace(
+                    _source(rule),
+                    provider=EarningsProvider.COMPANY_IR,
+                    form_type="PRESS_RELEASE",
+                    items=(),
+                    document_type="HTML",
+                    source_url=f"https://example.com/{rule.ticker}",
+                    filing_url=f"https://example.com/{rule.ticker}",
+                )
+
+                result = parser.parse(
+                    document,
+                    source=source,
+                    rule=rule,
+                    detected_at=_DETECTED,
+                )
+
+                self.assertEqual(result.status, ParseStatus.ACCEPTED)
+                assert result.candidate is not None
+                self.assertEqual(str(result.candidate.value), expected)
+                self.assertEqual(result.candidate.parser_version, version)
+
     def test_wrong_metric_and_guidance_only_fail_closed(self) -> None:
         cases = (
             (
@@ -281,6 +350,15 @@ class July29SecParserTests(unittest.TestCase):
                     "Garmin second quarter 2026 results for the "
                     "quarter ended June 27, 2026. GAAP diluted EPS "
                     "was $2.40."
+                ),
+            ),
+            (
+                CbreGaapEpsParser(),
+                cbre_q2_2026_shadow_rule(),
+                (
+                    "CBRE second quarter 2026 outlook for the "
+                    "quarter ended June 30, 2026. GAAP EPS guidance "
+                    "of $1.40 to $1.50."
                 ),
             ),
         )
