@@ -62,3 +62,39 @@ the fully-live resolution heartbeat remain fresh.
 Any failed authenticated preflight or failed activation guard leaves the
 affected profile non-live and records a lifecycle event for Telegram
 delivery.
+
+## Final activation result
+
+At `08:45 UTC` the scheduler requested authenticated preflight for all nine
+profiles. SOFI, PG, HUM, WING, and ARCC became `READY`. IART, GRMN, CBRE, and
+PAG initially became `BLOCKED` with the generic
+`authenticated_preflight_not_ready` code.
+
+The four public CLOB markets were active, accepting orders, and both outcome
+books were populated. A non-submitting diagnostic run through the same
+preflight executor then prepared all four successfully. This ruled out a
+persistent profile, market, account, or book failure and identified the first
+batch result as transient. The existing readiness worker intentionally stores
+only the generic non-ready code, so the original provider-level error was not
+recoverable after the first attempt.
+
+The retry kept fail-closed lifecycle semantics:
+
+1. No profile was marked `READY` or `ENABLED` directly.
+2. A first reset after the original activation grace was immediately blocked
+   by the scheduler as `preflight_not_requested`.
+3. A second guarded retry gave only the four affected schedules a fresh
+   two-minute activation grace.
+4. The normal scheduler requested all four preflights.
+5. The normal readiness worker authenticated and pre-signed both outcomes for
+   all four profiles.
+6. AUTO_LIVE activated the four profiles at `09:08:32 UTC`.
+
+The final read-only production guard then confirmed:
+
+- all nine schedules are `ACTIVE`;
+- all nine execution profiles are `ENABLED`;
+- aggregate active notional is `899.1`, below the `1000` cap;
+- the fully-live resolution heartbeat is fresh;
+- no validated fact or execution claim existed for the nine scopes before a
+  real source signal.

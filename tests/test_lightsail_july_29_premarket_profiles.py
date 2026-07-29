@@ -54,6 +54,21 @@ _ACTIVE_CHECK = (
     / "checks"
     / "verify_july_29_premarket_live_active.sql"
 )
+_RETRY = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "019_retry_july_29_premarket_transient_preflight.sql"
+)
+_FRESH_GRACE_RETRY = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "020_retry_july_29_premarket_with_fresh_grace.sql"
+)
+_DIAGNOSTIC = _ROOT / "scripts" / "diagnose_profile_preflight.py"
 
 
 class July29PremarketProfileSqlTests(unittest.TestCase):
@@ -188,6 +203,44 @@ class July29PremarketProfileSqlTests(unittest.TestCase):
         self.assertIn("schedule.state = 'ACTIVE'", active)
         self.assertIn("profile.status = 'ENABLED'", active)
         self.assertIn("active_notional <> 899.1", active)
+
+    def test_transient_retry_preserves_normal_lifecycle_guards(self) -> None:
+        retry = _RETRY.read_text(encoding="utf-8")
+        fresh_grace = _FRESH_GRACE_RETRY.read_text(encoding="utf-8")
+
+        for text in (retry, fresh_grace):
+            upper = text.upper()
+            for ticker in ("IART", "GRMN", "CBRE", "PAG"):
+                self.assertIn(f"'earnings:{ticker}:2026Q2'", text)
+            for ticker in ("SOFI", "PG", "HUM", "WING", "ARCC"):
+                self.assertNotIn(f"'earnings:{ticker}:", text)
+            self.assertIn("PROFILE.STATUS = 'DISABLED'", upper)
+            self.assertNotIn("STATE = 'READY'", upper)
+            self.assertNotIn("SET STATUS = 'ENABLED'", upper)
+            self.assertNotIn(
+                "UPDATE RESOLUTION_EXECUTION_PROFILES",
+                upper,
+            )
+            self.assertNotIn("DELETE FROM", upper)
+
+        self.assertIn("state = 'PENDING'", retry)
+        self.assertIn("interval '2 minutes'", fresh_grace)
+        self.assertIn("'preflight_not_requested'", fresh_grace)
+
+    def test_preflight_diagnostic_is_allowlisted_and_non_submitting(self) -> None:
+        text = _DIAGNOSTIC.read_text(encoding="utf-8")
+
+        for profile in (
+            "earnings-iart-2026q2",
+            "earnings-grmn-2026q2",
+            "earnings-cbre-2026q2",
+            "earnings-pag-2026q2",
+        ):
+            self.assertIn(profile, text)
+        self.assertIn("PolymarketPreflightPreparedExecutor", text)
+        self.assertIn("redact_sensitive_text", text)
+        self.assertNotIn(".execute(", text)
+        self.assertNotIn("print(os.environ", text)
 
 
 if __name__ == "__main__":
