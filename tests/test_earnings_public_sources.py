@@ -21,6 +21,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     cbre_q2_2026_shadow_rule,
     ea_q1_2027_shadow_rule,
     grmn_q2_2026_shadow_rule,
+    hood_q2_2026_shadow_rule,
     hum_q2_2026_shadow_rule,
     iart_q2_2026_shadow_rule,
     meta_q2_2026_shadow_rule,
@@ -482,6 +483,22 @@ class EarningsPublicSourceTests(unittest.TestCase):
             {
                 EarningsProvider.COMPANY_IR,
                 EarningsProvider.BUSINESS_WIRE,
+            },
+        )
+
+    def test_hood_postmarket_public_source_matrix(self) -> None:
+        providers = {
+            watch.provider
+            for watch in public_release_watches_from_rules(
+                (hood_q2_2026_shadow_rule(),)
+            )
+        }
+
+        self.assertEqual(
+            providers,
+            {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.GLOBE_NEWSWIRE,
             },
         )
 

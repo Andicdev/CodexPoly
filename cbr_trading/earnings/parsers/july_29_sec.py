@@ -1243,7 +1243,7 @@ def ebay_q2_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def hood_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="HOOD",
         cik=ROBINHOOD_CIK,
         fiscal_quarter=2,
@@ -1258,4 +1258,46 @@ def hood_q2_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=ROBINHOOD_Q2_2026_CONDITION_ID,
         metric_selection="primary_headline_gaap_diluted_eps",
+    )
+    title_all = [
+        "Robinhood",
+        "Reports",
+        "Second Quarter",
+        "2026",
+        "Results",
+    ]
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": [
+                    "investors.robinhood.com",
+                ],
+                "feed_url": (
+                    "https://investors.robinhood.com/"
+                    "rss/news-releases.xml"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": title_all,
+                "title_none": ["to announce"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": [
+                    "www.globenewswire.com",
+                ],
+                "feed_url": (
+                    "https://www.globenewswire.com/RssFeed/"
+                    "subjectcode/13-Earnings%20Releases%20And%20"
+                    "Operating%20Results/feedTitle/GlobeNewswire%20"
+                    "-%20Earnings%20Releases%20And%20Operating%20"
+                    "Results"
+                ),
+                "kind": "rss",
+                "provider": "globenewswire",
+                "title_all": title_all,
+                "title_none": ["to announce"],
+            },
+        },
     )
