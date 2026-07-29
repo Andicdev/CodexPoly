@@ -62,7 +62,26 @@ The reviewed notional is `99.9`, below the aggregate cap `1000`.
 
 ## Deliberately not applied
 
-`deploy/lightsail/live/022_arm_meta_july_29_postmarket.sql` was reviewed and
-tested but not applied. It changes only the META schedule from
-`AUTO_PREFLIGHT` to `AUTO_LIVE`; it never enables the profile directly and
-still requires fresh authenticated readiness plus a live heartbeat.
+This section described the state at the preparation checkpoint. The separate
+live authorization was subsequently received and the guarded migration was
+applied.
+
+## Live arming
+
+`deploy/lightsail/live/022_arm_meta_july_29_postmarket.sql` was applied to
+production after explicit authorization with caps `100 / 100 / 1000`.
+
+The immediate read-only observation at `2026-07-29T16:02:34Z` confirmed:
+
+- schedule mode/state: `AUTO_LIVE / PENDING`;
+- profile status: `DISABLED`;
+- `armed_for_live=true`;
+- live heartbeat age: 5 seconds;
+- supervision and trading enabled on the universal resolution worker;
+- no validated fact, execution claim, or active order group;
+- no lifecycle error.
+
+The scheduler remains responsible for requesting authenticated preflight at
+`17:45 UTC` and enabling the profile at `18:00 UTC` only with fresh readiness
+evidence. The profile-gated public and SEC-current polling transports start
+only after that activation.

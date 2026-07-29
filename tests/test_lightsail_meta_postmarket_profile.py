@@ -26,6 +26,13 @@ _ARM = (
     / "live"
     / "022_arm_meta_july_29_postmarket.sql"
 )
+_ARMED_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_meta_july_29_auto_live_armed.sql"
+)
 
 
 class MetaPostmarketProfileSqlTests(unittest.TestCase):
@@ -90,6 +97,21 @@ class MetaPostmarketProfileSqlTests(unittest.TestCase):
         self.assertIn("REVIEWED_NOTIONAL <> 99.9", upper)
         self.assertNotIn("SET STATUS = 'ENABLED'", upper)
         self.assertNotIn("DELETE FROM", upper)
+
+    def test_armed_check_is_read_only_and_time_aware(self) -> None:
+        text = _ARMED_CHECK.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
+        self.assertIn("ROLLBACK", upper)
+        self.assertIn("SCHEDULE_STATE <> 'PENDING'", upper)
+        self.assertIn("SCHEDULE_STATE <> 'READY'", upper)
+        self.assertIn("PROFILE_STATE <> 'DISABLED'", upper)
+        self.assertIn("READINESS_UNTIL", upper)
+        self.assertIn("TRADING_ENABLED", upper)
+        self.assertIn("SUPERVISION_ENABLED", upper)
+        self.assertIn("FACTS OR CLAIMS ALREADY EXIST", upper)
+        self.assertNotIn("SELECT *", upper)
 
 
 if __name__ == "__main__":
