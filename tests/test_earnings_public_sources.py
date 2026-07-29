@@ -30,6 +30,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     pag_q2_2026_shadow_rule,
     pg_q4_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
+    way_q2_2026_shadow_rule,
     wing_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.navitas import (
@@ -499,6 +500,22 @@ class EarningsPublicSourceTests(unittest.TestCase):
             {
                 EarningsProvider.COMPANY_IR,
                 EarningsProvider.GLOBE_NEWSWIRE,
+            },
+        )
+
+    def test_way_postmarket_public_source_matrix(self) -> None:
+        providers = {
+            watch.provider
+            for watch in public_release_watches_from_rules(
+                (way_q2_2026_shadow_rule(),)
+            )
+        }
+
+        self.assertEqual(
+            providers,
+            {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.PR_NEWSWIRE,
             },
         )
 

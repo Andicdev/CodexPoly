@@ -38,6 +38,7 @@ META_CIK = "1326801"
 ELECTRONIC_ARTS_CIK = "712515"
 EBAY_CIK = "1065088"
 ROBINHOOD_CIK = "1783879"
+WAYSTAR_CIK = "1990354"
 
 SOFI_Q2_2026_CONDITION_ID = (
     "0xf5e41999c536ba01d79d9b36fadc8b4"
@@ -98,6 +99,10 @@ EBAY_Q2_2026_CONDITION_ID = (
 ROBINHOOD_Q2_2026_CONDITION_ID = (
     "0x00d480ad192a0cf494a9663a8d0fe225"
     "78b06ea4702f83acfb79bde049a5cf85"
+)
+WAYSTAR_Q2_2026_CONDITION_ID = (
+    "0xaf07f668593362c55d734ec94a80b415"
+    "bc12015b92cb03c4b8c5e571e018da2e"
 )
 
 
@@ -556,6 +561,33 @@ class RobinhoodGaapEpsParser(LabelledEpsParser):
                 accepted_reason="official_robinhood_gaap_diluted_eps",
                 evidence_title="Robinhood official earnings release",
                 resolution_basis="primary_headline_gaap_diluted_eps",
+            )
+        )
+
+
+class WaystarNonGaapEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="WAY",
+                cik=WAYSTAR_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                labels=(
+                    r"\bnon[\s\u2010-\u2015-]*gaap\s+net\s+income\s+of\b"
+                    r".{0,120}?\band\s+non[\s\u2010-\u2015-]*gaap\s+net\s+"
+                    r"income\s+per\s+diluted\s+share\s+of\b",
+                ),
+                parser_name="waystar_non_gaap_eps",
+                accepted_reason="official_waystar_non_gaap_diluted_eps",
+                evidence_title="Waystar official earnings release",
+                resolution_basis=(
+                    "quarterly_financial_highlights_non_gaap_diluted_eps"
+                ),
+                forbidden_prefixes=(
+                    "guidance",
+                    "outlook",
+                    "expected",
+                ),
             )
         )
 
@@ -1298,6 +1330,62 @@ def hood_q2_2026_shadow_rule() -> EarningsMarketRule:
                 "provider": "globenewswire",
                 "title_all": title_all,
                 "title_none": ["to announce"],
+            },
+        },
+    )
+
+
+def way_q2_2026_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="WAY",
+        cik=WAYSTAR_CIK,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T16:05:00-04:00"
+        ),
+        metric=EarningsMetric.NON_GAAP_EPS,
+        strike=Decimal("0.40"),
+        market_slug=(
+            "way-quarterly-earnings-nongaap-eps-07-29-2026-0pt4"
+        ),
+        condition_id=WAYSTAR_Q2_2026_CONDITION_ID,
+        metric_selection=(
+            "quarterly_financial_highlights_non_gaap_diluted_eps"
+        ),
+    )
+    title_all = [
+        "Waystar",
+        "Reports",
+        "Second Quarter",
+        "2026",
+        "Results",
+    ]
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["investors.waystar.com"],
+                "feed_url": (
+                    "https://investors.waystar.com/"
+                    "rss/news-releases.xml"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": title_all,
+                "title_none": ["to report", "to announce"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": ["www.prnewswire.com"],
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "kind": "rss",
+                "provider": "prnewswire",
+                "title_all": title_all,
+                "title_none": ["to report", "to announce"],
             },
         },
     )

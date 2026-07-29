@@ -303,7 +303,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_connection_cycle()
 
-        self.assertEqual(result.watch_count, 33)
+        self.assertEqual(result.watch_count, 34)
         self.assertEqual(
             {watch.ticker for watch in captured},
             {
@@ -338,6 +338,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "WAY",
                 "WING",
                 "WWD",
             },

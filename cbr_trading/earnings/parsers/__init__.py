@@ -54,6 +54,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     QualcommNonGaapEpsParser,
     RobinhoodGaapEpsParser,
     SofiGaapEpsParser,
+    WaystarNonGaapEpsParser,
     WingstopGaapEpsParser,
     arcc_q2_2026_shadow_rule,
     cbre_q2_2026_shadow_rule,
@@ -69,6 +70,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     pg_q4_2026_shadow_rule,
     qcom_q3_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
+    way_q2_2026_shadow_rule,
     wing_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.navitas import (
@@ -122,6 +124,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "SPGI": SpGlobalAdjustedDilutedEpsParser(),
         "UPS": UpsAdjustedDilutedEpsParser(),
         "V": VisaNonGaapEpsParser(),
+        "WAY": WaystarNonGaapEpsParser(),
         "WING": WingstopGaapEpsParser(),
         "WWD": WoodwardGaapEpsParser(),
     }
@@ -159,6 +162,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         spgi_q2_2026_shadow_rule(),
         ups_q2_2026_shadow_rule(),
         visa_q3_2026_shadow_rule(),
+        way_q2_2026_shadow_rule(),
         wing_q2_2026_shadow_rule(),
         wwd_q3_2026_shadow_rule(),
         bbby_q2_2026_shadow_rule(),
@@ -196,6 +200,7 @@ __all__ = [
     "StarbucksGaapEpsParser",
     "UpsAdjustedDilutedEpsParser",
     "VisaNonGaapEpsParser",
+    "WaystarNonGaapEpsParser",
     "WingstopGaapEpsParser",
     "WoodwardGaapEpsParser",
     "ba_q2_2026_shadow_rule",
@@ -231,6 +236,7 @@ __all__ = [
     "spgi_q2_2026_shadow_rule",
     "ups_q2_2026_shadow_rule",
     "visa_q3_2026_shadow_rule",
+    "way_q2_2026_shadow_rule",
     "wing_q2_2026_shadow_rule",
     "wwd_q3_2026_shadow_rule",
 ]

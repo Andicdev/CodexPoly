@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
@@ -26,6 +26,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     QualcommNonGaapEpsParser,
     RobinhoodGaapEpsParser,
     SofiGaapEpsParser,
+    WaystarNonGaapEpsParser,
     WingstopGaapEpsParser,
     arcc_q2_2026_shadow_rule,
     cbre_q2_2026_shadow_rule,
@@ -41,6 +42,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     pg_q4_2026_shadow_rule,
     qcom_q3_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
+    way_q2_2026_shadow_rule,
     wing_q2_2026_shadow_rule,
 )
 
@@ -243,6 +245,24 @@ class July29SecParserTests(unittest.TestCase):
                     "to $0.38, compared to Q2 2025."
                 ),
                 "0.38",
+            ),
+            (
+                WaystarNonGaapEpsParser(),
+                replace(
+                    way_q2_2026_shadow_rule(),
+                    rule_key="way-2026q1-historical",
+                    scope_id="earnings:WAY:2026Q1",
+                    fiscal_quarter=1,
+                    period_end=date(2026, 3, 31),
+                ),
+                (
+                    "Waystar reports first quarter 2026 results. "
+                    "Non-GAAP net income of $81.2 million and non-GAAP "
+                    "net income per diluted share of $0.42. "
+                    "Diluted non-GAAP net income per share is expected "
+                    "to be between $1.59 and $1.68."
+                ),
+                "0.42",
             ),
         )
 
@@ -482,9 +502,10 @@ class July29SecParserTests(unittest.TestCase):
             meta_q2_2026_shadow_rule(),
             ebay_q2_2026_shadow_rule(),
             hood_q2_2026_shadow_rule(),
+            way_q2_2026_shadow_rule(),
         )
 
-        self.assertEqual(len({rule.condition_id for rule in rules}), 14)
+        self.assertEqual(len({rule.condition_id for rule in rules}), 15)
         self.assertTrue(
             all(
                 rule.source_policy["sec"]["form_type"] == "8-K"
@@ -507,6 +528,7 @@ class July29SecParserTests(unittest.TestCase):
                 "GRMN",
                 "QCOM",
                 "EBAY",
+                "WAY",
             },
         )
         self.assertEqual(
