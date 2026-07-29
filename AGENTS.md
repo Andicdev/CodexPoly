@@ -41,3 +41,36 @@ Before committing, run:
 python scripts/check_no_secrets.py
 python -m unittest discover -s tests -q
 ```
+
+## Resolution trading priorities (mandatory)
+
+Every new resolution source, parser, strategy, market binding, and executor
+change has two ordered goals:
+
+1. semantic correctness: an ambiguous, stale, wrong-period, or unsupported
+   document must fail closed and must never create a tradable signal;
+2. extreme end-to-end latency: once evidence is valid, the already prepared
+   order must reach the exchange with no avoidable serial I/O.
+
+Correctness is the gate; latency is optimized inside that gate. Never weaken
+validation to gain speed.
+
+Before designing or reviewing a resolution-trading change, read and apply:
+
+- `cbr_trading/ARCHITECTURE.md`;
+- `cbr_trading/SOURCE_DESIGN_CHECKLIST.md`.
+
+In particular:
+
+- independent official providers are raced in parallel, not implemented as a
+  serial fallback chain;
+- all static market and account work, both outcome alternatives, and signing
+  are completed before the expected publication;
+- one publication is evaluated as one event batch: strategies select every
+  applicable intent, the coordinator calls the executor once, and the
+  executor uses one exchange batch submission where supported;
+- balance, book, account, metadata, database discovery, signing, Telegram,
+  and nonessential journaling are forbidden on the post-signal hot path;
+- every route and every hot-path stage must expose safe latency telemetry and
+  have replay tests proving parsing correctness, route independence, and
+  batching.

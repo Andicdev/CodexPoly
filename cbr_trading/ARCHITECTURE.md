@@ -3,6 +3,44 @@
 This document records the contracts accepted for the new project. The legacy
 repository at `C:\polymarket-bot` is a read-only reference and is not modified.
 
+## Governing priorities
+
+Resolution trading is optimized for two ordered goals:
+
+1. **Correct resolution.** A document may become a tradable signal only when
+   its issuer, event scope, period, metric, value, and publication identity
+   are unambiguous. Unsupported or conflicting evidence is quarantined and
+   fails closed.
+2. **Extreme end-to-end latency.** After validation, every avoidable serial
+   operation is removed from the path between first official evidence and the
+   exchange submission.
+
+Correctness is therefore a hard gate, not a latency trade-off. Once multiple
+implementations satisfy the same parsing and safety contract, the fastest
+measured end-to-end design is preferred.
+
+These priorities imply several architectural defaults:
+
+- official delivery routes for one event race independently; a slow or failed
+  route cannot delay another route;
+- WebSocket feeds may stay connected, while HTTP polling is profile-gated and
+  runs only inside a reviewed preparation window;
+- the first valid provider wins, but all providers emit the same canonical
+  fact and stable event scope;
+- both outcome alternatives and every static dependency are prepared before
+  publication;
+- all markets resolved by one publication are evaluated and submitted as one
+  batch rather than through serial per-profile executors;
+- only parsing, deterministic strategy selection, persistent idempotency
+  claims, and exchange submission belong on the post-signal hot path;
+- notifications, enrichment, nonessential journaling, and lifecycle work run
+  after submission or asynchronously;
+- every source route and execution stage records enough monotonic timing data
+  to locate latency rather than infer it from final order timestamps.
+
+The implementation and review checklist for these rules is
+`cbr_trading/SOURCE_DESIGN_CHECKLIST.md`.
+
 ## Runtime flow
 
 ```text
