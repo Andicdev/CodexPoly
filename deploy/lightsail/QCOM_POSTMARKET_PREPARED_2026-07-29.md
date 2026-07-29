@@ -76,7 +76,24 @@ explicit authorization is required before changing the schedule to
 
 ## Deliberately not applied
 
-The production QCOM schedule remains `AUTO_PREFLIGHT / PENDING` and the
-profile remains `DISABLED`. The guarded
-`deploy/lightsail/live/024_arm_qcom_july_29_postmarket.sql` migration is
-prepared but has not been applied.
+This section described the preparation checkpoint. Explicit authorization was
+subsequently received and the guarded migration was applied.
+
+## Live arming
+
+`deploy/lightsail/live/024_arm_qcom_july_29_postmarket.sql` was applied to
+production after explicit authorization with caps `100 / 100 / 1000`.
+
+The immediate read-only armed invariant confirmed:
+
+- schedule mode/state: `AUTO_LIVE / PENDING`;
+- profile status: `DISABLED`;
+- `armed_for_live=true`;
+- a fresh live resolution heartbeat with supervision and trading enabled;
+- no validated fact, execution claim, or active order group;
+- no lifecycle error.
+
+The scheduler remains responsible for requesting a fresh authenticated
+preflight at `17:45 UTC` and enabling the profile at `18:00 UTC`. The
+profile-gated Qualcomm direct-PDF and SEC-current polling paths remain dormant
+until that activation.
