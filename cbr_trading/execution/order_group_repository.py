@@ -75,6 +75,14 @@ class OrderGroupRepository(Protocol):
         observations: Sequence[OrderObservation] = (),
     ) -> None: ...
 
+    def record_replacement_submission(
+        self,
+        claim: SupervisionClaim,
+        *,
+        replacement_orders: Sequence[PlacedOrder],
+        parent_order_ids: Sequence[str],
+    ) -> None: ...
+
     def complete_reprice(
         self,
         claim: SupervisionClaim,

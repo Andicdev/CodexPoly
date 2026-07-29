@@ -805,6 +805,52 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         self.assertEqual(session.calls[2][1]["status"], "LIVE")
         self.assertEqual(session.calls[2][1]["generation"], 1)
 
+    def test_records_replacement_ack_before_source_cleanup(
+        self,
+    ) -> None:
+        replacement = PlacedOrder(
+            order_id="order-2",
+            asset_id="asset-yes",
+            effective_price=Decimal("0.999"),
+            quantity=Decimal("25"),
+        )
+        session = _Session(
+            [
+                _Result(one_or_none={"generation": 1}),
+                _Result(rowcount=1),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="tick-event-1",
+            order_group_id="group-1",
+            acquired=True,
+            revision=1,
+        )
+
+        repository.record_replacement_submission(
+            claim,
+            replacement_orders=(replacement,),
+            parent_order_ids=("order-1",),
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertIn("FOR UPDATE", session.calls[0][0])
+        self.assertEqual(session.calls[1][1]["status"], "UNKNOWN")
+        self.assertEqual(session.calls[1][1]["generation"], 1)
+        self.assertEqual(
+            session.calls[1][1]["parent_order_id"],
+            "order-1",
+        )
+        self.assertIn(
+            "replacement_persisted",
+            session.calls[2][0],
+        )
+
     def test_complete_reprice_rejects_non_owned_order_transition(
         self,
     ) -> None:

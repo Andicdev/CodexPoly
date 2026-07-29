@@ -10,6 +10,7 @@ from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.sec_current import (
+    SecCurrentEarningsWatch,
     SecCurrentFilingsClient,
     sec_current_watches_from_rules,
 )
@@ -62,7 +63,7 @@ class _QueuedOpener:
 
 def _payload(
     *,
-    acceptance: str = "2026-07-27T20:05:01.000Z",
+    acceptance: str = "2026-07-27T16:05:01.000Z",
     items: str = "2.02,9.01",
 ) -> bytes:
     return json.dumps(
@@ -166,6 +167,10 @@ class SecCurrentFilingsClientTests(unittest.TestCase):
         envelope = result.envelopes[0]
         self.assertEqual(envelope.items, ("Item 2.02", "Item 9.01"))
         self.assertEqual(envelope.metadata["transport"], "sec_submissions")
+        self.assertEqual(
+            envelope.filed_at.isoformat(),
+            "2026-07-27T20:05:01+00:00",
+        )
         router = SecStreamFilingRouter(
             tuple(watch.routing_watch for watch in watches)
         )
@@ -210,6 +215,72 @@ class SecCurrentFilingsClientTests(unittest.TestCase):
         self.assertEqual(result.envelopes, ())
         self.assertEqual(result.success_count, 1)
         self.assertEqual(len(opener.requests), 1)
+
+    def test_acceptance_timestamp_uses_eastern_standard_time(
+        self,
+    ) -> None:
+        base_watch = sec_current_watches_from_rules(
+            (nvts_q2_2026_shadow_rule(),)
+        )[0]
+        watches = (
+            SecCurrentEarningsWatch(
+                routing_watch=base_watch.routing_watch,
+                filed_not_before=datetime(
+                    2026,
+                    1,
+                    1,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+        )
+        submissions_url = (
+            "https://data.sec.gov/submissions/"
+            "CIK0001821769.json"
+        )
+        filing_url = (
+            "https://www.sec.gov/Archives/edgar/data/1821769/"
+            "000182176926000123/"
+            "0001821769-26-000123-index.html"
+        )
+        opener = _QueuedOpener(
+            (
+                _Response(
+                    _payload(
+                        acceptance="2026-01-27T16:05:01.000Z"
+                    ),
+                    url=submissions_url,
+                    content_type="application/json",
+                ),
+                _Response(
+                    _filing_html(),
+                    url=filing_url,
+                    content_type="text/html",
+                ),
+            )
+        )
+        client = SecCurrentFilingsClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=2,
+            opener=opener,
+            clock=lambda: datetime(
+                2026,
+                1,
+                27,
+                21,
+                5,
+                2,
+                tzinfo=timezone.utc,
+            ),
+            monotonic=lambda: 100.0,
+            sleep=lambda _value: None,
+        )
+
+        result = client.poll(watches)
+
+        self.assertEqual(
+            result.envelopes[0].filed_at.isoformat(),
+            "2026-01-27T21:05:01+00:00",
+        )
 
     def test_conditional_poll_reuses_resolved_envelope(self) -> None:
         watches = sec_current_watches_from_rules(

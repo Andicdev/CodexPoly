@@ -778,9 +778,10 @@ def _is_array(value: object) -> bool:
 
 
 def _parse_sec_timestamp(value: str) -> datetime:
+    normalized = str(value or "").strip()
     try:
         parsed = datetime.fromisoformat(
-            str(value or "").strip().replace("Z", "+00:00")
+            normalized.replace("Z", "+00:00")
         )
     except ValueError:
         raise SecCurrentFilingsError(
@@ -790,7 +791,45 @@ def _parse_sec_timestamp(value: str) -> datetime:
         raise SecCurrentFilingsError(
             "SEC filing acceptance timestamp has no timezone"
         )
+    # In the EDGAR submissions payload, acceptanceDateTime carries a `Z`
+    # while its wall-clock value follows EDGAR's US Eastern acceptance
+    # time. Preserve a future explicit non-zero offset, but normalize the
+    # current zero-offset representation from the Eastern clock to UTC.
+    if parsed.utcoffset() == timedelta(0):
+        local_clock = parsed.replace(tzinfo=None)
+        parsed = local_clock.replace(
+            tzinfo=timezone(_sec_eastern_offset(local_clock))
+        )
     return parsed.astimezone(timezone.utc)
+
+
+def _sec_eastern_offset(local_clock: datetime) -> timedelta:
+    """Return the US Eastern UTC offset for an EDGAR wall clock."""
+
+    year = local_clock.year
+    march_first = datetime(year, 3, 1)
+    first_sunday_march = 1 + (
+        6 - march_first.weekday()
+    ) % 7
+    dst_start = datetime(
+        year,
+        3,
+        first_sunday_march + 7,
+        2,
+    )
+    november_first = datetime(year, 11, 1)
+    first_sunday_november = 1 + (
+        6 - november_first.weekday()
+    ) % 7
+    dst_end = datetime(
+        year,
+        11,
+        first_sunday_november,
+        2,
+    )
+    return timedelta(
+        hours=-4 if dst_start <= local_clock < dst_end else -5
+    )
 
 
 def _valid_accession(value: str) -> bool:

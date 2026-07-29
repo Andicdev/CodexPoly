@@ -508,6 +508,54 @@ VALUES (
     :parent_order_id,
     CAST(:metadata AS jsonb)
 )
+ON CONFLICT (order_group_id, order_id) DO UPDATE
+SET
+    status = CASE
+        WHEN resolution_order_group_orders.status = 'UNKNOWN'
+            THEN EXCLUDED.status
+        ELSE resolution_order_group_orders.status
+    END,
+    effective_price = COALESCE(
+        resolution_order_group_orders.effective_price,
+        EXCLUDED.effective_price
+    ),
+    quantity = COALESCE(
+        resolution_order_group_orders.quantity,
+        EXCLUDED.quantity
+    ),
+    parent_order_id = COALESCE(
+        resolution_order_group_orders.parent_order_id,
+        EXCLUDED.parent_order_id
+    ),
+    metadata = (
+        resolution_order_group_orders.metadata
+        || EXCLUDED.metadata
+    ),
+    updated_at = now()
+WHERE resolution_order_group_orders.generation = EXCLUDED.generation
+""".strip()
+
+_SELECT_REPLACEMENT_GENERATION_SQL = """
+SELECT reprice_count + 1 AS generation
+FROM resolution_order_groups
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+FOR UPDATE
+""".strip()
+
+_MARK_REPLACEMENT_PERSISTED_SQL = """
+UPDATE resolution_supervision_events
+SET
+    payload = payload || jsonb_build_object(
+        'supervision_stage',
+        'replacement_persisted'
+    ),
+    updated_at = now()
+WHERE event_id = :event_id
+  AND order_group_id = :order_group_id
+  AND status = 'CLAIMED'
+  AND claimed_revision = :revision
 """.strip()
 
 _INSERT_OBSERVATION_SQL = """
@@ -1159,6 +1207,81 @@ class SqlAlchemyOrderGroupRepository:
         except Exception as exc:
             raise OrderGroupRepositoryError(
                 "Failed to mark supervision claim failed: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    def record_replacement_submission(
+        self,
+        claim: SupervisionClaim,
+        *,
+        replacement_orders: Sequence[PlacedOrder],
+        parent_order_ids: Sequence[str],
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired supervision claim can persist "
+                "a replacement"
+            )
+        replacements = _validated_replacement_orders(
+            replacement_orders,
+            required=True,
+        )
+        parents = _normalized_order_ids(
+            parent_order_ids,
+            name="parent_order_ids",
+            required=True,
+        )
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                generation_row = session.execute(
+                    text_factory(
+                        _SELECT_REPLACEMENT_GENERATION_SQL
+                    ),
+                    params,
+                ).mappings().one_or_none()
+                if generation_row is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision claim is no longer current"
+                    )
+                generation = int(generation_row["generation"])
+                parent_order_id = (
+                    parents[0]
+                    if len(parents) == 1
+                    else None
+                )
+                for replacement in replacements:
+                    session.execute(
+                        text_factory(_INSERT_REPLACEMENT_ORDER_SQL),
+                        _replacement_params(
+                            claim=claim,
+                            replacement=replacement,
+                            generation=generation,
+                            status="UNKNOWN",
+                            parent_order_id=parent_order_id,
+                        ),
+                    )
+                event_result = session.execute(
+                    text_factory(_MARK_REPLACEMENT_PERSISTED_SQL),
+                    params,
+                )
+                if int(event_result.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Supervision claim is no longer current"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to persist replacement submission: "
                 f"{type(exc).__name__}"
             ) from exc
 

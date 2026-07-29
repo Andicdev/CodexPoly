@@ -272,6 +272,7 @@ class _Repository:
         self.register_calls = []
         self.load_calls = []
         self.claim_calls = []
+        self.record_replacement_calls = []
         self.complete_calls = []
         self.complete_without_calls = []
         self.fail_calls = []
@@ -281,6 +282,7 @@ class _Repository:
         self.fail_reconciliation_calls = []
         self.close_calls = 0
         self.complete_error: Exception | None = None
+        self.record_replacement_error: Exception | None = None
         self.load_reconciliation_error: Exception | None = None
 
     def register(self, handle, *, policy, metadata=None):
@@ -340,6 +342,23 @@ class _Repository:
         )
         if self.complete_error is not None:
             raise self.complete_error
+
+    def record_replacement_submission(
+        self,
+        claim,
+        *,
+        replacement_orders,
+        parent_order_ids,
+    ):
+        self.record_replacement_calls.append(
+            (
+                claim,
+                tuple(replacement_orders),
+                tuple(parent_order_ids),
+            )
+        )
+        if self.record_replacement_error is not None:
+            raise self.record_replacement_error
 
     def fail_claim(
         self,
@@ -540,11 +559,11 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         self.assertEqual(
             gateway.operations,
             [
-                ("inspect", ("order-1",)),
                 ("place", ("order-1",)),
                 ("cancel", ("order-1",)),
             ],
         )
+        self.assertEqual(gateway.inspect_calls, [])
         request = gateway.place_calls[0]
         self.assertEqual(request.replaced_order_ids, ("order-1",))
         self.assertEqual(request.limit_price, Decimal("0.999"))
@@ -557,15 +576,14 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             "order-2",
         )
         self.assertEqual(
-            tuple(
-                observation.phase
-                for observation
-                in repository.complete_calls[0][4]
-            ),
-            (
-                OrderObservationPhase.PRE_CANCEL,
-            ),
+            repository.record_replacement_calls[0][1],
+            (_replacement(),),
         )
+        self.assertEqual(
+            repository.record_replacement_calls[0][2],
+            ("order-1",),
+        )
+        self.assertEqual(repository.complete_calls[0][4], ())
         self.assertEqual(repository.fail_calls, [])
 
     def test_unrelated_asset_has_no_market_side_effects(self) -> None:
@@ -645,11 +663,13 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             ("order-1",),
         )
         self.assertEqual(
-            tuple(
-                order.order_id
-                for order in repository.fail_calls[0][3]
-            ),
-            ("order-3",),
+            repository.record_replacement_calls[0][1][0].order_id,
+            "order-3",
+        )
+        self.assertEqual(repository.fail_calls[0][3], ())
+        self.assertIn(
+            "stage=source_cancellation",
+            results[0].error,
         )
 
     def test_completion_failure_tracks_unknown_replacement(self) -> None:
@@ -676,8 +696,40 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             ("order-1",),
         )
         self.assertEqual(
+            repository.record_replacement_calls[0][1],
+            (replacement,),
+        )
+        self.assertEqual(repository.fail_calls[0][3], ())
+        self.assertIn(
+            "stage=completion_persistence",
+            results[0].error,
+        )
+
+    def test_submission_persistence_failure_uses_fail_safe_insert(
+        self,
+    ) -> None:
+        repository = _Repository(groups=(_record(),))
+        repository.record_replacement_error = RuntimeError(
+            "replacement acknowledgement commit failed"
+        )
+        replacement = _replacement()
+        gateway = _Gateway(replacements=(replacement,))
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.on_tick_size_change(_event())
+
+        self.assertEqual(results[0].status, SupervisionStatus.FAILED)
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertEqual(
             repository.fail_calls[0][3],
             (replacement,),
+        )
+        self.assertIn(
+            "stage=replacement_persistence",
+            results[0].error,
         )
 
     def test_gateway_cannot_expand_cancellation_scope(self) -> None:
@@ -704,12 +756,10 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         )
         self.assertEqual(len(gateway.place_calls), 1)
         self.assertEqual(
-            tuple(
-                order.order_id
-                for order in repository.fail_calls[0][3]
-            ),
-            ("order-2",),
+            repository.record_replacement_calls[0][1],
+            (_replacement(),),
         )
+        self.assertEqual(repository.fail_calls[0][3], ())
         self.assertEqual(repository.fail_calls[0][2], ())
 
     def test_gateway_may_report_same_scope_in_different_order(self) -> None:
@@ -738,24 +788,18 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             ("order-1", "order-2"),
         )
 
-    def test_partial_fill_replaces_pre_cancel_remaining_quantity(
+    def test_reprice_does_not_wait_for_preinspection(
         self,
     ) -> None:
         repository = _Repository(groups=(_record(),))
-        replacement = _replacement(quantity=Decimal("20"))
+        replacement = _replacement(quantity=Decimal("25"))
         gateway = _Gateway(
             inspections=(
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.OPEN,
-                    original=Decimal("25"),
-                    matched=Decimal("5"),
-                ),
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.CANCELLED,
-                    original=Decimal("25"),
-                    matched=Decimal("7"),
+                OrderInspectionResult(
+                    requested_order_ids=("order-1",),
+                    snapshots=(),
+                    failed_order_ids=("order-1",),
+                    error="temporary lookup failure",
                 ),
             ),
             replacements=(replacement,),
@@ -770,34 +814,20 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         self.assertEqual(results[0].status, SupervisionStatus.REPLACED)
         self.assertEqual(
             gateway.place_calls[0].quantity,
-            Decimal("20"),
+            Decimal("25"),
         )
-        self.assertEqual(len(gateway.inspect_calls), 1)
+        self.assertEqual(gateway.inspect_calls, [])
         self.assertEqual(
             repository.complete_calls[0][2],
             (replacement,),
         )
 
-    def test_does_not_wait_for_fill_during_cancel(
+    def test_replacement_is_recorded_before_cleanup_completes(
         self,
     ) -> None:
         repository = _Repository(groups=(_record(),))
-        replacement = _replacement(quantity=Decimal("20"))
+        replacement = _replacement(quantity=Decimal("25"))
         gateway = _Gateway(
-            inspections=(
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.OPEN,
-                    original=Decimal("25"),
-                    matched=Decimal("5"),
-                ),
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.FILLED,
-                    original=Decimal("25"),
-                    matched=Decimal("25"),
-                ),
-            ),
             replacements=(replacement,),
         )
         supervisor = PersistentOrderSupervisor(
@@ -812,14 +842,18 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             SupervisionStatus.REPLACED,
         )
         self.assertEqual(len(gateway.place_calls), 1)
-        self.assertEqual(len(gateway.inspect_calls), 1)
+        self.assertEqual(gateway.inspect_calls, [])
+        self.assertEqual(
+            repository.record_replacement_calls[0][1],
+            (replacement,),
+        )
         self.assertEqual(repository.complete_calls[0][2], (replacement,))
 
-    def test_notional_sizing_replaces_only_unfilled_old_notional(
+    def test_notional_sizing_uses_full_registered_notional(
         self,
     ) -> None:
         repository = _Repository(groups=(_notional_record(),))
-        remaining_notional = Decimal("4.5")
+        remaining_notional = Decimal("10")
         replacement_quantity = (
             remaining_notional / Decimal("0.999")
         )
@@ -827,22 +861,6 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             quantity=replacement_quantity
         )
         gateway = _Gateway(
-            inspections=(
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.OPEN,
-                    original=Decimal("10"),
-                    matched=Decimal("1"),
-                    limit_price=Decimal("0.50"),
-                ),
-                _inspection(
-                    ("order-1",),
-                    state=RemoteOrderState.CANCELLED,
-                    original=Decimal("10"),
-                    matched=Decimal("2"),
-                    limit_price=Decimal("0.50"),
-                ),
-            ),
             replacements=(replacement,),
         )
         supervisor = PersistentOrderSupervisor(
@@ -861,7 +879,7 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             (replacement,),
         )
 
-    def test_already_filled_order_needs_no_cancellation(
+    def test_tick_change_never_blocks_on_remote_fill_lookup(
         self,
     ) -> None:
         repository = _Repository(groups=(_record(),))
@@ -885,10 +903,14 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
 
         self.assertEqual(
             results[0].status,
-            SupervisionStatus.COMPLETED,
+            SupervisionStatus.REPLACED,
         )
-        self.assertEqual(gateway.cancel_calls, [])
-        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(
+            gateway.cancel_calls,
+            [("primary", ("order-1",))],
+        )
+        self.assertEqual(len(gateway.place_calls), 1)
+        self.assertEqual(gateway.inspect_calls, [])
 
     def test_does_not_read_unconfirmed_post_cancel_state(
         self,
@@ -919,7 +941,7 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             SupervisionStatus.REPLACED,
         )
         self.assertEqual(len(gateway.place_calls), 1)
-        self.assertEqual(len(gateway.inspect_calls), 1)
+        self.assertEqual(len(gateway.inspect_calls), 0)
 
     def test_does_not_make_post_cancel_lookup(
         self,
@@ -952,10 +974,10 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
             SupervisionStatus.REPLACED,
         )
         self.assertEqual(len(gateway.place_calls), 1)
-        self.assertEqual(len(gateway.inspect_calls), 1)
+        self.assertEqual(len(gateway.inspect_calls), 0)
         self.assertEqual(repository.fail_calls, [])
 
-    def test_remote_quantity_mismatch_blocks_cancellation(self) -> None:
+    def test_remote_quantity_lookup_is_not_in_hot_path(self) -> None:
         repository = _Repository(groups=(_record(),))
         gateway = _Gateway(
             inspections=(
@@ -974,10 +996,13 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
 
         results = supervisor.on_tick_size_change(_event())
 
-        self.assertEqual(results[0].status, SupervisionStatus.FAILED)
-        self.assertIn("quantity does not match", results[0].error)
-        self.assertEqual(gateway.cancel_calls, [])
-        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(results[0].status, SupervisionStatus.REPLACED)
+        self.assertEqual(gateway.inspect_calls, [])
+        self.assertEqual(
+            gateway.cancel_calls,
+            [("primary", ("order-1",))],
+        )
+        self.assertEqual(len(gateway.place_calls), 1)
 
     def test_reconcile_recovers_persisted_unknown_replacement(
         self,

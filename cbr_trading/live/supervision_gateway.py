@@ -530,7 +530,9 @@ def _remote_order_snapshot(
         state = RemoteOrderState.OPEN
     elif remote_status in {
         "CANCELED",
+        "CANCELED_MARKET_RESOLVED",
         "CANCELLED",
+        "CANCELLED_MARKET_RESOLVED",
         "CLOSED",
         "EXPIRED",
     }:

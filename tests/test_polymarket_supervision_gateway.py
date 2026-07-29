@@ -327,7 +327,7 @@ class PolymarketSupervisionOrderGatewayTests(unittest.TestCase):
             RemoteOrderState.UNKNOWN,
         )
 
-    def test_inspection_does_not_replace_market_resolved_cancellation(
+    def test_inspection_normalizes_market_resolved_cancellation(
         self,
     ) -> None:
         client = _Client()
@@ -345,7 +345,7 @@ class PolymarketSupervisionOrderGatewayTests(unittest.TestCase):
 
         self.assertEqual(
             result.snapshots[0].state,
-            RemoteOrderState.UNKNOWN,
+            RemoteOrderState.CANCELLED,
         )
 
     def test_inspection_failure_accounts_for_exact_failed_id(
