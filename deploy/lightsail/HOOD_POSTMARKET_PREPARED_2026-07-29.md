@@ -58,8 +58,20 @@ release and accepted GAAP diluted EPS `0.38`.
   startup failure marker.
 - No validated HOOD fact or execution claim exists.
 
-## Deliberately not applied
+## Live arming
 
-`deploy/lightsail/live/026_arm_hood_july_29_postmarket.sql` has not been
-applied. The profile remains disabled and no order was submitted. A separate
-explicit authorization is required for `AUTO_LIVE`.
+After separate explicit authorization,
+`deploy/lightsail/live/026_arm_hood_july_29_postmarket.sql` was applied with
+limits `100 / 100 / 1000`.
+
+The immediate read-only armed invariant confirmed:
+
+- schedule mode/state: `AUTO_LIVE / PENDING`;
+- profile status: `DISABLED`;
+- `armed_for_live=true`;
+- a fresh live resolution heartbeat with supervision and trading enabled;
+- no validated HOOD fact, execution claim, or active order group;
+- no lifecycle error.
+
+The scheduler remains responsible for authenticated preflight at `17:45 UTC`
+and profile activation at `18:00 UTC`. No order was submitted while arming.
