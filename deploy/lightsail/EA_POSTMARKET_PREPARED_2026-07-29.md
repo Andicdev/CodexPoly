@@ -82,8 +82,20 @@ A separate explicit authorization is required before changing the schedule to
   startup failure marker.
 - Production retained no validated EA fact or execution claim.
 
-## Deliberately not applied
+## Live arming
 
-`deploy/lightsail/live/025_arm_ea_july_29_postmarket.sql` has not been applied.
-The EA schedule remains `AUTO_PREFLIGHT`, and the execution profile remains
-`DISABLED`. No order was submitted.
+After separate explicit authorization,
+`deploy/lightsail/live/025_arm_ea_july_29_postmarket.sql` was applied with
+limits `100 / 100 / 1000`.
+
+The immediate read-only armed invariant confirmed:
+
+- schedule mode/state: `AUTO_LIVE / PENDING`;
+- profile status: `DISABLED`;
+- `armed_for_live=true`;
+- a fresh live resolution heartbeat with supervision and trading enabled;
+- no validated EA fact, execution claim, or active order group;
+- no lifecycle error.
+
+The scheduler remains responsible for authenticated preflight at `17:45 UTC`
+and profile activation at `18:00 UTC`. No order was submitted while arming.
