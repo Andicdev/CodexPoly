@@ -12,6 +12,13 @@ _SEED = (
     / "seeds"
     / "018_add_july_29_premarket_profiles.sql"
 )
+_BOOTSTRAP = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "seeds"
+    / "020_bootstrap_july_29_premarket_profiles.sql"
+)
 _CHECK = (
     _ROOT
     / "deploy"
@@ -19,9 +26,42 @@ _CHECK = (
     / "checks"
     / "verify_july_29_premarket_profiles.sql"
 )
+_ARM = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "018_arm_july_29_premarket_live_block.sql"
+)
+_ARMED_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_29_premarket_auto_live_armed.sql"
+)
 
 
 class July29PremarketProfileSqlTests(unittest.TestCase):
+    def test_production_bootstrap_is_premarket_only_and_non_live(self) -> None:
+        text = _BOOTSTRAP.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        for ticker in ("SOFI", "PG", "HUM"):
+            self.assertIn(f"'earnings:{ticker}:2026Q", text)
+        for ticker in ("QCOM", "MSFT", "META", "EBAY", "HOOD"):
+            self.assertNotIn(f"'earnings:{ticker}:", text)
+
+        self.assertIn("'PRE_MARKET'", text)
+        self.assertNotIn("'POST_MARKET'", text)
+        self.assertIn("'DISABLED'", text)
+        self.assertNotIn("'ENABLED'", text)
+        self.assertIn("'AUTO_PREFLIGHT'", text)
+        self.assertNotIn("'AUTO_LIVE'", text)
+        self.assertIn("EXECUTION CLAIM MUST NOT EXIST", upper)
+        self.assertNotIn("DELETE FROM", upper)
+        self.assertNotIn("DROP TABLE", upper)
+
     def test_seed_is_disabled_and_auto_preflight_only(self) -> None:
         text = _SEED.read_text(encoding="utf-8")
         upper = text.upper()
@@ -76,6 +116,44 @@ class July29PremarketProfileSqlTests(unittest.TestCase):
         self.assertNotIn("AUTO_LIVE", upper)
         self.assertIn("EXECUTION CLAIM MUST NOT EXIST", upper)
         self.assertIn("JULY 29 PRE-MARKET PROFILE SET MISMATCH", upper)
+        self.assertNotIn("SELECT *", upper)
+
+    def test_live_arm_is_guarded_and_does_not_enable_profiles(self) -> None:
+        text = _ARM.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        for ticker in (
+            "SOFI",
+            "PG",
+            "HUM",
+            "WING",
+            "ARCC",
+            "IART",
+            "GRMN",
+            "CBRE",
+            "PAG",
+        ):
+            self.assertIn(f"'earnings:{ticker}:2026Q", text)
+        for ticker in ("QCOM", "MSFT", "META", "EBAY", "HOOD", "SBUX"):
+            self.assertNotIn(f"'earnings:{ticker}:", text)
+
+        self.assertIn("'AUTO_PREFLIGHT'", text)
+        self.assertIn("'AUTO_LIVE'", text)
+        self.assertIn("REVIEWED_NOTIONAL <> 899.1", upper)
+        self.assertIn("TRADING_ENABLED", upper)
+        self.assertIn("SUPERVISION_ENABLED", upper)
+        self.assertNotIn("STATUS = 'ENABLED'", upper)
+        self.assertNotIn("DELETE FROM", upper)
+
+    def test_armed_check_is_read_only_and_fail_closed(self) -> None:
+        text = _ARMED_CHECK.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
+        self.assertIn("ROLLBACK", upper)
+        self.assertIn("'AUTO_LIVE'", text)
+        self.assertIn("FRESH FULLY-LIVE RESOLUTION HEARTBEAT", upper)
+        self.assertIn("FACTS OR CLAIMS ALREADY EXIST", upper)
         self.assertNotIn("SELECT *", upper)
 
 

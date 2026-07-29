@@ -1,4 +1,6 @@
--- Fail closed without printing rules, profiles, schedules, or claims.
+-- Verify the original July 29 post-market SEC-only subset.
+-- The pre-market profiles moved to the richer guarded check in
+-- verify_july_29_premarket_profiles.sql.
 
 BEGIN TRANSACTION READ ONLY;
 
@@ -10,9 +12,6 @@ BEGIN
         SELECT count(*)
         FROM earnings_market_rules
         WHERE rule_key IN (
-            'sofi-2026q2-gaap-eps-0pt11',
-            'pg-2026q4-nongaap-eps-1pt41',
-            'hum-2026q2-nongaap-eps-7pt00',
             'qcom-2026q3-nongaap-eps-2pt23',
             'msft-2026q4-gaap-eps-4pt21',
             'meta-2026q2-gaap-eps-7pt20',
@@ -30,17 +29,14 @@ BEGIN
           AND source_policy -> 'sec' ->> 'document_type' = 'EX-99.1'
           AND NOT source_policy ? 'company_ir'
           AND NOT source_policy ? 'press_wire'
-    ) <> 8 THEN
-        RAISE EXCEPTION 'July 29 SEC rule set mismatch';
+    ) <> 5 THEN
+        RAISE EXCEPTION 'July 29 post-market SEC rule set mismatch';
     END IF;
 
     IF (
         SELECT count(*)
         FROM resolution_execution_profiles
         WHERE profile_key IN (
-            'earnings-sofi-2026q2',
-            'earnings-pg-2026q4',
-            'earnings-hum-2026q2',
             'earnings-qcom-2026q3',
             'earnings-msft-2026q4',
             'earnings-meta-2026q2',
@@ -56,17 +52,15 @@ BEGIN
           AND old_tick = 0.01
           AND new_tick = 0.001
           AND max_reprices = 1
-    ) <> 8 THEN
-        RAISE EXCEPTION 'July 29 execution profile set mismatch';
+    ) <> 5 THEN
+        RAISE EXCEPTION
+            'July 29 post-market execution profile set mismatch';
     END IF;
 
     IF (
         SELECT count(*)
         FROM resolution_profile_schedules
         WHERE profile_key IN (
-            'earnings-sofi-2026q2',
-            'earnings-pg-2026q4',
-            'earnings-hum-2026q2',
             'earnings-qcom-2026q3',
             'earnings-msft-2026q4',
             'earnings-meta-2026q2',
@@ -75,25 +69,18 @@ BEGIN
         )
           AND automation_mode = 'AUTO_PREFLIGHT'
           AND state = 'PENDING'
-          AND metadata ->> 'live_block' IN (
-              'PRE_MARKET',
-              'POST_MARKET'
-          )
-          AND metadata ->> 'block_id' IN (
-              '2026-07-29-pre-market',
+          AND metadata ->> 'live_block' = 'POST_MARKET'
+          AND metadata ->> 'block_id' =
               '2026-07-29-post-market'
-          )
-    ) <> 8 THEN
-        RAISE EXCEPTION 'July 29 schedule set mismatch';
+    ) <> 5 THEN
+        RAISE EXCEPTION
+            'July 29 post-market schedule set mismatch';
     END IF;
 
     IF (
         SELECT count(*)
         FROM earnings_release_catalog
         WHERE event_key IN (
-            'SOFI:2026-07-29',
-            'PG:2026-07-29',
-            'HUM:2026-07-29',
             'QCOM:2026-07-29',
             'MSFT:2026-07-29',
             'META:2026-07-29',
@@ -105,8 +92,9 @@ BEGIN
           AND metric_options ->> 'primary_basis' = 'diluted'
           AND source_options @>
               '[{"delivery":"websocket","provider":"sec","status":"available"}]'::jsonb
-    ) <> 8 THEN
-        RAISE EXCEPTION 'July 29 release catalog set mismatch';
+    ) <> 5 THEN
+        RAISE EXCEPTION
+            'July 29 post-market release catalog set mismatch';
     END IF;
 
     SELECT SUM(
@@ -115,9 +103,6 @@ BEGIN
     INTO reviewed_notional
     FROM resolution_execution_profiles
     WHERE profile_key IN (
-        'earnings-sofi-2026q2',
-        'earnings-pg-2026q4',
-        'earnings-hum-2026q2',
         'earnings-qcom-2026q3',
         'earnings-msft-2026q4',
         'earnings-meta-2026q2',
@@ -126,16 +111,14 @@ BEGIN
     );
 
     IF reviewed_notional > 1000 THEN
-        RAISE EXCEPTION 'July 29 reviewed notional exceeds 1000';
+        RAISE EXCEPTION
+            'July 29 post-market reviewed notional exceeds 1000';
     END IF;
 
     IF EXISTS (
         SELECT 1
         FROM resolution_execution_claims
         WHERE scope_id IN (
-            'earnings:SOFI:2026Q2',
-            'earnings:PG:2026Q4',
-            'earnings:HUM:2026Q2',
             'earnings:QCOM:2026Q3',
             'earnings:MSFT:2026Q4',
             'earnings:META:2026Q2',
@@ -143,7 +126,8 @@ BEGIN
             'earnings:HOOD:2026Q2'
         )
     ) THEN
-        RAISE EXCEPTION 'July 29 execution claim must not exist';
+        RAISE EXCEPTION
+            'July 29 post-market execution claim must not exist';
     END IF;
 END
 $verification$;
