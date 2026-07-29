@@ -28,6 +28,10 @@ from cbr_trading.execution.prepared_executor import (
     PreparationStatus,
     PreparationSummary,
 )
+from cbr_trading.execution.selection_safety import (
+    maximum_selected_notional,
+    template_selection_group,
+)
 from cbr_trading.live.account_repository import (
     TradingAccountRecord,
     build_trading_account_repository,
@@ -174,7 +178,10 @@ class PolymarketPreparedExecutor:
 
             prepared: dict[str, _PreparedOrder] = {}
             details: list[PolymarketPreflightDetail] = []
-            notional_by_account: dict[str, Decimal] = {}
+            notionals_by_account: dict[
+                str,
+                list[tuple[OrderTemplate, Decimal]],
+            ] = {}
             balance_by_account: dict[str, Decimal] = {}
             for template in template_rows:
                 if not isinstance(template, OrderTemplate):
@@ -237,13 +244,10 @@ class PolymarketPreparedExecutor:
 
                 account_key = account.name.casefold()
                 balance_by_account[account_key] = balance
-                notional_by_account[account_key] = (
-                    notional_by_account.get(
-                        account_key,
-                        Decimal("0"),
-                    )
-                    + plan.notional
-                )
+                notionals_by_account.setdefault(
+                    account_key,
+                    [],
+                ).append((template, plan.notional))
                 prepared[template.template_id] = _PreparedOrder(
                     template=template,
                     account=account,
@@ -271,13 +275,17 @@ class PolymarketPreparedExecutor:
                     prepared[template.template_id].detail
                 )
 
-            for account_key, maximum in notional_by_account.items():
+            maximum_by_account = {
+                account_key: maximum_selected_notional(rows)
+                for account_key, rows in notionals_by_account.items()
+            }
+            for account_key, maximum in maximum_by_account.items():
                 if balance_by_account[account_key] < maximum:
                     raise PolymarketPreparedExecutionError(
                         "Insufficient collateral for prepared account"
                     )
             maximum_notional = sum(
-                notional_by_account.values(),
+                maximum_by_account.values(),
                 Decimal("0"),
             )
             if (
@@ -355,7 +363,6 @@ class PolymarketPreparedExecutor:
             None
         ] * len(intent_rows)
         validated: list[tuple[int, OrderIntent, _PreparedOrder]] = []
-        selected_template_ids: set[str] = set()
         for index, intent in enumerate(intent_rows):
             prepared = self._prepared.get(intent.template_id)
             if (
@@ -372,8 +379,41 @@ class PolymarketPreparedExecutor:
                     error="polymarket_intent_not_prepared",
                 )
                 continue
-            selected_template_ids.add(intent.template_id)
             validated.append((index, intent, prepared))
+
+        grouped: dict[
+            tuple[str, str],
+            list[tuple[int, OrderIntent, _PreparedOrder]],
+        ] = {}
+        for item in validated:
+            _index, _intent, prepared = item
+            group = (
+                prepared.account.name.casefold(),
+                template_selection_group(
+                    prepared.template
+                ).casefold(),
+            )
+            grouped.setdefault(group, []).append(item)
+        conflicting_indices: set[int] = set()
+        for group_rows in grouped.values():
+            if len(group_rows) < 2:
+                continue
+            for index, intent, _prepared in group_rows:
+                results[index] = OrderExecutionResult(
+                    intent=intent,
+                    status=ExecutionStatus.SKIPPED,
+                    attempted=False,
+                    error="polymarket_selection_group_conflict",
+                )
+                conflicting_indices.add(index)
+        validated = [
+            item
+            for item in validated
+            if item[0] not in conflicting_indices
+        ]
+        selected_template_ids: set[str] = set()
+        for _index, intent, _prepared in validated:
+            selected_template_ids.add(intent.template_id)
 
         if validated:
             try:

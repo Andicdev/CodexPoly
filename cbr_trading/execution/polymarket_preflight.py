@@ -24,6 +24,9 @@ from cbr_trading.execution.prepared_executor import (
     PreparationStatus,
     PreparationSummary,
 )
+from cbr_trading.execution.selection_safety import (
+    maximum_selected_notional,
+)
 from cbr_trading.execution.supervision_gateway import (
     replacement_price_for_tick,
 )
@@ -128,6 +131,9 @@ class PolymarketPreflightPreparedExecutor:
             accounts: dict[str, TradingAccountRecord] = {}
             details: list[PolymarketPreflightDetail] = []
             maximum_notional = Decimal("0")
+            prepared_notionals: list[
+                tuple[OrderTemplate, Decimal]
+            ] = []
             prepared: dict[str, OrderTemplate] = {}
             for template in template_rows:
                 if not isinstance(template, OrderTemplate):
@@ -187,7 +193,10 @@ class PolymarketPreflightPreparedExecutor:
                         presign=True,
                     )
                 )
-                maximum_notional += plan.notional
+                prepared_notionals.append((template, plan.notional))
+                maximum_notional = maximum_selected_notional(
+                    prepared_notionals
+                )
                 if (
                     validation_safety.max_total_notional is None
                     or maximum_notional

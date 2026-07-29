@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -9,7 +10,13 @@ from cbr_trading.application import (
     CoordinationStatus,
     ResolutionTradingCoordinator,
 )
-from cbr_trading.domain import ExecutionStatus, ResolutionSignal
+from cbr_trading.domain import (
+    ExecutionStatus,
+    OrderSide,
+    OrderTemplate,
+    Outcome,
+    ResolutionSignal,
+)
 from cbr_trading.execution import (
     PolymarketPreparedExecutor,
     PreparationContext,
@@ -159,11 +166,20 @@ class _Client:
         self.post_error = post_error
         self.posts: list[tuple] = []
         self.closed = False
+        self.hot_path = False
 
     def get_balance_allowance(self, *, asset_type: str):
+        if self.hot_path:
+            raise AssertionError(
+                "balance lookup is forbidden after the signal"
+            )
         return SimpleNamespace(balance="100000000")
 
     def get_order_book(self, *, token_id: str):
+        if self.hot_path:
+            raise AssertionError(
+                "book lookup is forbidden after the signal"
+            )
         return SimpleNamespace(
             condition_id=CONDITION_ID,
             tick_size="0.001",
@@ -172,6 +188,10 @@ class _Client:
         )
 
     def create_limit_order(self, **kwargs: object):
+        if self.hot_path:
+            raise AssertionError(
+                "order signing is forbidden after the signal"
+            )
         return SimpleNamespace(
             token_id=kwargs["token_id"],
             order_type="GTC",
@@ -183,12 +203,13 @@ class _Client:
         self.posts.append(rows)
         if self.post_error is not None:
             raise self.post_error
-        return (
+        return tuple(
             SimpleNamespace(
                 ok=True,
-                order_id="order-1",
+                order_id=f"order-{index + 1}",
                 status="LIVE",
-            ),
+            )
+            for index, _order in enumerate(rows)
         )
 
     def close(self) -> None:
@@ -243,6 +264,138 @@ def _run(
 
 
 class PolymarketPreparedExecutorTests(unittest.TestCase):
+    def test_conflicting_outcomes_fail_before_batch_submission(self) -> None:
+        ledger = _Ledger()
+        client = _Client()
+        signal = ResolutionSignal(
+            signal_id="fed:test:conflict",
+            source="fed_fomc",
+            subject="central_bank:FED:policy_rate:test",
+            metric="central_bank.policy_rate.change_bps",
+            value=Decimal("0"),
+            detected_at=datetime.now(timezone.utc),
+        )
+        context = PreparationContext(
+            scope_id=signal.signal_id,
+            source=signal.source,
+            source_reference="https://www.federalreserve.gov/",
+        )
+        templates = tuple(
+            OrderTemplate(
+                template_id=f"fed:conflict:{outcome.value}",
+                strategy_id="numeric_threshold",
+                account_name="KinderSman",
+                condition_id=CONDITION_ID,
+                outcome=outcome,
+                side=OrderSide.BUY,
+                desired_price=Decimal("0.9"),
+                quantity=Decimal("5"),
+                metadata={"production_scope_id": "fed:scope:conflict"},
+            )
+            for outcome in (Outcome.YES, Outcome.NO)
+        )
+        executor = PolymarketPreparedExecutor(
+            database_url="postgresql://unused",
+            safety=_safety(),
+            account_repository=_AccountRepository(),
+            market_gateway=_MarketGateway(),
+            ledger=ledger,
+            client_factory=lambda private_key, wallet: client,
+            decryptor=lambda encrypted, key: "private-key",
+        )
+
+        preparation = executor.prepare(templates, context=context)
+        client.hot_path = True
+        results = executor.execute(
+            tuple(
+                template.bind(signal_id=signal.signal_id)
+                for template in templates
+            ),
+            signal=signal,
+        )
+
+        self.assertTrue(preparation.ready)
+        self.assertEqual(client.posts, [])
+        self.assertEqual(ledger.reserve_calls, [])
+        self.assertTrue(
+            all(
+                result.status is ExecutionStatus.SKIPPED
+                and result.error
+                == "polymarket_selection_group_conflict"
+                for result in results
+            )
+        )
+        executor.close()
+
+    def test_five_selected_profiles_use_one_client_batch(self) -> None:
+        ledger = _Ledger()
+        client = _Client()
+        signal = ResolutionSignal(
+            signal_id="fed:test:execution_batch",
+            source="fed_fomc",
+            subject="central_bank:FED:policy_rate:test",
+            metric="central_bank.policy_rate.change_bps",
+            value=Decimal("0"),
+            detected_at=datetime.now(timezone.utc),
+        )
+        context = PreparationContext(
+            scope_id=signal.signal_id,
+            source=signal.source,
+            source_reference="https://www.federalreserve.gov/",
+        )
+        templates = tuple(
+            OrderTemplate(
+                template_id=f"fed:{index}:YES",
+                strategy_id="numeric_threshold",
+                account_name="KinderSman",
+                condition_id=CONDITION_ID,
+                outcome=Outcome.YES,
+                side=OrderSide.BUY,
+                desired_price=Decimal("0.9"),
+                quantity=Decimal("5"),
+                metadata={
+                    "production_scope_id": f"fed:scope:{index}",
+                },
+            )
+            for index in range(5)
+        )
+        executor = PolymarketPreparedExecutor(
+            database_url="postgresql://unused",
+            safety=replace(
+                _safety(),
+                max_total_notional=Decimal("22.5"),
+            ),
+            account_repository=_AccountRepository(),
+            market_gateway=_MarketGateway(),
+            ledger=ledger,
+            client_factory=lambda private_key, wallet: client,
+            decryptor=lambda encrypted, key: "private-key",
+        )
+
+        preparation = executor.prepare(templates, context=context)
+        client.hot_path = True
+        results = executor.execute(
+            tuple(
+                template.bind(signal_id=signal.signal_id)
+                for template in templates
+            ),
+            signal=signal,
+        )
+
+        self.assertTrue(preparation.ready)
+        self.assertEqual(executor.maximum_notional, Decimal("22.5"))
+        self.assertEqual(len(client.posts), 1)
+        self.assertEqual(len(client.posts[0]), 5)
+        self.assertEqual(len(ledger.reserve_calls), 1)
+        self.assertEqual(len(ledger.completions), 5)
+        self.assertTrue(
+            all(
+                result.status is ExecutionStatus.SUBMITTED
+                for result in results
+            )
+        )
+        executor.close()
+
     def test_preparation_window_expiry_has_no_claims_to_close(
         self,
     ) -> None:

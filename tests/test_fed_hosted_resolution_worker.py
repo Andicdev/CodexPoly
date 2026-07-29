@@ -5,7 +5,16 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from cbr_trading.domain import RepriceOnTickChange
+from cbr_trading.domain import (
+    ExecutionStatus,
+    OrderExecutionResult,
+    RepriceOnTickChange,
+)
+from cbr_trading.execution import (
+    PreparationItem,
+    PreparationStatus,
+    PreparationSummary,
+)
 from cbr_trading.fed import (
     FedOfficialObservation,
     FedRateDecision,
@@ -97,6 +106,43 @@ class _LifecycleStore:
         self.completed.append((profile_key, reason_code))
 
 
+class _RecordingExecutor:
+    def __init__(self) -> None:
+        self.prepared_templates: tuple[object, ...] = ()
+        self.execute_calls: list[tuple[object, ...]] = []
+        self.closed = False
+
+    def prepare(self, templates, *, context):
+        self.prepared_templates = tuple(templates)
+        return PreparationSummary(
+            items=tuple(
+                PreparationItem(
+                    template_id=template.template_id,
+                    status=PreparationStatus.READY,
+                    prepared_key=f"prepared:{template.template_id}",
+                )
+                for template in self.prepared_templates
+            ),
+            context=context,
+        )
+
+    def execute(self, intents, *, signal):
+        del signal
+        intent_rows = tuple(intents)
+        self.execute_calls.append(intent_rows)
+        return tuple(
+            OrderExecutionResult(
+                intent=intent,
+                status=ExecutionStatus.DRY_RUN,
+                attempted=False,
+            )
+            for intent in intent_rows
+        )
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _profiles() -> tuple[ResolutionExecutionProfile, ...]:
     return tuple(
         ResolutionExecutionProfile(
@@ -148,6 +194,39 @@ def _settings(
 
 
 class FedHostedResolutionWorkerTests(unittest.TestCase):
+    def test_all_profiles_share_one_prepared_execution_batch(self) -> None:
+        executor = _RecordingExecutor()
+        factory_profiles: list[ResolutionExecutionProfile] = []
+        worker = FedHostedResolutionWorker(
+            settings=_settings(),
+            profile_store=_ProfileStore(_profiles()),
+            lifecycle_store=_LifecycleStore(),
+            poller=_Poller(_observation()),
+            executor_factory=lambda profile: (
+                factory_profiles.append(profile) or executor
+            ),
+            clock=lambda: _NOW,
+        )
+
+        preparations = worker.prepare()
+        result = worker.poll_once()
+
+        self.assertEqual(len(preparations), 5)
+        self.assertEqual(len(factory_profiles), 1)
+        self.assertEqual(len(executor.prepared_templates), 10)
+        self.assertEqual(len(executor.execute_calls), 1)
+        self.assertEqual(len(executor.execute_calls[0]), 5)
+        self.assertEqual(result.completed_count, 5)
+        self.assertEqual(
+            {
+                intent.outcome.value
+                for intent in executor.execute_calls[0]
+            },
+            {"YES", "NO"},
+        )
+        worker.close()
+        self.assertTrue(executor.closed)
+
     def test_one_observation_completes_all_five_markets(self) -> None:
         poller = _Poller(_observation())
         outbox = _Outbox()

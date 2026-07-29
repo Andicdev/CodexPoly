@@ -175,33 +175,23 @@ class FedHostedResolutionWorker:
             binding.scope_id: binding
             for binding in self._bindings
         }
-        enabled_keys = {profile.profile_key for profile in profiles}
-        retained: list[_ManagedFedResolution] = []
-        for managed in self._managed:
-            if managed.profile.profile_key in enabled_keys:
-                retained.append(managed)
-                continue
-            _expire_executor(
-                managed.executor,
-                reason="profile_disabled_or_out_of_window",
-            )
-            managed.coordinator.close()
-            self._logger.info(
-                "Hosted FED resolution detached profile=%s scope=%s",
-                managed.profile.profile_key,
-                managed.profile.scope_id,
-            )
-        self._managed = retained
-        managed_keys = {
-            managed.profile.profile_key for managed in self._managed
+        current_profiles = {
+            managed.profile.profile_key: managed.profile
+            for managed in self._managed
         }
-        new_profiles = tuple(
-            profile
-            for profile in profiles
-            if profile.profile_key not in managed_keys
-        )
-        if not new_profiles:
+        desired_profiles = {
+            profile.profile_key: profile for profile in profiles
+        }
+        if current_profiles == desired_profiles:
             return ()
+
+        if self._managed:
+            self._detach_batch(
+                reason="profile_disabled_or_out_of_window"
+            )
+        if not profiles:
+            return ()
+
         needs_supervision = (
             self._settings.mode is HostedResolutionMode.LIVE
             and any(
@@ -209,7 +199,7 @@ class FedHostedResolutionWorker:
                     profile.lifecycle_policy,
                     RepriceOnTickChange,
                 )
-                for profile in new_profiles
+                for profile in profiles
             )
         )
         if needs_supervision and not self._settings.supervision_enabled:
@@ -226,59 +216,18 @@ class FedHostedResolutionWorker:
         if needs_supervision:
             self._start_supervision()
 
-        results: list[HostedPreparation] = []
+        validated: list[
+            tuple[ResolutionExecutionProfile, FedMarketBinding]
+        ] = []
+        result_by_key: dict[str, HostedPreparation] = {}
         failures: list[str] = []
-        newly_managed: list[_ManagedFedResolution] = []
-        for profile in new_profiles:
+        for profile in profiles:
             try:
                 binding = _validated_profile_binding(
                     profile,
                     bindings_by_scope=bindings_by_scope,
                 )
-                managed, preparation = self._prepare_one(
-                    profile=profile,
-                    binding=binding,
-                )
-                if not preparation.ready:
-                    error = (
-                        preparation.error
-                        or "executor_preparation_not_ready"
-                    )
-                    failures.append(f"{profile.profile_key}: {error}")
-                    self._logger.error(
-                        "Hosted FED preparation failed "
-                        "profile=%s scope=%s error=%s",
-                        profile.profile_key,
-                        profile.scope_id,
-                        error,
-                    )
-                    results.append(
-                        HostedPreparation(
-                            profile_key=profile.profile_key,
-                            scope_id=profile.scope_id,
-                            ticker="FED",
-                            ready=False,
-                            template_count=len(preparation.templates),
-                            error=error,
-                        )
-                    )
-                    _expire_executor(
-                        managed.executor,
-                        reason="preparation_failed",
-                    )
-                    managed.coordinator.close()
-                    self._block_failed_profile(profile.profile_key)
-                    continue
-                newly_managed.append(managed)
-                results.append(
-                    HostedPreparation(
-                        profile_key=profile.profile_key,
-                        scope_id=profile.scope_id,
-                        ticker="FED",
-                        ready=True,
-                        template_count=len(preparation.templates),
-                    )
-                )
+                validated.append((profile, binding))
             except Exception as exc:
                 error = redact_exception(exc)
                 failures.append(f"{profile.profile_key}: {error}")
@@ -289,34 +238,71 @@ class FedHostedResolutionWorker:
                     profile.scope_id,
                     error,
                 )
-                results.append(
-                    HostedPreparation(
+                result_by_key[profile.profile_key] = HostedPreparation(
+                    profile_key=profile.profile_key,
+                    scope_id=profile.scope_id,
+                    ticker="FED",
+                    ready=False,
+                    template_count=0,
+                    error=error,
+                )
+                self._block_failed_profile(profile.profile_key)
+
+        if failures and self._lifecycle_store is None:
+            raise RuntimeError(
+                "Hosted FED profile validation failed: "
+                + "; ".join(failures)
+            )
+        if validated:
+            managed_rows, preparation = self._prepare_batch(validated)
+            if not preparation.ready:
+                error = (
+                    preparation.error
+                    or "executor_preparation_not_ready"
+                )
+                for managed in managed_rows:
+                    profile = managed.profile
+                    failures.append(f"{profile.profile_key}: {error}")
+                    result_by_key[
+                        profile.profile_key
+                    ] = HostedPreparation(
                         profile_key=profile.profile_key,
                         scope_id=profile.scope_id,
                         ticker="FED",
                         ready=False,
-                        template_count=0,
+                        template_count=2,
                         error=error,
                     )
-                )
-                self._block_failed_profile(profile.profile_key)
-        if failures:
-            if self._lifecycle_store is not None:
-                self._managed.extend(newly_managed)
-                return tuple(results)
-            for managed in newly_managed:
+                    self._block_failed_profile(profile.profile_key)
+                first = managed_rows[0]
                 _expire_executor(
-                    managed.executor,
-                    reason="preparation_batch_failed",
+                    first.executor,
+                    reason="preparation_failed",
                 )
-                managed.coordinator.close()
-            self.close()
-            raise RuntimeError(
-                "Hosted FED preparation failed: "
-                + "; ".join(failures)
-            )
-        self._managed.extend(newly_managed)
-        return tuple(results)
+                first.coordinator.close()
+                if self._lifecycle_store is None:
+                    raise RuntimeError(
+                        "Hosted FED batch preparation failed: "
+                        + "; ".join(failures)
+                    )
+            else:
+                self._managed.extend(managed_rows)
+                for managed in managed_rows:
+                    profile = managed.profile
+                    result_by_key[
+                        profile.profile_key
+                    ] = HostedPreparation(
+                        profile_key=profile.profile_key,
+                        scope_id=profile.scope_id,
+                        ticker="FED",
+                        ready=True,
+                        template_count=2,
+                    )
+
+        return tuple(
+            result_by_key[profile.profile_key]
+            for profile in profiles
+        )
 
     def poll_once(self) -> HostedPollResult:
         if self._closed:
@@ -333,13 +319,26 @@ class FedHostedResolutionWorker:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("hosted FED clock must be timezone-aware")
         now = now.astimezone(timezone.utc)
-        ready_profiles = tuple(
+        first = self._managed[0]
+        state = first.coordinator.state
+        expired_profiles = tuple(
             managed
             for managed in self._managed
-            if managed.coordinator.state is CoordinatorState.READY
-            and now < managed.profile.expires_at
+            if now >= managed.profile.expires_at
         )
-        if ready_profiles and self._signal is None:
+        if expired_profiles and state is CoordinatorState.READY:
+            expired = len(self._managed)
+            self._detach_batch(reason="preparation_window_expired")
+            self._poll_count += 1
+            return HostedPollResult(
+                fact_count=1 if self._signal is not None else 0,
+                waiting_count=0,
+                completed_count=0,
+                failed_count=0,
+                expired_count=expired,
+            )
+
+        if state is CoordinatorState.READY and self._signal is None:
             observation = self._poller.poll_once()
             if observation is not None:
                 self._signal = resolution_signal_from_fed_observation(
@@ -347,42 +346,51 @@ class FedHostedResolutionWorker:
                     spec=self._spec,
                 )
 
-        waiting = 0
-        completed = 0
-        failed = 0
-        expired = 0
-        for managed in self._managed:
-            state = managed.coordinator.state
-            if state is CoordinatorState.READY:
-                if now >= managed.profile.expires_at:
-                    _expire_executor(
-                        managed.executor,
-                        reason="preparation_window_expired",
-                    )
-                    managed.coordinator.close()
-                    expired += 1
-                    continue
-                outcome = managed.coordinator.poll_once()
-                if outcome.status in {
-                    CoordinationStatus.WAITING,
-                    CoordinationStatus.IGNORED,
-                }:
-                    waiting += 1
-                elif outcome.status is CoordinationStatus.COMPLETED:
-                    completed += 1
+        profile_count = len(self._managed)
+        waiting = completed = failed = expired = 0
+        if state is CoordinatorState.READY:
+            outcome = first.coordinator.poll_once()
+            if outcome.status in {
+                CoordinationStatus.WAITING,
+                CoordinationStatus.IGNORED,
+            }:
+                waiting = profile_count
+            elif outcome.status is CoordinationStatus.COMPLETED:
+                completed = profile_count
+                for managed in self._managed:
                     self._complete_profile(managed)
+                    profile_intents = tuple(
+                        intent
+                        for intent in outcome.intents
+                        if str(
+                            intent.metadata.get("profile_key") or ""
+                        )
+                        == managed.profile.profile_key
+                    )
+                    template_ids = {
+                        intent.template_id for intent in profile_intents
+                    }
+                    profile_results = tuple(
+                        result
+                        for result in outcome.order_results
+                        if result.intent.template_id in template_ids
+                    )
                     self._logger.info(
                         "Hosted FED resolution completed scope=%s "
                         "bucket=%s mode=%s intents=%s results=%s",
                         managed.profile.scope_id,
                         managed.binding.bucket.value,
                         self._settings.mode.value,
-                        len(outcome.intents),
-                        len(outcome.order_results),
+                        len(profile_intents),
+                        len(profile_results),
                     )
-                else:
-                    failed += 1
-                    if managed.coordinator.state is CoordinatorState.FAILED:
+            else:
+                failed = profile_count
+                for managed in self._managed:
+                    if (
+                        managed.coordinator.state
+                        is CoordinatorState.FAILED
+                    ):
                         managed.lifecycle_failure_status = outcome.status
                         self._block_profile(managed)
                     self._logger.error(
@@ -392,14 +400,16 @@ class FedHostedResolutionWorker:
                         outcome.status.value,
                         outcome.error,
                     )
-            elif state is CoordinatorState.COMPLETED:
+        elif state is CoordinatorState.COMPLETED:
+            completed = profile_count
+            for managed in self._managed:
                 self._complete_profile(managed)
-                completed += 1
-            elif state is CoordinatorState.FAILED:
+        elif state is CoordinatorState.FAILED:
+            failed = profile_count
+            for managed in self._managed:
                 self._block_profile(managed)
-                failed += 1
-            elif state is CoordinatorState.CLOSED:
-                expired += 1
+        elif state is CoordinatorState.CLOSED:
+            expired = profile_count
         if self._signal is not None and not self._notified:
             self._enqueue_notification_after_execution()
         self._poll_count += 1
@@ -469,12 +479,11 @@ class FedHostedResolutionWorker:
             return
         self._closed = True
         first_error: Exception | None = None
-        for managed in self._managed:
+        if self._managed:
             try:
-                managed.coordinator.close()
+                self._managed[0].coordinator.close()
             except Exception as exc:
-                if first_error is None:
-                    first_error = exc
+                first_error = exc
         self._managed.clear()
         if self._supervision_runtime is not None:
             try:
@@ -492,29 +501,33 @@ class FedHostedResolutionWorker:
         if first_error is not None:
             raise RuntimeError(redact_exception(first_error)) from None
 
-    def _prepare_one(
+    def _prepare_batch(
         self,
-        *,
-        profile: ResolutionExecutionProfile,
-        binding: FedMarketBinding,
-    ) -> tuple[_ManagedFedResolution, Any]:
+        rows: Sequence[
+            tuple[ResolutionExecutionProfile, FedMarketBinding]
+        ],
+    ) -> tuple[list[_ManagedFedResolution], Any]:
+        if not rows:
+            raise ValueError("FED batch requires at least one profile")
+        batch_scope_id = f"{self._spec.decision_id}:execution_batch"
         source = FedResolutionSource(
             lambda: self._signal,
-            scope_id=profile.scope_id,
+            scope_id=batch_scope_id,
         )
-        yes_template, no_template = order_templates_from_profile(
-            profile,
-            strategy_id=NUMERIC_THRESHOLD_STRATEGY_ID,
-            metadata={
-                "rule_key": binding.rule_key,
-                "ticker": "FED",
-                "market_slug": binding.market_slug,
-                "decision_id": self._spec.decision_id,
-                "rate_bucket": binding.bucket.value,
-            },
-        )
-        strategy = NumericThresholdStrategy(
-            (
+        rules: list[NumericThresholdRule] = []
+        for profile, binding in rows:
+            yes_template, no_template = order_templates_from_profile(
+                profile,
+                strategy_id=NUMERIC_THRESHOLD_STRATEGY_ID,
+                metadata={
+                    "rule_key": binding.rule_key,
+                    "ticker": "FED",
+                    "market_slug": binding.market_slug,
+                    "decision_id": self._spec.decision_id,
+                    "rate_bucket": binding.bucket.value,
+                },
+            )
+            rules.append(
                 NumericThresholdRule(
                     rule_key=binding.rule_key,
                     source=FED_SOURCE_NAME,
@@ -525,44 +538,53 @@ class FedHostedResolutionWorker:
                     rounding_places=0,
                     yes_template=yes_template,
                     no_template=no_template,
-                ),
+                )
             )
+        strategy = NumericThresholdStrategy(
+            tuple(rules)
         )
-        executor = self._new_executor(profile)
+        profiles = tuple(profile for profile, _binding in rows)
+        executor = self._new_executor(profiles)
         coordinator = ResolutionTradingCoordinator(
             source=source,
             strategies=(strategy,),
             executor=executor,
             context=PreparationContext(
-                scope_id=profile.scope_id,
-                source=profile.source_name,
-                source_reference=profile.source_reference,
+                scope_id=batch_scope_id,
+                source=FED_SOURCE_NAME,
+                source_reference=self._spec.board_statement_url,
                 attributes={
-                    "profile_key": profile.profile_key,
+                    "profile_keys": tuple(
+                        profile.profile_key for profile in profiles
+                    ),
                     "ticker": "FED",
-                    "rule_key": binding.rule_key,
                     "decision_id": self._spec.decision_id,
-                    "rate_bucket": binding.bucket.value,
                 },
             ),
         )
         preparation = coordinator.prepare()
         return (
-            _ManagedFedResolution(
-                profile=profile,
-                binding=binding,
-                coordinator=coordinator,
-                executor=executor,
-            ),
+            [
+                _ManagedFedResolution(
+                    profile=profile,
+                    binding=binding,
+                    coordinator=coordinator,
+                    executor=executor,
+                )
+                for profile, binding in rows
+            ],
             preparation,
         )
 
     def _new_executor(
         self,
-        profile: ResolutionExecutionProfile,
+        profiles: Sequence[ResolutionExecutionProfile],
     ) -> PreparedExecutor:
+        profile_rows = tuple(profiles)
+        if not profile_rows:
+            raise ValueError("FED executor requires at least one profile")
         if self._executor_factory is not None:
-            return self._executor_factory(profile)
+            return self._executor_factory(profile_rows[0])
         if self._settings.mode is HostedResolutionMode.SHADOW:
             return DryRunPreparedExecutor()
         safety = LiveSafetySettings.from_env()
@@ -577,9 +599,12 @@ class FedHostedResolutionWorker:
             safety=safety,
             db_session_factory=self._db_session_factory,
         )
-        if isinstance(
-            profile.lifecycle_policy,
-            RepriceOnTickChange,
+        if any(
+            isinstance(
+                profile.lifecycle_policy,
+                RepriceOnTickChange,
+            )
+            for profile in profile_rows
         ):
             if self._supervisor is None:
                 raise RuntimeError("order supervisor is unavailable")
@@ -648,11 +673,30 @@ class FedHostedResolutionWorker:
         self._schemas_ready = True
 
     def _expire_all(self, *, reason: str) -> None:
-        for managed in self._managed:
-            try:
-                _expire_executor(managed.executor, reason=reason)
-            finally:
-                managed.coordinator.close()
+        if not self._managed:
+            return
+        managed = self._managed[0]
+        try:
+            _expire_executor(managed.executor, reason=reason)
+        finally:
+            managed.coordinator.close()
+
+    def _detach_batch(self, *, reason: str) -> None:
+        if not self._managed:
+            return
+        managed_rows = tuple(self._managed)
+        self._managed.clear()
+        first = managed_rows[0]
+        try:
+            _expire_executor(first.executor, reason=reason)
+        finally:
+            first.coordinator.close()
+        for managed in managed_rows:
+            self._logger.info(
+                "Hosted FED resolution detached profile=%s scope=%s",
+                managed.profile.profile_key,
+                managed.profile.scope_id,
+            )
 
     def _block_failed_profile(self, profile_key: str) -> None:
         if self._lifecycle_store is None:
