@@ -23,6 +23,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     hum_q2_2026_shadow_rule,
     iart_q2_2026_shadow_rule,
     meta_q2_2026_shadow_rule,
+    msft_q4_2026_shadow_rule,
     pag_q2_2026_shadow_rule,
     pg_q4_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
@@ -240,6 +241,27 @@ _META_IR_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
       <link>https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-to-Announce-Second-Quarter-2026-Results/default.aspx</link>
       <title>Meta to Announce Second Quarter 2026 Results</title>
       <pubDate>Tue, 14 Jul 2026 16:05:00 -0400</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+_MSFT_IR_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid isPermaLink="true">
+        https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast
+      </guid>
+      <link>https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast</link>
+      <title>
+        Microsoft Cloud and AI strength fuels fourth quarter results
+      </title>
+      <pubDate>Wed, 29 Jul 2026 20:10:38 +0000</pubDate>
+    </item>
+    <item>
+      <link>https://news.microsoft.com/source/2026/07/08/microsoft-announces-quarterly-earnings-release-date-68/</link>
+      <title>Microsoft announces quarterly earnings release date</title>
+      <pubDate>Wed, 08 Jul 2026 20:05:00 +0000</pubDate>
     </item>
   </channel>
 </rss>
@@ -693,6 +715,66 @@ class EarningsPublicSourceTests(unittest.TestCase):
             candidate.source_url,
         )
         self.assertNotIn("to-Announce", candidate.source_url)
+
+    def test_microsoft_builds_official_investor_rss_watch(self) -> None:
+        watches = public_release_watches_from_rules(
+            (msft_q4_2026_shadow_rule(),)
+        )
+        self.assertEqual(len(watches), 1)
+        watch = watches[0]
+        self.assertEqual(
+            watch.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+        self.assertEqual(
+            watch.feed_url,
+            (
+                "https://news.microsoft.com/source/tag/"
+                "investor-relations/feed/"
+            ),
+        )
+        self.assertEqual(
+            watch.allowed_document_hosts,
+            ("www.microsoft.com",),
+        )
+
+    def test_microsoft_ir_routes_results_and_rejects_announcement(
+        self,
+    ) -> None:
+        watch = public_release_watches_from_rules(
+            (msft_q4_2026_shadow_rule(),)
+        )[0]
+        received_at = datetime(
+            2026,
+            7,
+            29,
+            20,
+            10,
+            40,
+            tzinfo=timezone.utc,
+        )
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _MSFT_IR_FEED,
+                url=request.full_url,
+            ),
+        ).poll((watch,), received_at=received_at)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(
+            candidate.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+        self.assertIn(
+            "FY-2026-Q4/press-release-webcast",
+            candidate.source_url,
+        )
+        self.assertNotIn("release-date", candidate.source_url)
 
     def test_businesswire_feed_routes_each_premarket_issuer(self) -> None:
         rules = (

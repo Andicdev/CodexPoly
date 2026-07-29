@@ -992,7 +992,7 @@ def qcom_q3_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def msft_q4_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="MSFT",
         cik=MICROSOFT_CIK,
         fiscal_quarter=4,
@@ -1007,6 +1007,30 @@ def msft_q4_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=MICROSOFT_Q4_2026_CONDITION_ID,
         metric_selection="primary_headline_gaap_diluted_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["www.microsoft.com"],
+                "feed_url": (
+                    "https://news.microsoft.com/source/tag/"
+                    "investor-relations/feed/"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": [
+                    "Microsoft",
+                    "fourth quarter",
+                    "results",
+                ],
+                "title_none": [
+                    "announces",
+                    "release date",
+                ],
+            },
+        },
     )
 
 
