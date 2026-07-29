@@ -50,11 +50,18 @@ reach the strategy and executor.
 A source fact without an execution claim is a missed execution, not a reason
 to replay an old fact after a profile is enabled. Close it explicitly:
 
-- schedule: `MANUAL` plus terminal `EXPIRED`;
+- successful strategy/executor path: schedule `COMPLETED`;
+- terminal source-contract, strategy, preparation, or execution error:
+  schedule `BLOCKED` with its safe reason;
+- unresolved window: schedule `EXPIRED`;
 - execution profile: `DISABLED`;
-- earnings rule: `DISABLED`;
-- release catalog: `REPORTED`;
 - retain source events and facts for audit.
+
+The runtime completes each profile independently immediately after its
+coordinator consumes the signal. Historical operator-run completions that used
+`MANUAL` plus `EXPIRED` remain valid and require no rewrite. Earnings rule and
+catalog status are source-side audit concerns and no longer determine whether
+the profile can trade.
 
 An accepted order may remain live after the source event. Completing the
 profile must not cancel that order unless a reviewed cancellation policy or
@@ -74,4 +81,3 @@ Before arming a block, verify:
 
 After activation, verify the exact enabled profile set, no unexpected claims,
 fresh worker and scheduler heartbeats, and available PostgreSQL connections.
-

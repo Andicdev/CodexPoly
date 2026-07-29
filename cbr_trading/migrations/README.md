@@ -122,6 +122,13 @@ application/database round trip. Existing rows are retained and represented
 as `legacy_unknown`; the original earnings tables are not altered, preserving
 compatibility with the previous runtime and its exact schema check.
 
+`017_add_completed_profile_schedule_state.sql` expands only the check
+constraints on the additive lifecycle schedule and event tables. It adds the
+successful terminal state `COMPLETED` without changing existing rows, state
+values, columns, profile definitions, claims, or order supervision records.
+Fresh databases receive the same state from migration 012; existing databases
+apply migration 017 before starting a completion-aware resolution worker.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

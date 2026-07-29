@@ -404,9 +404,14 @@ non-secret aggregate evidence, and closes the executor without calling
 profile `DISABLED`. `AUTO_LIVE` additionally requires a fresh readiness
 result, the global automatic-live switch, an active window, and an aggregate
 worst-selected-outcome notional cap before an atomic transition to
-`ENABLED`. Window expiry returns the profile to `DISABLED`. All transitions
-are append-only audited; notification delivery remains outside the trading
-hot path.
+`ENABLED`. After a matching signal has traversed strategy and executor, the
+hosted worker atomically moves the schedule from `ACTIVE` to `COMPLETED` and
+returns the profile to `DISABLED`. This transition happens after submission
+and never cancels an already submitted order. Terminal source-contract,
+strategy, or execution failures instead move the schedule to `BLOCKED` with a
+safe reason code. An unresolved window ends as `EXPIRED`. All transitions are
+append-only audited; notification delivery remains outside the trading hot
+path.
 
 Earnings schedules are grouped into independent `PRE_MARKET` and
 `POST_MARKET` live blocks through the schedule metadata keys `live_block` and

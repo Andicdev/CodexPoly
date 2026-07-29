@@ -80,6 +80,23 @@ class _Outbox:
         self.notifications.append(notification)
 
 
+class _LifecycleStore:
+    def __init__(self) -> None:
+        self.ready_checks = 0
+        self.completed: list[tuple[str, str]] = []
+
+    def ensure_ready(self) -> None:
+        self.ready_checks += 1
+
+    def complete_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str,
+    ) -> None:
+        self.completed.append((profile_key, reason_code))
+
+
 def _profiles() -> tuple[ResolutionExecutionProfile, ...]:
     return tuple(
         ResolutionExecutionProfile(
@@ -135,9 +152,11 @@ class FedHostedResolutionWorkerTests(unittest.TestCase):
         poller = _Poller(_observation())
         outbox = _Outbox()
         profiles = _ProfileStore(_profiles())
+        lifecycle = _LifecycleStore()
         worker = FedHostedResolutionWorker(
             settings=_settings(),
             profile_store=profiles,
+            lifecycle_store=lifecycle,
             notification_outbox=outbox,
             poller=poller,
             clock=lambda: _NOW,
@@ -159,6 +178,16 @@ class FedHostedResolutionWorkerTests(unittest.TestCase):
         self.assertEqual(
             profiles.loaded_sources,
             [FED_SOURCE_NAME],
+        )
+        self.assertEqual(
+            lifecycle.completed,
+            [
+                (
+                    profile.profile_key,
+                    "resolution_execution_completed",
+                )
+                for profile in _profiles()
+            ],
         )
         worker.close()
         self.assertTrue(poller.closed)

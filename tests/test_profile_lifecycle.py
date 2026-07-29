@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from cbr_trading.application import CoordinationStatus
 from cbr_trading.domain import RepriceOnTickChange
 from cbr_trading.execution import (
     PreparationContext,
@@ -31,9 +33,16 @@ from cbr_trading.profile_lifecycle.controller import (
 from cbr_trading.profile_lifecycle.readiness import (
     ProfileReadinessWorker,
 )
+from cbr_trading.profile_lifecycle.repository import (
+    SqlAlchemyProfileLifecycleStore,
+    _SELECT_DUE_EXPIRY_SQL,
+)
 from cbr_trading.profile_lifecycle.settings import (
     ProfileLifecycleSettings,
     ProfileReadinessSettings,
+)
+from cbr_trading.resolution_hosted.lifecycle import (
+    block_terminal_profile_failure,
 )
 
 
@@ -43,6 +52,12 @@ _MIGRATION = (
     / "cbr_trading"
     / "migrations"
     / "012_add_resolution_profile_schedules.sql"
+)
+_COMPLETION_MIGRATION = (
+    _ROOT
+    / "cbr_trading"
+    / "migrations"
+    / "017_add_completed_profile_schedule_state.sql"
 )
 _NOW = datetime(2026, 7, 28, 8, 45, tzinfo=timezone.utc)
 
@@ -130,6 +145,23 @@ class ProfileLifecycleContractTests(unittest.TestCase):
         )
         self.assertIn("'AUTO_PREFLIGHT'", statements)
         self.assertIn("'AUTO_LIVE'", statements)
+        self.assertIn("'COMPLETED'", statements)
+
+    def test_completion_migration_only_expands_lifecycle_states(
+        self,
+    ) -> None:
+        statements = _COMPLETION_MIGRATION.read_text(
+            encoding="utf-8"
+        ).upper()
+
+        self.assertNotIn("DROP TABLE", statements)
+        self.assertNotIn("DROP COLUMN", statements)
+        self.assertIn("ALTER TABLE RESOLUTION_PROFILE_SCHEDULES", statements)
+        self.assertIn(
+            "ALTER TABLE RESOLUTION_PROFILE_SCHEDULE_EVENTS",
+            statements,
+        )
+        self.assertGreaterEqual(statements.count("'COMPLETED'"), 3)
 
     def test_enabled_notification_states_eligibility_precisely(self) -> None:
         transition = ProfileScheduleTransition(
@@ -170,6 +202,213 @@ class ProfileLifecycleContractTests(unittest.TestCase):
         self.assertIn(
             "authenticated preflight is pending",
             notification.message_text,
+        )
+
+    def test_completed_notification_preserves_existing_orders(self) -> None:
+        notification = source_event_notification_from_profile_lifecycle(
+            _transition(ProfileScheduleState.COMPLETED)
+        )
+
+        self.assertIn(
+            "CodexPoly: Profile resolution completed",
+            notification.message_text,
+        )
+        self.assertIn(
+            "Profile status is DISABLED for new signals",
+            notification.message_text,
+        )
+        self.assertIn(
+            "Existing submitted orders are left unchanged",
+            notification.message_text,
+        )
+
+    def test_terminal_failure_notification_is_not_activation_failure(
+        self,
+    ) -> None:
+        transition = ProfileScheduleTransition(
+            **{
+                **_transition(ProfileScheduleState.BLOCKED).__dict__,
+                "event_kind": "RESOLUTION_PROCESSING_BLOCKED",
+                "reason_code": "live_execution_failed",
+            }
+        )
+
+        notification = source_event_notification_from_profile_lifecycle(
+            transition
+        )
+
+        self.assertIn(
+            "CodexPoly: Profile resolution blocked",
+            notification.message_text,
+        )
+        self.assertIn(
+            "Profile status is DISABLED for new signals",
+            notification.message_text,
+        )
+        self.assertNotIn(
+            "Profile activation blocked",
+            notification.message_text,
+        )
+
+    def test_terminal_failures_have_specific_safe_reason_codes(
+        self,
+    ) -> None:
+        class Store:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def block_active_profile(self, **kwargs) -> None:
+                self.calls.append(kwargs)
+
+        store = Store()
+        expected = {
+            CoordinationStatus.SOURCE_ERROR: (
+                "live_source_contract_failed"
+            ),
+            CoordinationStatus.STRATEGY_ERROR: (
+                "live_strategy_evaluation_failed"
+            ),
+            CoordinationStatus.EXECUTION_ERROR: (
+                "live_execution_failed"
+            ),
+        }
+
+        for status, reason in expected.items():
+            block_terminal_profile_failure(
+                store,
+                profile_key="profile:test",
+                status=status,
+                logger=logging.getLogger(__name__),
+            )
+            self.assertEqual(store.calls[-1]["reason_code"], reason)
+
+    def test_terminal_failure_block_can_be_retried_safely(self) -> None:
+        class FlakyStore:
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            def block_active_profile(self, **_kwargs) -> None:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError("temporary")
+
+        store = FlakyStore()
+        logger = logging.getLogger(__name__)
+
+        first = block_terminal_profile_failure(
+            store,
+            profile_key="profile:test",
+            status=CoordinationStatus.EXECUTION_ERROR,
+            logger=logger,
+        )
+        second = block_terminal_profile_failure(
+            store,
+            profile_key="profile:test",
+            status=CoordinationStatus.EXECUTION_ERROR,
+            logger=logger,
+        )
+
+        self.assertFalse(first)
+        self.assertTrue(second)
+        self.assertEqual(store.attempts, 2)
+
+    def test_expiry_never_overwrites_completed_state(self) -> None:
+        self.assertIn(
+            "schedule.state NOT IN ('COMPLETED', 'EXPIRED')",
+            _SELECT_DUE_EXPIRY_SQL,
+        )
+
+
+class _DbResult:
+    def __init__(self, *, one=None, one_or_none=None):
+        self._one = one
+        self._one_or_none = one_or_none
+
+    def mappings(self):
+        return self
+
+    def one(self):
+        return self._one
+
+    def one_or_none(self):
+        return self._one_or_none
+
+
+class _DbSession:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+        self.commits = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, statement, params=None):
+        self.calls.append((str(statement), params))
+        return self.results.pop(0)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        pass
+
+
+class ProfileLifecycleRepositoryTests(unittest.TestCase):
+    def test_completion_disables_profile_and_appends_terminal_event(
+        self,
+    ) -> None:
+        row = {
+            "id": 11,
+            "schedule_key": "schedule:profile:test",
+            "profile_key": "profile:test",
+            "automation_mode": "AUTO_LIVE",
+            "activate_at": _NOW - timedelta(minutes=5),
+            "deactivate_at": _NOW + timedelta(hours=1),
+            "scope_id": "earnings:TEST:2026Q2",
+            "source_reference": (
+                "https://polymarket.com/event/test-eps"
+            ),
+        }
+        session = _DbSession(
+            (
+                _DbResult(one_or_none=row),
+                _DbResult(),
+                _DbResult(),
+                _DbResult(one={"id": 12}),
+            )
+        )
+        store = SqlAlchemyProfileLifecycleStore(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        transition = store.complete_active_profile(
+            profile_key="profile:test"
+        )
+
+        assert transition is not None
+        self.assertEqual(
+            transition.previous_state,
+            ProfileScheduleState.ACTIVE,
+        )
+        self.assertEqual(
+            transition.next_state,
+            ProfileScheduleState.COMPLETED,
+        )
+        self.assertEqual(
+            transition.event_kind,
+            "RESOLUTION_EXECUTION_COMPLETED",
+        )
+        self.assertEqual(session.commits, 1)
+        self.assertIn("SET status = 'DISABLED'", session.calls[1][0])
+        self.assertEqual(session.calls[2][1]["state"], "COMPLETED")
+        self.assertIn(
+            "existing_orders_left_unchanged",
+            session.calls[3][1]["metadata"],
         )
 
 

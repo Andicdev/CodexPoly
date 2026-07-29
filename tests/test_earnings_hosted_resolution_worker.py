@@ -61,6 +61,7 @@ class _LifecycleStore:
     def __init__(self) -> None:
         self.ready_checks = 0
         self.blocked: list[tuple[str, str]] = []
+        self.completed: list[tuple[str, str]] = []
 
     def ensure_ready(self) -> None:
         self.ready_checks += 1
@@ -72,6 +73,14 @@ class _LifecycleStore:
         reason_code: str,
     ) -> None:
         self.blocked.append((profile_key, reason_code))
+
+    def complete_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str,
+    ) -> None:
+        self.completed.append((profile_key, reason_code))
 
 
 def _profile(rule: object) -> ResolutionExecutionProfile:
@@ -319,6 +328,83 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
                 )
             ],
         )
+        worker.close()
+
+    def test_completed_resolution_closes_lifecycle_exactly_once(
+        self,
+    ) -> None:
+        rule = checked_in_shadow_rules()[0]
+        lifecycle = _LifecycleStore()
+        worker = EarningsHostedResolutionWorker(
+            settings=HostedResolutionSettings(
+                mode=HostedResolutionMode.SHADOW,
+                database_url="postgresql://unused",
+            ),
+            earnings_store=_EarningsStore((_fact(rule, "-0.03"),)),
+            profile_store=_ProfileStore((_profile(rule),)),
+            lifecycle_store=lifecycle,
+            clock=lambda: _NOW,
+        )
+
+        worker.prepare()
+        first = worker.poll_once()
+        second = worker.poll_once()
+
+        self.assertEqual(first.completed_count, 1)
+        self.assertEqual(second.completed_count, 1)
+        self.assertEqual(
+            lifecycle.completed,
+            [
+                (
+                    _profile(rule).profile_key,
+                    "resolution_execution_completed",
+                )
+            ],
+        )
+        worker.close()
+
+    def test_completed_lifecycle_write_retries_without_reexecution(
+        self,
+    ) -> None:
+        class FlakyLifecycle(_LifecycleStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.attempts = 0
+
+            def complete_active_profile(
+                self,
+                *,
+                profile_key: str,
+                reason_code: str,
+            ) -> None:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError("temporary")
+                super().complete_active_profile(
+                    profile_key=profile_key,
+                    reason_code=reason_code,
+                )
+
+        rule = checked_in_shadow_rules()[0]
+        lifecycle = FlakyLifecycle()
+        worker = EarningsHostedResolutionWorker(
+            settings=HostedResolutionSettings(
+                mode=HostedResolutionMode.SHADOW,
+                database_url="postgresql://unused",
+            ),
+            earnings_store=_EarningsStore((_fact(rule, "-0.03"),)),
+            profile_store=_ProfileStore((_profile(rule),)),
+            lifecycle_store=lifecycle,
+            clock=lambda: _NOW,
+        )
+
+        worker.prepare()
+        worker.poll_once()
+        worker.poll_once()
+        worker.poll_once()
+
+        self.assertEqual(lifecycle.attempts, 2)
+        self.assertEqual(len(lifecycle.completed), 1)
         worker.close()
 
 

@@ -72,6 +72,23 @@ class _ProfileStore:
         return self._profiles
 
 
+class _LifecycleStore:
+    def __init__(self) -> None:
+        self.ready_checks = 0
+        self.completed: list[tuple[str, str]] = []
+
+    def ensure_ready(self) -> None:
+        self.ready_checks += 1
+
+    def complete_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str,
+    ) -> None:
+        self.completed.append((profile_key, reason_code))
+
+
 def _profiles() -> tuple[ResolutionExecutionProfile, ...]:
     bindings = mstr_jul21_27_market_bindings()
     return tuple(
@@ -140,10 +157,12 @@ class MstrBtcHostedResolutionWorkerTests(unittest.TestCase):
     def test_three_profiles_complete_from_one_persisted_fact(self) -> None:
         audit = _AuditStore((_fact(),))
         profiles = _ProfileStore(_profiles())
+        lifecycle = _LifecycleStore()
         worker = MstrBtcHostedResolutionWorker(
             settings=_settings(),
             audit_store=audit,
             profile_store=profiles,
+            lifecycle_store=lifecycle,
             clock=lambda: _NOW,
         )
 
@@ -166,6 +185,16 @@ class MstrBtcHostedResolutionWorkerTests(unittest.TestCase):
         self.assertEqual(
             profiles.loaded_sources,
             [MSTR_BTC_SOURCE_NAME],
+        )
+        self.assertEqual(
+            lifecycle.completed,
+            [
+                (
+                    profile.profile_key,
+                    "resolution_execution_completed",
+                )
+                for profile in _profiles()
+            ],
         )
         worker.close()
 

@@ -49,6 +49,10 @@ from cbr_trading.resolution_hosted.settings import (
 from cbr_trading.resolution_hosted.batch_safety import (
     validate_profile_batch_notional,
 )
+from cbr_trading.resolution_hosted.lifecycle import (
+    block_terminal_profile_failure,
+    complete_profile_lifecycle,
+)
 from cbr_trading.secret_guard import redact_exception
 from cbr_trading.sources.earnings import (
     EARNINGS_NON_GAAP_EPS_METRIC,
@@ -93,6 +97,9 @@ class _ManagedResolution:
     rule: EarningsMarketRule
     coordinator: ResolutionTradingCoordinator
     executor: PreparedExecutor
+    lifecycle_completed: bool = False
+    lifecycle_failure_status: CoordinationStatus | None = None
+    lifecycle_blocked: bool = False
 
 
 class EarningsHostedResolutionWorker:
@@ -388,6 +395,7 @@ class EarningsHostedResolutionWorker:
                     waiting += 1
                 elif outcome.status is CoordinationStatus.COMPLETED:
                     completed += 1
+                    self._complete_profile(managed)
                     self._logger.info(
                         "Hosted earnings resolution completed "
                         "scope=%s ticker=%s mode=%s intents=%s "
@@ -400,6 +408,9 @@ class EarningsHostedResolutionWorker:
                     )
                 else:
                     failed += 1
+                    if managed.coordinator.state is CoordinatorState.FAILED:
+                        managed.lifecycle_failure_status = outcome.status
+                        self._block_profile(managed)
                     self._logger.error(
                         "Hosted earnings resolution failed "
                         "scope=%s ticker=%s status=%s error=%s",
@@ -409,8 +420,10 @@ class EarningsHostedResolutionWorker:
                         outcome.error,
                     )
             elif state is CoordinatorState.COMPLETED:
+                self._complete_profile(managed)
                 completed += 1
             elif state is CoordinatorState.FAILED:
+                self._block_profile(managed)
                 failed += 1
             elif state is CoordinatorState.CLOSED:
                 expired += 1
@@ -557,6 +570,28 @@ class EarningsHostedResolutionWorker:
         self._lifecycle_store.block_active_profile(
             profile_key=profile_key,
             reason_code="live_profile_preparation_failed",
+        )
+
+    def _complete_profile(self, managed: _ManagedResolution) -> None:
+        if managed.lifecycle_completed:
+            return
+        managed.lifecycle_completed = complete_profile_lifecycle(
+            self._lifecycle_store,
+            profile_key=managed.profile.profile_key,
+            logger=self._logger,
+        )
+
+    def _block_profile(self, managed: _ManagedResolution) -> None:
+        if (
+            managed.lifecycle_blocked
+            or managed.lifecycle_failure_status is None
+        ):
+            return
+        managed.lifecycle_blocked = block_terminal_profile_failure(
+            self._lifecycle_store,
+            profile_key=managed.profile.profile_key,
+            status=managed.lifecycle_failure_status,
+            logger=self._logger,
         )
 
     def _prepare_one(

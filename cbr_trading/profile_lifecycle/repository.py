@@ -18,10 +18,21 @@ from cbr_trading.profile_lifecycle.contracts import (
 )
 
 
-_MIGRATION_PATH = (
+_MIGRATION_PATHS = (
     Path(__file__).resolve().parents[1]
     / "migrations"
-    / "012_add_resolution_profile_schedules.sql"
+    / "012_add_resolution_profile_schedules.sql",
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "017_add_completed_profile_schedule_state.sql",
+)
+_ACTIVE_PROFILE_BLOCK_REASONS = frozenset(
+    {
+        "live_profile_preparation_failed",
+        "live_source_contract_failed",
+        "live_strategy_evaluation_failed",
+        "live_execution_failed",
+    }
 )
 
 _SCHEMA_READY_SQL = """
@@ -61,7 +72,26 @@ SELECT
     to_regclass('ux_resolution_runtime_heartbeats_key') IS NOT NULL
         AS runtime_heartbeat_key_index,
     to_regclass('ix_resolution_runtime_heartbeats_seen') IS NOT NULL
-        AS runtime_heartbeat_seen_index
+        AS runtime_heartbeat_seen_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = to_regclass('resolution_profile_schedules')
+          AND conname =
+              'resolution_profile_schedules_state_check'
+          AND pg_get_constraintdef(oid) LIKE '%COMPLETED%'
+    ) AS completed_schedule_state,
+    (
+        SELECT count(*) = 2
+        FROM pg_constraint
+        WHERE conrelid =
+              to_regclass('resolution_profile_schedule_events')
+          AND conname IN (
+              'resolution_profile_schedule_events_previous_state_check',
+              'resolution_profile_schedule_events_next_state_check'
+          )
+          AND pg_get_constraintdef(oid) LIKE '%COMPLETED%'
+    ) AS completed_event_states
 """.strip()
 
 _UPSERT_SQL = """
@@ -220,7 +250,7 @@ SELECT
 FROM resolution_profile_schedules AS schedule
 JOIN resolution_execution_profiles AS profile
   ON profile.profile_key = schedule.profile_key
-WHERE schedule.state NOT IN ('EXPIRED')
+WHERE schedule.state NOT IN ('COMPLETED', 'EXPIRED')
   AND schedule.automation_mode IN ('AUTO_PREFLIGHT', 'AUTO_LIVE')
   AND schedule.deactivate_at <= :now
 ORDER BY schedule.deactivate_at, schedule.id
@@ -329,11 +359,12 @@ class SqlAlchemyProfileLifecycleStore:
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
-                session.execute(
-                    text_factory(
-                        _MIGRATION_PATH.read_text(encoding="utf-8")
+                for migration_path in _MIGRATION_PATHS:
+                    session.execute(
+                        text_factory(
+                            migration_path.read_text(encoding="utf-8")
+                        )
                     )
-                )
                 session.commit()
         except Exception as exc:
             raise ProfileLifecycleStoreError(
@@ -714,7 +745,7 @@ class SqlAlchemyProfileLifecycleStore:
         reason = str(reason_code or "").strip()
         if not key:
             raise ValueError("profile_key is required")
-        if reason != "live_profile_preparation_failed":
+        if reason not in _ACTIVE_PROFILE_BLOCK_REASONS:
             raise ValueError("unsupported active profile block reason")
         session_factory, text_factory = self._resolve_dependencies()
         try:
@@ -750,7 +781,11 @@ class SqlAlchemyProfileLifecycleStore:
                     row=row,
                     previous_state=ProfileScheduleState.ACTIVE,
                     next_state=ProfileScheduleState.BLOCKED,
-                    event_kind="LIVE_PREPARATION_BLOCKED",
+                    event_kind=(
+                        "LIVE_PREPARATION_BLOCKED"
+                        if reason == "live_profile_preparation_failed"
+                        else "RESOLUTION_PROCESSING_BLOCKED"
+                    ),
                     reason_code=reason,
                 )
                 session.commit()
@@ -758,6 +793,68 @@ class SqlAlchemyProfileLifecycleStore:
         except Exception as exc:
             raise ProfileLifecycleStoreError(
                 "Failed to block active execution profile: "
+                f"{type(exc).__name__}"
+            ) from None
+
+    def complete_active_profile(
+        self,
+        *,
+        profile_key: str,
+        reason_code: str = "resolution_execution_completed",
+    ) -> ProfileScheduleTransition | None:
+        key = str(profile_key or "").strip()
+        reason = str(reason_code or "").strip()
+        if not key:
+            raise ValueError("profile_key is required")
+        if reason != "resolution_execution_completed":
+            raise ValueError(
+                "unsupported active profile completion reason"
+            )
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(_SELECT_ACTIVE_PROFILE_SQL),
+                    {"profile_key": key},
+                ).mappings().one_or_none()
+                if row is None:
+                    session.rollback()
+                    return None
+                session.execute(
+                    text_factory(
+                        """
+                        UPDATE resolution_execution_profiles
+                        SET status = 'DISABLED', updated_at = now()
+                        WHERE profile_key = :profile_key
+                          AND status = 'ENABLED'
+                        """
+                    ),
+                    {"profile_key": key},
+                )
+                self._set_schedule_state(
+                    session,
+                    text_factory,
+                    schedule_id=int(row["id"]),
+                    state=ProfileScheduleState.COMPLETED,
+                    error_code=None,
+                )
+                transition = self._insert_event(
+                    session,
+                    text_factory,
+                    row=row,
+                    previous_state=ProfileScheduleState.ACTIVE,
+                    next_state=ProfileScheduleState.COMPLETED,
+                    event_kind="RESOLUTION_EXECUTION_COMPLETED",
+                    reason_code=reason,
+                    metadata={
+                        "existing_orders_left_unchanged": True,
+                    },
+                )
+                session.commit()
+                return transition
+        except Exception as exc:
+            raise ProfileLifecycleStoreError(
+                "Failed to complete active execution profile: "
                 f"{type(exc).__name__}"
             ) from None
 

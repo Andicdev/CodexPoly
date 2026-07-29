@@ -251,6 +251,13 @@ def source_event_notification_from_profile_lifecycle(
                 "now accept a matching source signal."
             ),
         ),
+        ProfileScheduleState.COMPLETED: (
+            "Profile resolution completed",
+            (
+                "Profile status is DISABLED for new signals. Existing "
+                "submitted orders are left unchanged."
+            ),
+        ),
         ProfileScheduleState.BLOCKED: (
             "Profile activation blocked",
             "Profile status remains DISABLED.",
@@ -261,6 +268,12 @@ def source_event_notification_from_profile_lifecycle(
         ),
     }
     title, eligibility = state_messages[transition.next_state]
+    if (
+        transition.next_state is ProfileScheduleState.BLOCKED
+        and transition.event_kind == "RESOLUTION_PROCESSING_BLOCKED"
+    ):
+        title = "Profile resolution blocked"
+        eligibility = "Profile status is DISABLED for new signals."
     lines = [
         f"CodexPoly: {title}",
         f"Profile: {transition.profile_key}",

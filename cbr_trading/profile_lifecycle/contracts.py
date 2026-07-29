@@ -18,6 +18,7 @@ class ProfileScheduleState(str, Enum):
     PREFLIGHTING = "PREFLIGHTING"
     READY = "READY"
     ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
     EXPIRED = "EXPIRED"
     BLOCKED = "BLOCKED"
 

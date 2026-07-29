@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS resolution_profile_schedules (
                 'PREFLIGHTING',
                 'READY',
                 'ACTIVE',
+                'COMPLETED',
                 'EXPIRED',
                 'BLOCKED'
             )
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS resolution_profile_schedule_events (
             'PREFLIGHTING',
             'READY',
             'ACTIVE',
+            'COMPLETED',
             'EXPIRED',
             'BLOCKED'
         )
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS resolution_profile_schedule_events (
             'PREFLIGHTING',
             'READY',
             'ACTIVE',
+            'COMPLETED',
             'EXPIRED',
             'BLOCKED'
         )
