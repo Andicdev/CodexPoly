@@ -22,6 +22,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "CBRE",
                 "CSGP",
                 "CZR",
+                "EA",
                 "EBAY",
                 "F",
                 "GRMN",
@@ -59,6 +60,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "CBRE",
                 "CSGP",
                 "CZR",
+                "EA",
                 "EBAY",
                 "F",
                 "GRMN",
@@ -92,7 +94,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            32,
+            33,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(

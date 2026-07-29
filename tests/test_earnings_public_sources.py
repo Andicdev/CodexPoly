@@ -19,6 +19,7 @@ from cbr_trading.earnings.parsers.july_28_sec import (
 from cbr_trading.earnings.parsers.july_29_sec import (
     arcc_q2_2026_shadow_rule,
     cbre_q2_2026_shadow_rule,
+    ea_q1_2027_shadow_rule,
     grmn_q2_2026_shadow_rule,
     hum_q2_2026_shadow_rule,
     iart_q2_2026_shadow_rule,
@@ -467,6 +468,22 @@ class EarningsPublicSourceTests(unittest.TestCase):
                     for watch in public_release_watches_from_rules((rule,))
                 }
                 self.assertEqual(providers, expected[rule.ticker])
+
+    def test_ea_postmarket_public_source_matrix(self) -> None:
+        providers = {
+            watch.provider
+            for watch in public_release_watches_from_rules(
+                (ea_q1_2027_shadow_rule(),)
+            )
+        }
+
+        self.assertEqual(
+            providers,
+            {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.BUSINESS_WIRE,
+            },
+        )
 
     def test_ignores_matching_release_older_than_rule_lookback(
         self,

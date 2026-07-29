@@ -35,6 +35,7 @@ PENSKE_AUTOMOTIVE_CIK = "1019849"
 QUALCOMM_CIK = "804328"
 MICROSOFT_CIK = "789019"
 META_CIK = "1326801"
+ELECTRONIC_ARTS_CIK = "712515"
 EBAY_CIK = "1065088"
 ROBINHOOD_CIK = "1783879"
 
@@ -85,6 +86,10 @@ MICROSOFT_Q4_2026_CONDITION_ID = (
 META_Q2_2026_CONDITION_ID = (
     "0x5b725d76638a67ec53ced1221dd6140ff"
     "0b419edb72a1653ba4aa82551601704"
+)
+ELECTRONIC_ARTS_Q1_2027_CONDITION_ID = (
+    "0x151d05bdd2378f36aeb2977402088824"
+    "d5999a1c333a37182dcba7929004c3b6"
 )
 EBAY_Q2_2026_CONDITION_ID = (
     "0x550698cb57f581259106ad2934b1eb7f"
@@ -459,6 +464,59 @@ class MetaGaapEpsParser(LabelledEpsParser):
         )
 
 
+class ElectronicArtsGaapEpsParser(LabelledEpsParser):
+    def __init__(self) -> None:
+        super().__init__(
+            _config(
+                ticker="EA",
+                cik=ELECTRONIC_ARTS_CIK,
+                metric=EarningsMetric.GAAP_EPS,
+                labels=(
+                    r"\bdiluted\s+earnings\s+per\s+share\b",
+                ),
+                parser_name="electronic_arts_gaap_eps",
+                parser_version="1",
+                accepted_reason=(
+                    "official_electronic_arts_gaap_diluted_eps"
+                ),
+                evidence_title=(
+                    "Electronic Arts official earnings release"
+                ),
+                resolution_basis=(
+                    "quarterly_financial_highlights_gaap_diluted_eps"
+                ),
+                forbidden_prefixes=(
+                    "guidance",
+                    "outlook",
+                    "fiscal year",
+                ),
+            )
+        )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        pattern = re.compile(
+            r"\bdiluted\s+earnings\s+per\s+share\b"
+            rf"(?P<tail>(?:(?!{re.escape(ROW_SEPARATOR)}).){{0,180}})",
+            re.IGNORECASE,
+        )
+        matches: list[tuple[Decimal, str]] = []
+        for match in pattern.finditer(value):
+            tail = match.group("tail")
+            values = accounting_values(tail)
+            if not values:
+                continue
+            excerpt = match.group(0).strip()[:400]
+            matches.append((values[0], excerpt))
+        # EA repeats the label in a later five-quarter comparison table.
+        # Its primary quarterly highlights table is the first occurrence.
+        return tuple(matches[:1])
+
+
 class EbayNonGaapEpsParser(LabelledEpsParser):
     def __init__(self) -> None:
         super().__init__(
@@ -506,6 +564,7 @@ def _sec_rule(
     *,
     ticker: str,
     cik: str,
+    fiscal_year: int = 2026,
     fiscal_quarter: int,
     period_end: date,
     estimated_release_at: datetime,
@@ -521,13 +580,13 @@ def _sec_rule(
     strike_slug = str(strike).replace("-", "neg").replace(".", "pt")
     return EarningsMarketRule(
         rule_key=(
-            f"{ticker.casefold()}-2026q{fiscal_quarter}-"
+            f"{ticker.casefold()}-{fiscal_year}q{fiscal_quarter}-"
             f"{metric_slug}-eps-{strike_slug}"
         ),
-        scope_id=earnings_scope_id(ticker, 2026, fiscal_quarter),
+        scope_id=earnings_scope_id(ticker, fiscal_year, fiscal_quarter),
         ticker=ticker,
         cik=cik,
-        fiscal_year=2026,
+        fiscal_year=fiscal_year,
         fiscal_quarter=fiscal_quarter,
         period_end=period_end,
         estimated_release_at=estimated_release_at,
@@ -1105,6 +1164,61 @@ def meta_q2_2026_shadow_rule() -> EarningsMarketRule:
                 "title_all": title_all,
                 "title_none": ["to announce"],
             },
+        },
+    )
+
+
+def ea_q1_2027_shadow_rule() -> EarningsMarketRule:
+    rule = _sec_rule(
+        ticker="EA",
+        cik=ELECTRONIC_ARTS_CIK,
+        fiscal_year=2027,
+        fiscal_quarter=1,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(
+            "2026-07-29T16:05:00-04:00"
+        ),
+        metric=EarningsMetric.GAAP_EPS,
+        strike=Decimal("0.80"),
+        market_slug=(
+            "ea-quarterly-earnings-gaap-eps-07-29-2026-0pt8"
+        ),
+        condition_id=ELECTRONIC_ARTS_Q1_2027_CONDITION_ID,
+        metric_selection=(
+            "quarterly_financial_highlights_gaap_diluted_eps"
+        ),
+    )
+    title_all = [
+        "Electronic Arts",
+        "Reports",
+        "Q1",
+        "FY27",
+        "Results",
+    ]
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["ir.ea.com"],
+                "feed_url": (
+                    "https://ir.ea.com/rss/pressrelease.aspx"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": title_all,
+                "title_none": [
+                    "to report",
+                    "to announce",
+                ],
+            },
+            "press_wire": _businesswire_policy(
+                title_all=tuple(title_all),
+                title_none=(
+                    "to report",
+                    "to announce",
+                ),
+            ),
         },
     )
 

@@ -14,6 +14,7 @@ from cbr_trading.earnings.contracts import (
 from cbr_trading.earnings.parsers.july_29_sec import (
     AresCapitalCoreEpsParser,
     CbreGaapEpsParser,
+    ElectronicArtsGaapEpsParser,
     EbayNonGaapEpsParser,
     GarminProFormaDilutedEpsParser,
     HumanaAdjustedEpsParser,
@@ -28,6 +29,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     WingstopGaapEpsParser,
     arcc_q2_2026_shadow_rule,
     cbre_q2_2026_shadow_rule,
+    ea_q1_2027_shadow_rule,
     ebay_q2_2026_shadow_rule,
     grmn_q2_2026_shadow_rule,
     hood_q2_2026_shadow_rule,
@@ -204,6 +206,22 @@ class July29SecParserTests(unittest.TestCase):
                     "</tr></table>"
                 ),
                 "7.34",
+            ),
+            (
+                ElectronicArtsGaapEpsParser(),
+                ea_q1_2027_shadow_rule(),
+                (
+                    "<h1>Electronic Arts Reports Q1 FY27 Results</h1>"
+                    "<p>Quarterly Financial Highlights for the "
+                    "three months ended June 30, 2026.</p>"
+                    "<table><tr><th>Diluted earnings per share</th>"
+                    "<td>$0.84</td><td>$1.04</td></tr></table>"
+                    "<table><tr><th>Diluted earnings per share</th>"
+                    "<td>$1.04</td><td>$0.98</td><td>$0.79</td>"
+                    "</tr></table>"
+                    "<p>Fiscal year diluted EPS outlook: $4.00.</p>"
+                ),
+                "0.84",
             ),
             (
                 EbayNonGaapEpsParser(),
