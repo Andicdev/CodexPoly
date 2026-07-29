@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -14,6 +15,11 @@ from cbr_trading.earnings.parsers._labelled_eps import (
     LabelledEpsParser,
     LabelledEpsParserConfig,
     eps_label,
+)
+from cbr_trading.earnings.parsers._common import (
+    ROW_SEPARATOR,
+    accounting_values,
+    parse_accounting_decimal,
 )
 
 
@@ -101,6 +107,8 @@ def _config(
     evidence_title: str,
     resolution_basis: str,
     parser_version: str = "1",
+    forbidden_prefixes: tuple[str, ...] = (),
+    forbidden_tails: tuple[str, ...] = (),
 ) -> LabelledEpsParserConfig:
     return LabelledEpsParserConfig(
         ticker=ticker,
@@ -115,11 +123,12 @@ def _config(
         conflicting_reason=f"conflicting_{parser_name}_values",
         evidence_title=evidence_title,
         resolution_basis=resolution_basis,
+        forbidden_prefixes=forbidden_prefixes,
         forbidden_tails=(
             "is defined",
             "most directly comparable",
             "not recognized",
-        ),
+        ) + forbidden_tails,
     )
 
 
@@ -217,11 +226,57 @@ class AresCapitalCoreEpsParser(LabelledEpsParser):
                     r"\bcore\s+eps(?:\s*\(\s*\d+\s*\))?",
                 ),
                 parser_name="ares_capital_core_eps",
+                parser_version="2",
                 accepted_reason="official_ares_capital_core_eps",
                 evidence_title="Ares Capital official earnings release",
                 resolution_basis="operating_results_core_eps",
+                forbidden_tails=(
+                    "guidance",
+                    "outlook",
+                    "expected",
+                ),
             )
         )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        quarter = int(rule.fiscal_quarter)
+        current_year = str(rule.fiscal_year)[-2:]
+        prior_year = str(rule.fiscal_year - 1)[-2:]
+        header = re.search(
+            rf"\bq{quarter}\s*-\s*{current_year}\b"
+            rf".{{0,200}}\bq{quarter}\s*-\s*{prior_year}\b",
+            value,
+            re.IGNORECASE,
+        )
+        if header is None:
+            return ()
+        window_start = header.end()
+        window_end = min(len(value), window_start + 4000)
+        label = re.search(
+            r"\bcore\s+eps(?:\s*\(\s*\d+\s*\))?",
+            value[window_start:window_end],
+            re.IGNORECASE,
+        )
+        if label is None:
+            return ()
+        label_start = window_start + label.start()
+        label_end = window_start + label.end()
+        row_end = value.find(ROW_SEPARATOR, label_end)
+        tail_end = (
+            row_end
+            if row_end >= 0
+            else min(window_end, label_end + 240)
+        )
+        values = accounting_values(value[label_end:tail_end])
+        if len(values) < 2:
+            return ()
+        excerpt = value[label_start:tail_end].strip()[:400]
+        return ((values[0], excerpt),)
 
 
 class IntegraAdjustedDilutedEpsParser(LabelledEpsParser):
@@ -300,6 +355,7 @@ class PenskeAutomotiveGaapEpsParser(LabelledEpsParser):
                     r"\brelated\s+earnings\s+per\s+share\s+was\b",
                 ),
                 parser_name="penske_automotive_gaap_eps",
+                parser_version="2",
                 accepted_reason=(
                     "official_penske_automotive_gaap_diluted_eps"
                 ),
@@ -307,8 +363,40 @@ class PenskeAutomotiveGaapEpsParser(LabelledEpsParser):
                     "Penske Automotive official earnings release"
                 ),
                 resolution_basis="reported_gaap_diluted_eps",
+                forbidden_prefixes=(
+                    "adjusted",
+                    "expected",
+                    "guidance",
+                ),
             )
         )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        pattern = re.compile(
+            r"\bfor\s+the\s+quarter\b"
+            r".{0,1200}?"
+            r"\band\s+related\s+earnings\s+per\s+share\s+was\s+"
+            r"(?P<value>"
+            r"\(\s*(?:\$\s*)?\d+(?:\.\d+)?\s*\)"
+            r"|-?\s*\$?\s*\d+(?:\.\d+)?"
+            r")"
+            r"\s+compared\s+to\b",
+            re.IGNORECASE,
+        )
+        matches: list[tuple[Decimal, str]] = []
+        for match in pattern.finditer(value):
+            matches.append(
+                (
+                    parse_accounting_decimal(match.group("value")),
+                    match.group(0).strip()[:400],
+                )
+            )
+        return tuple(matches)
 
 
 class QualcommNonGaapEpsParser(LabelledEpsParser):

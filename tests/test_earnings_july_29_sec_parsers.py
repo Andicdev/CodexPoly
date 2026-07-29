@@ -308,6 +308,63 @@ class July29SecParserTests(unittest.TestCase):
                 self.assertEqual(str(result.candidate.value), expected)
                 self.assertEqual(result.candidate.parser_version, version)
 
+    def test_arcc_and_pag_production_release_replays(self) -> None:
+        cases = (
+            (
+                AresCapitalCoreEpsParser(),
+                arcc_q2_2026_shadow_rule(),
+                (
+                    "Ares Capital announces financial results for "
+                    "the second quarter ended June 30, 2026. "
+                    "<table><tr><th></th><th>Q2-26 (3)</th>"
+                    "<th>Q2-25 (3)</th></tr><tr><td>GAAP net "
+                    "income per share(1)</td><td>$0.24</td>"
+                    "<td>$0.52</td></tr><tr><td>Core EPS(2)</td>"
+                    "<td>$0.47</td><td>$0.50</td></tr></table>"
+                ),
+                "0.47",
+                EarningsProvider.SEC,
+            ),
+            (
+                PenskeAutomotiveGaapEpsParser(),
+                pag_q2_2026_shadow_rule(),
+                (
+                    "Penske Automotive reports financial results "
+                    "for the second quarter ended June 30, 2026. "
+                    "Earnings Per Share of $3.96. Adjusted Earnings "
+                    "Per Share of $3.62. For the quarter, revenue "
+                    "was $8.5 billion. Net income attributable to "
+                    "common stockholders was $260.4 million, and "
+                    "related earnings per share was $3.96 compared "
+                    "to $4.03 for the same period in 2025."
+                ),
+                "3.96",
+                EarningsProvider.PR_NEWSWIRE,
+            ),
+        )
+
+        for parser, rule, document, expected, provider in cases:
+            with self.subTest(ticker=rule.ticker):
+                source = replace(
+                    _source(rule),
+                    provider=provider,
+                    form_type="PRESS_RELEASE",
+                    items=(),
+                    document_type="HTML",
+                )
+
+                result = parser.parse(
+                    document,
+                    source=source,
+                    rule=rule,
+                    detected_at=_DETECTED,
+                )
+
+                self.assertEqual(result.status, ParseStatus.ACCEPTED)
+                assert result.candidate is not None
+                self.assertEqual(str(result.candidate.value), expected)
+                self.assertEqual(result.candidate.parser_version, "2")
+
     def test_wrong_metric_and_guidance_only_fail_closed(self) -> None:
         cases = (
             (
@@ -359,6 +416,24 @@ class July29SecParserTests(unittest.TestCase):
                     "CBRE second quarter 2026 outlook for the "
                     "quarter ended June 30, 2026. GAAP EPS guidance "
                     "of $1.40 to $1.50."
+                ),
+            ),
+            (
+                AresCapitalCoreEpsParser(),
+                arcc_q2_2026_shadow_rule(),
+                (
+                    "Ares Capital second quarter 2026 outlook for "
+                    "the period ending June 30, 2026. Core EPS "
+                    "guidance is expected to be $0.52."
+                ),
+            ),
+            (
+                PenskeAutomotiveGaapEpsParser(),
+                pag_q2_2026_shadow_rule(),
+                (
+                    "Penske Automotive second quarter 2026 outlook "
+                    "for the period ending June 30, 2026. Expected "
+                    "earnings per share of $3.96."
                 ),
             ),
         )

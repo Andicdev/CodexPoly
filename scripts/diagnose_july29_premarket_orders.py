@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 
@@ -284,6 +285,8 @@ SELECT
     profile.metadata ->> 'ticker' AS ticker,
     event.provider,
     event.status,
+    event.source_url,
+    event.filing_url,
     event.filed_at,
     event.received_at,
     event.error
@@ -318,7 +321,14 @@ def _safe(value):
     return redact_sensitive_text(value)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skip-remote",
+        action="store_true",
+        help="skip read-only remote order inspection",
+    )
+    args = parser.parse_args(argv)
     settings = HostedResolutionSettings.from_env(os.environ)
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     gateway = None
@@ -397,45 +407,46 @@ def main() -> int:
                     sort_keys=True,
                 )
             )
-        safety = LiveSafetySettings.from_env(os.environ)
-        gateway = PolymarketSupervisionOrderGateway(
-            database_url=settings.database_url or "",
-            safety=safety,
-        )
-        for row in remote_order_rows:
-            inspection = gateway.inspect_orders(
-                account_name=str(row["account_name"]),
-                order_ids=(str(row["order_id"]),),
+        if not args.skip_remote:
+            safety = LiveSafetySettings.from_env(os.environ)
+            gateway = PolymarketSupervisionOrderGateway(
+                database_url=settings.database_url or "",
+                safety=safety,
             )
-            if inspection.failed_order_ids:
-                payload = {
-                    "ticker": str(row["ticker"]),
-                    "inspection": "FAILED",
-                    "error": _safe(inspection.error),
-                }
-            else:
-                snapshot = inspection.snapshots[0]
-                payload = {
-                    "ticker": str(row["ticker"]),
-                    "inspection": "OK",
-                    "state": snapshot.state.value,
-                    "remote_status": snapshot.remote_status,
-                    "limit_price": str(snapshot.limit_price),
-                    "original_quantity": str(
-                        snapshot.original_quantity
-                    ),
-                    "matched_quantity": str(
-                        snapshot.matched_quantity
-                    ),
-                    "remaining_quantity": str(
-                        snapshot.remaining_quantity
-                    ),
-                    "observed_at": snapshot.observed_at.isoformat(),
-                }
-            print(
-                "REMOTE_ORDER "
-                + json.dumps(payload, sort_keys=True)
-            )
+            for row in remote_order_rows:
+                inspection = gateway.inspect_orders(
+                    account_name=str(row["account_name"]),
+                    order_ids=(str(row["order_id"]),),
+                )
+                if inspection.failed_order_ids:
+                    payload = {
+                        "ticker": str(row["ticker"]),
+                        "inspection": "FAILED",
+                        "error": _safe(inspection.error),
+                    }
+                else:
+                    snapshot = inspection.snapshots[0]
+                    payload = {
+                        "ticker": str(row["ticker"]),
+                        "inspection": "OK",
+                        "state": snapshot.state.value,
+                        "remote_status": snapshot.remote_status,
+                        "limit_price": str(snapshot.limit_price),
+                        "original_quantity": str(
+                            snapshot.original_quantity
+                        ),
+                        "matched_quantity": str(
+                            snapshot.matched_quantity
+                        ),
+                        "remaining_quantity": str(
+                            snapshot.remaining_quantity
+                        ),
+                        "observed_at": snapshot.observed_at.isoformat(),
+                    }
+                print(
+                    "REMOTE_ORDER "
+                    + json.dumps(payload, sort_keys=True)
+                )
     finally:
         if gateway is not None:
             gateway.close()
