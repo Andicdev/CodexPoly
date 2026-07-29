@@ -194,6 +194,20 @@ def _settings(
 
 
 class FedHostedResolutionWorkerTests(unittest.TestCase):
+    def test_source_loop_is_hot_only_while_armed(self) -> None:
+        worker = FedHostedResolutionWorker(
+            settings=_settings(),
+            profile_store=_ProfileStore(_profiles()),
+            poller=_Poller(_observation()),
+            clock=lambda: _NOW,
+        )
+
+        worker.prepare()
+        self.assertEqual(worker._next_loop_delay(), 0.01)
+        worker.poll_once()
+        self.assertEqual(worker._next_loop_delay(), 0.25)
+        worker.close()
+
     def test_all_profiles_share_one_prepared_execution_batch(self) -> None:
         executor = _RecordingExecutor()
         factory_profiles: list[ResolutionExecutionProfile] = []

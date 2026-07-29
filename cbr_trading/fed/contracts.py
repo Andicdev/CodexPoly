@@ -23,6 +23,7 @@ class FedDecisionSpec:
     previous_lower: Decimal
     previous_upper: Decimal
     board_statement_url: str
+    board_statement_pdf_url: str
     board_implementation_url: str
     new_york_fed_pdf_url: str
     monetary_policy_rss_url: str
@@ -48,6 +49,7 @@ class FedDecisionSpec:
         object.__setattr__(self, "previous_upper", upper)
         for name in (
             "board_statement_url",
+            "board_statement_pdf_url",
             "board_implementation_url",
             "new_york_fed_pdf_url",
             "monetary_policy_rss_url",

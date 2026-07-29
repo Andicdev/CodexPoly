@@ -33,6 +33,10 @@ def fed_july_2026_decision_spec() -> FedDecisionSpec:
             "https://www.federalreserve.gov/newsevents/pressreleases/"
             "monetary20260729a.htm"
         ),
+        board_statement_pdf_url=(
+            "https://www.federalreserve.gov/monetarypolicy/files/"
+            "monetary20260729a1.pdf"
+        ),
         board_implementation_url=(
             "https://www.federalreserve.gov/newsevents/pressreleases/"
             "monetary20260729a1.htm"

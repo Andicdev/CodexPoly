@@ -4,7 +4,12 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -86,6 +91,41 @@ class FedOfficialObservation:
             "detected_at",
             self.detected_at.astimezone(timezone.utc),
         )
+
+
+@dataclass(frozen=True)
+class FedRouteTelemetry:
+    route_name: str
+    attempts: int
+    http_successes: int
+    decisions: int
+    last_status_code: int | None
+    last_response_bytes: int
+    last_fetch_ms: float
+    last_parse_ms: float
+    last_total_ms: float
+    last_error_type: str | None
+
+
+@dataclass
+class _FedRouteTelemetryState:
+    attempts: int = 0
+    http_successes: int = 0
+    decisions: int = 0
+    last_status_code: int | None = None
+    last_response_bytes: int = 0
+    last_fetch_ms: float = 0.0
+    last_parse_ms: float = 0.0
+    last_total_ms: float = 0.0
+    last_error_type: str | None = None
+
+
+@dataclass
+class _FedAttemptTrace:
+    status_code: int | None = None
+    response_bytes: int = 0
+    fetch_ms: float = 0.0
+    parse_ms: float = 0.0
 
 
 class FedRouteTransport(Protocol):
@@ -207,7 +247,7 @@ class RequestsFedRouteTransport:
 
 
 class FedOfficialDocumentPoller:
-    """Race official FOMC documents and return the first valid decision."""
+    """Independently poll official documents and return the first decision."""
 
     def __init__(
         self,
@@ -222,17 +262,26 @@ class FedOfficialDocumentPoller:
         max_html_bytes: int = 1024 * 1024,
         max_pdf_bytes: int = 2 * 1024 * 1024,
         rss_interval: float = 2.0,
+        primary_interval: float = 0.05,
+        secondary_interval: float = 0.15,
+        poll_wait: float = 0.05,
         logger: logging.Logger | None = None,
     ):
         if connect_timeout <= 0 or read_timeout <= 0:
             raise ValueError("HTTP timeouts must be positive")
-        if rss_interval <= 0:
-            raise ValueError("rss_interval must be positive")
+        for name, value in (
+            ("rss_interval", rss_interval),
+            ("primary_interval", primary_interval),
+            ("secondary_interval", secondary_interval),
+            ("poll_wait", poll_wait),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
         self.spec = spec
         self._transport = transport or RequestsFedRouteTransport()
-        self._pdf_text_extractor = (
-            pdf_text_extractor or _extract_pdf_text
-        )
+        self._pdf_text_extractor = pdf_text_extractor
+        if pdf_text_extractor is None:
+            _warm_pdf_parser()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._monotonic_clock = monotonic_clock
         self._timeout = (
@@ -241,88 +290,206 @@ class FedOfficialDocumentPoller:
         )
         self._max_html_bytes = int(max_html_bytes)
         self._max_pdf_bytes = int(max_pdf_bytes)
-        self._rss_interval = float(rss_interval)
-        self._last_rss_poll = float("-inf")
+        self._poll_wait = float(poll_wait)
+        self._routes = _routes_from_spec(spec)
+        self._route_intervals = {
+            "fed_board_statement_html": float(primary_interval),
+            "fed_board_statement_pdf": float(primary_interval),
+            "fed_board_implementation_html": float(
+                secondary_interval
+            ),
+            "new_york_fed_statement_pdf": float(
+                secondary_interval
+            ),
+            "fed_monetary_policy_rss": float(rss_interval),
+        }
+        self._next_due = {
+            route.name: float("-inf")
+            for route in self._routes
+        }
+        self._inflight: dict[
+            Future[FedOfficialObservation | None],
+            FedDocumentRoute,
+        ] = {}
         self._executor = ThreadPoolExecutor(
-            max_workers=4,
+            max_workers=len(self._routes),
             thread_name_prefix="fed-official-source",
         )
         self._logger = logger or logging.getLogger(
             "cbr_trading.fed.source"
         )
+        self._telemetry_lock = Lock()
+        self._telemetry = {
+            route.name: _FedRouteTelemetryState()
+            for route in self._routes
+        }
         self._closed = False
         self._winner: FedOfficialObservation | None = None
-        self._routes = _routes_from_spec(spec)
 
     @property
     def winner(self) -> FedOfficialObservation | None:
         return self._winner
+
+    @property
+    def route_telemetry(self) -> tuple[FedRouteTelemetry, ...]:
+        with self._telemetry_lock:
+            return tuple(
+                FedRouteTelemetry(
+                    route_name=route.name,
+                    attempts=state.attempts,
+                    http_successes=state.http_successes,
+                    decisions=state.decisions,
+                    last_status_code=state.last_status_code,
+                    last_response_bytes=state.last_response_bytes,
+                    last_fetch_ms=state.last_fetch_ms,
+                    last_parse_ms=state.last_parse_ms,
+                    last_total_ms=state.last_total_ms,
+                    last_error_type=state.last_error_type,
+                )
+                for route in self._routes
+                for state in (self._telemetry[route.name],)
+            )
 
     def poll_once(self) -> FedOfficialObservation | None:
         if self._closed:
             raise RuntimeError("Federal Reserve source poller is closed")
         if self._winner is not None:
             return self._winner
-        routes = list(self._routes[:3])
+
+        observation = self._collect_completed()
+        if observation is not None:
+            return observation
+
         now = self._monotonic_clock()
-        if now - self._last_rss_poll >= self._rss_interval:
-            routes.append(self._routes[3])
-            self._last_rss_poll = now
-        futures: set[Future[FedOfficialObservation | None]] = {
-            self._executor.submit(self._fetch_and_parse, route)
-            for route in routes
+        active_route_names = {
+            route.name for route in self._inflight.values()
         }
-        try:
-            for future in as_completed(futures):
-                try:
-                    observation = future.result()
-                except Exception as exc:
-                    self._logger.debug(
-                        "FED source route failed error_type=%s",
-                        type(exc).__name__,
-                    )
-                    continue
-                if observation is None:
-                    continue
-                self._winner = observation
-                for pending in futures:
-                    if pending is not future:
-                        pending.cancel()
-                self._logger.info(
-                    "FED decision source confirmed provider=%s "
-                    "lower=%s upper=%s",
-                    observation.provider,
-                    observation.decision.lower,
-                    observation.decision.upper,
-                )
+        for route in self._routes:
+            if route.name in active_route_names:
+                continue
+            if now < self._next_due[route.name]:
+                continue
+            future = self._executor.submit(
+                self._fetch_and_parse,
+                route,
+            )
+            self._inflight[future] = route
+            self._next_due[route.name] = (
+                now + self._route_intervals[route.name]
+            )
+
+        deadline = time.monotonic() + self._poll_wait
+        while self._inflight:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, _pending = wait(
+                tuple(self._inflight),
+                timeout=remaining,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                break
+            observation = self._collect_completed()
+            if observation is not None:
                 return observation
-        finally:
-            for pending in futures:
-                if not pending.done():
-                    pending.cancel()
         return None
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
+        for future in self._inflight:
+            future.cancel()
+        self._inflight.clear()
         self._executor.shutdown(wait=False, cancel_futures=True)
         self._transport.close()
+
+    def _collect_completed(
+        self,
+    ) -> FedOfficialObservation | None:
+        for future, route in tuple(self._inflight.items()):
+            if not future.done():
+                continue
+            del self._inflight[future]
+            try:
+                observation = future.result()
+            except Exception as exc:
+                self._logger.debug(
+                    "FED source route failed route=%s error_type=%s",
+                    route.name,
+                    type(exc).__name__,
+                )
+                continue
+            if observation is None:
+                continue
+            self._winner = observation
+            for pending in self._inflight:
+                pending.cancel()
+            self._logger.info(
+                "FED decision source confirmed provider=%s "
+                "lower=%s upper=%s",
+                observation.provider,
+                observation.decision.lower,
+                observation.decision.upper,
+            )
+            return observation
+        return None
 
     def _fetch_and_parse(
         self,
         route: FedDocumentRoute,
+    ) -> FedOfficialObservation | None:
+        started = self._monotonic_clock()
+        trace = _FedAttemptTrace()
+        observation: FedOfficialObservation | None = None
+        error_type: str | None = None
+        try:
+            observation = self._fetch_and_parse_route(route, trace)
+            return observation
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            self._record_route_attempt(
+                route=route,
+                trace=trace,
+                total_ms=max(
+                    0.0,
+                    (
+                        self._monotonic_clock() - started
+                    )
+                    * 1000,
+                ),
+                decision_found=observation is not None,
+                error_type=error_type,
+            )
+
+    def _fetch_and_parse_route(
+        self,
+        route: FedDocumentRoute,
+        trace: _FedAttemptTrace,
     ) -> FedOfficialObservation | None:
         max_bytes = (
             self._max_pdf_bytes
             if route.kind is FedDocumentKind.PDF
             else self._max_html_bytes
         )
+        fetch_started = self._monotonic_clock()
         response = self._transport.fetch(
             route,
             timeout=self._timeout,
             max_bytes=max_bytes,
         )
+        trace.fetch_ms += max(
+            0.0,
+            (
+                self._monotonic_clock() - fetch_started
+            )
+            * 1000,
+        )
+        trace.status_code = response.status_code
+        trace.response_bytes += len(response.body)
         if response.status_code != 200 or not response.body:
             return None
         if route.kind is FedDocumentKind.RSS:
@@ -339,19 +506,105 @@ class FedOfficialDocumentPoller:
                 allowed_host="www.federalreserve.gov",
                 cache_bust=True,
             )
+            fetch_started = self._monotonic_clock()
             response = self._transport.fetch(
                 route,
                 timeout=self._timeout,
                 max_bytes=self._max_html_bytes,
             )
+            trace.fetch_ms += max(
+                0.0,
+                (
+                    self._monotonic_clock() - fetch_started
+                )
+                * 1000,
+            )
+            trace.status_code = response.status_code
+            trace.response_bytes += len(response.body)
             if response.status_code != 200 or not response.body:
                 return None
-        _validate_content_type(route.kind, response.content_type)
-        text = (
-            self._pdf_text_extractor(response.body)
-            if route.kind is FedDocumentKind.PDF
-            else html_visible_text(response.body)
+        parse_started = self._monotonic_clock()
+        try:
+            _validate_content_type(route.kind, response.content_type)
+            if route.kind is FedDocumentKind.PDF:
+                return self._observation_from_pdf(route, response)
+            text = html_visible_text(response.body)
+            return self._observation_from_text(
+                route,
+                response,
+                text,
+            )
+        finally:
+            trace.parse_ms = max(
+                0.0,
+                (
+                    self._monotonic_clock() - parse_started
+                )
+                * 1000,
+            )
+
+    def _record_route_attempt(
+        self,
+        *,
+        route: FedDocumentRoute,
+        trace: _FedAttemptTrace,
+        total_ms: float,
+        decision_found: bool,
+        error_type: str | None,
+    ) -> None:
+        with self._telemetry_lock:
+            state = self._telemetry[route.name]
+            state.attempts += 1
+            if (
+                trace.status_code == 200
+                and trace.response_bytes > 0
+            ):
+                state.http_successes += 1
+            if decision_found:
+                state.decisions += 1
+            state.last_status_code = trace.status_code
+            state.last_response_bytes = trace.response_bytes
+            state.last_fetch_ms = round(trace.fetch_ms, 3)
+            state.last_parse_ms = round(trace.parse_ms, 3)
+            state.last_total_ms = round(total_ms, 3)
+            state.last_error_type = error_type
+
+    def _observation_from_pdf(
+        self,
+        route: FedDocumentRoute,
+        response: FedRouteResponse,
+    ) -> FedOfficialObservation | None:
+        if self._pdf_text_extractor is not None:
+            text = self._pdf_text_extractor(response.body)
+            return self._observation_from_text(route, response, text)
+
+        first_page = _extract_pdf_text(
+            response.body,
+            max_pages=1,
         )
+        observation = self._observation_from_text(
+            route,
+            response,
+            first_page,
+        )
+        if observation is not None:
+            return observation
+        full_text = _extract_pdf_text(
+            response.body,
+            max_pages=4,
+        )
+        return self._observation_from_text(
+            route,
+            response,
+            full_text,
+        )
+
+    def _observation_from_text(
+        self,
+        route: FedDocumentRoute,
+        response: FedRouteResponse,
+        text: str,
+    ) -> FedOfficialObservation | None:
         try:
             decision = parse_fomc_target_range(
                 text,
@@ -365,7 +618,6 @@ class FedOfficialDocumentPoller:
             or detected_at.utcoffset() is None
         ):
             raise ValueError("FED source clock must be timezone-aware")
-        excerpt = _decision_excerpt(text)
         return FedOfficialObservation(
             provider=route.name,
             source_url=route.url,
@@ -374,7 +626,7 @@ class FedOfficialDocumentPoller:
             document_fingerprint=hashlib.sha256(
                 response.body
             ).hexdigest(),
-            excerpt=excerpt,
+            excerpt=_decision_excerpt(text),
         )
 
 
@@ -386,6 +638,13 @@ def _routes_from_spec(
             name="fed_board_statement_html",
             url=spec.board_statement_url,
             kind=FedDocumentKind.HTML,
+            allowed_host="www.federalreserve.gov",
+            cache_bust=True,
+        ),
+        FedDocumentRoute(
+            name="fed_board_statement_pdf",
+            url=spec.board_statement_pdf_url,
+            kind=FedDocumentKind.PDF,
             allowed_host="www.federalreserve.gov",
             cache_bust=True,
         ),
@@ -412,7 +671,20 @@ def _routes_from_spec(
     )
 
 
-def _extract_pdf_text(document: bytes) -> str:
+def _warm_pdf_parser() -> None:
+    try:
+        import pypdf  # noqa: F401
+    except ImportError:
+        raise FedOfficialSourceError(
+            "Federal Reserve PDF source requires pypdf"
+        ) from None
+
+
+def _extract_pdf_text(
+    document: bytes,
+    *,
+    max_pages: int = 4,
+) -> str:
     try:
         from io import BytesIO
 
@@ -425,7 +697,7 @@ def _extract_pdf_text(document: bytes) -> str:
         reader = PdfReader(BytesIO(document))
         return "\n".join(
             page.extract_text() or ""
-            for page in reader.pages[:4]
+            for page in reader.pages[:max_pages]
         )
     except Exception as exc:
         raise FedOfficialSourceError(

@@ -20,6 +20,7 @@ from cbr_trading.fed.http_source import (
     FedOfficialObservation,
     FedOfficialSourceError,
     FedRouteResponse,
+    FedRouteTelemetry,
     FedRouteTransport,
     RequestsFedRouteTransport,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "FedOfficialObservation",
     "FedOfficialSourceError",
     "FedRouteResponse",
+    "FedRouteTelemetry",
     "FedRouteTransport",
     "RequestsFedRouteTransport",
     "fed_july_2026_decision_spec",

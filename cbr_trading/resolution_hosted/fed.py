@@ -83,6 +83,8 @@ ExecutorFactory = Callable[
     PreparedExecutor,
 ]
 
+_FED_HOT_LOOP_SLEEP_SECONDS = 0.01
+
 
 @dataclass
 class _ManagedFedResolution:
@@ -466,13 +468,27 @@ class FedHostedResolutionWorker:
                         + self._settings.profile_refresh_interval
                     )
                 await asyncio.to_thread(self.poll_once)
-                await asyncio.sleep(self._settings.poll_interval)
+                await asyncio.sleep(self._next_loop_delay())
         finally:
             heartbeat.cancel()
             await asyncio.gather(
                 heartbeat,
                 return_exceptions=True,
             )
+
+    def _next_loop_delay(self) -> float:
+        hot_source_armed = (
+            bool(self._managed)
+            and self._signal is None
+            and self._managed[0].coordinator.state
+            is CoordinatorState.READY
+        )
+        if hot_source_armed:
+            return min(
+                self._settings.poll_interval,
+                _FED_HOT_LOOP_SLEEP_SECONDS,
+            )
+        return self._settings.poll_interval
 
     def close(self) -> None:
         if self._closed:
@@ -758,14 +774,30 @@ class FedHostedResolutionWorker:
             states: dict[str, int] = defaultdict(int)
             for managed in self._managed:
                 states[managed.coordinator.state.value] += 1
+            route_telemetry = getattr(
+                self._poller,
+                "route_telemetry",
+                (),
+            )
+            route_summary = tuple(
+                (
+                    row.route_name,
+                    row.attempts,
+                    row.last_status_code,
+                    row.last_total_ms,
+                    row.last_error_type,
+                )
+                for row in route_telemetry
+            )
             self._logger.info(
                 "Hosted FED heartbeat mode=%s profiles=%s polls=%s "
-                "signal=%s states=%s",
+                "signal=%s states=%s routes=%s",
                 self._settings.mode.value,
                 len(self._managed),
                 self._poll_count,
                 self._signal is not None,
                 dict(states),
+                route_summary,
             )
 
 
