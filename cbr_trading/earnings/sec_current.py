@@ -242,8 +242,6 @@ class SecCurrentFilingsClient:
         not_modified = 0
         errors = 0
         deferred = 0
-        now = _as_utc(self._clock(), "clock")
-
         active_keys = {
             (
                 watch.routing_watch.cik,
@@ -305,7 +303,6 @@ class SecCurrentFilingsClient:
             try:
                 envelope = self._fetch_filing_envelope(
                     pending.filing,
-                    received_at=now,
                 )
                 successes += 1
             except Exception as exc:
@@ -427,8 +424,6 @@ class SecCurrentFilingsClient:
     def _fetch_filing_envelope(
         self,
         filing: _SubmissionFiling,
-        *,
-        received_at: datetime,
     ) -> SecFilingEnvelope:
         compact = filing.accession.replace("-", "")
         url = SEC_ARCHIVE_FILING_URL.format(
@@ -479,13 +474,13 @@ class SecCurrentFilingsClient:
             accession=filing.accession,
             form_type=filing.form_type,
             filed_at=filing.filed_at,
-            received_at=received_at,
+            received_at=_as_utc(self._clock(), "clock"),
             items=filing.items,
             description=filing.description,
             filing_url=final_url,
             documents=documents,
             metadata={
-                "transport": "sec_submissions",
+                "transport": "sec_current_poll",
                 "primary_document": filing.primary_document,
             },
         )

@@ -11,6 +11,8 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from cbr_trading.earnings.contracts import EarningsDocumentFetchResult
+
 SEC_API_ARCHIVE_HOST = "archive.sec-api.io"
 _SEC_ARCHIVE_PATH_PREFIX = "/archives/edgar/data/"
 _SUPPORTED_CONTENT_TYPES = frozenset(
@@ -90,6 +92,12 @@ class SecDocumentFetcher:
         )
 
     def fetch(self, candidate: SecDocumentCandidate) -> bytes:
+        return self.fetch_with_result(candidate).document
+
+    def fetch_with_result(
+        self,
+        candidate: SecDocumentCandidate,
+    ) -> EarningsDocumentFetchResult:
         if getattr(candidate.provider, "value", None) != "sec":
             raise SecDocumentFetchError(
                 "SEC document fetcher received a non-SEC candidate"
@@ -168,7 +176,10 @@ class SecDocumentFetcher:
                         candidate.scope_id,
                         candidate.ticker,
                     )
-                    return outcome.document
+                    return EarningsDocumentFetchResult(
+                        document=outcome.document,
+                        route=outcome.route,
+                    )
         finally:
             # A running loser is intentionally allowed to finish so its
             # aggregate latency remains observable. It cannot delay parsing.

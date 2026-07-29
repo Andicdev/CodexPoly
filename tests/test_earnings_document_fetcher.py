@@ -111,6 +111,32 @@ class SecDocumentFetcherTests(unittest.TestCase):
         )
         self.assertNotIn("test-api-key", archive_request.full_url)
 
+    def test_fetch_result_exposes_winning_route(self) -> None:
+        def direct_opener(request, *, timeout: float):
+            return _Response(
+                b"<html>direct</html>",
+                url=request.full_url,
+            )
+
+        def archive_opener(*_args, **_kwargs):
+            raise RuntimeError("archive unavailable")
+
+        fetcher = SecDocumentFetcher(
+            api_key="test-api-key",
+            user_agent="CodexPoly test@example.com",
+            timeout=5,
+            max_bytes=4096,
+            direct_opener=direct_opener,
+            archive_opener=archive_opener,
+        )
+
+        result = fetcher.fetch_with_result(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(result.document, b"<html>direct</html>")
+        self.assertEqual(result.route, "sec_direct")
+
     def test_archive_route_can_win_without_waiting_for_direct(self) -> None:
         release_direct = threading.Event()
 

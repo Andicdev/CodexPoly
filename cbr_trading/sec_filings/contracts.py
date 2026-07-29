@@ -147,7 +147,7 @@ def normalize_sec_filing(
         documents=_normalize_documents(
             filing.get("documentFormatFiles")
         ),
-        metadata={},
+        metadata={"transport": "sec_api_websocket"},
     )
 
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from email.message import Message
 from urllib.error import HTTPError
 
+from cbr_trading.earnings.contracts import EarningsTransport
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
 )
@@ -104,19 +105,21 @@ def _filing_html() -> bytes:
 
 
 class SecCurrentFilingsClientTests(unittest.TestCase):
-    def _client(self, opener, *, sleeps=None):
+    def _client(self, opener, *, sleeps=None, clock=None):
         return SecCurrentFilingsClient(
             user_agent="CodexPoly test@example.com",
             timeout=2,
             opener=opener,
-            clock=lambda: datetime(
-                2026,
-                7,
-                27,
-                20,
-                5,
-                2,
-                tzinfo=timezone.utc,
+            clock=clock or (
+                lambda: datetime(
+                    2026,
+                    7,
+                    27,
+                    20,
+                    5,
+                    2,
+                    tzinfo=timezone.utc,
+                )
             ),
             monotonic=lambda: 100.0,
             sleep=(
@@ -166,7 +169,10 @@ class SecCurrentFilingsClientTests(unittest.TestCase):
         self.assertEqual(len(result.envelopes), 1)
         envelope = result.envelopes[0]
         self.assertEqual(envelope.items, ("Item 2.02", "Item 9.01"))
-        self.assertEqual(envelope.metadata["transport"], "sec_submissions")
+        self.assertEqual(
+            envelope.metadata["transport"],
+            "sec_current_poll",
+        )
         self.assertEqual(
             envelope.filed_at.isoformat(),
             "2026-07-27T20:05:01+00:00",
@@ -176,6 +182,10 @@ class SecCurrentFilingsClientTests(unittest.TestCase):
         )
         decision = router.route(envelope)[0]
         self.assertTrue(decision.accepted)
+        self.assertEqual(
+            decision.candidate.transport,
+            EarningsTransport.SEC_CURRENT_POLL,
+        )
         self.assertEqual(
             decision.candidate.source_url,
             (
@@ -189,6 +199,58 @@ class SecCurrentFilingsClientTests(unittest.TestCase):
         )
         self.assertEqual(len(sleeps), 1)
         self.assertAlmostEqual(sleeps[0], 0.2)
+
+    def test_transport_observation_is_timestamped_after_detail_fetch(
+        self,
+    ) -> None:
+        watches = sec_current_watches_from_rules(
+            (nvts_q2_2026_shadow_rule(),)
+        )
+        started_at = datetime(
+            2026, 7, 27, 20, 5, 2, tzinfo=timezone.utc
+        )
+        completed_at = datetime(
+            2026, 7, 27, 20, 5, 2, 250000, tzinfo=timezone.utc
+        )
+        current_time = [started_at]
+        responses = iter(
+            (
+                _Response(
+                    _payload(),
+                    url=(
+                        "https://data.sec.gov/submissions/"
+                        "CIK0001821769.json"
+                    ),
+                    content_type="application/json",
+                ),
+                _Response(
+                    _filing_html(),
+                    url=(
+                        "https://www.sec.gov/Archives/edgar/data/"
+                        "1821769/000182176926000123/"
+                        "0001821769-26-000123-index.html"
+                    ),
+                    content_type="text/html",
+                ),
+            )
+        )
+        calls = [0]
+
+        def opener(_request, **_kwargs):
+            calls[0] += 1
+            if calls[0] == 2:
+                current_time[0] = completed_at
+            return next(responses)
+
+        result = self._client(
+            opener,
+            clock=lambda: current_time[0],
+        ).poll(watches)
+
+        self.assertEqual(
+            result.envelopes[0].received_at,
+            completed_at,
+        )
 
     def test_stale_filing_is_ignored_without_detail_request(self) -> None:
         watches = sec_current_watches_from_rules(

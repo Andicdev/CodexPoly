@@ -2,11 +2,14 @@
 
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
+    EarningsDocumentFetchResult,
     EarningsFactCandidate,
     EarningsMarketRule,
     EarningsMetric,
     EarningsParseResult,
     EarningsProvider,
+    EarningsSourceTiming,
+    EarningsTransport,
     EpsBasis,
     ParseStatus,
     SourceAuthority,
@@ -29,12 +32,15 @@ from cbr_trading.earnings.settings import EarningsWorkerSettings
 
 __all__ = [
     "EarningsDocumentCandidate",
+    "EarningsDocumentFetchResult",
     "EarningsFactCandidate",
     "EarningsMarketRule",
     "EarningsMetric",
     "EarningsParseResult",
     "EarningsProvider",
+    "EarningsSourceTiming",
     "EarningsStoreError",
+    "EarningsTransport",
     "EarningsWorkerSettings",
     "EpsBasis",
     "ParseStatus",

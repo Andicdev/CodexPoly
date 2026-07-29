@@ -12,6 +12,7 @@ from cbr_trading.earnings.processor import (
     EarningsShadowProcessor,
     ShadowProcessingStatus,
 )
+from cbr_trading.earnings.contracts import EarningsSourceTiming
 from cbr_trading.earnings.repository import StoredEarningsRecord
 from tests.test_earnings_navitas_parser import _document, _source
 
@@ -32,6 +33,7 @@ class _Store:
             status="RECEIVED",
         )
         self.statuses: list[tuple[int, str, str | None]] = []
+        self.timings: list[EarningsSourceTiming | None] = []
         self.facts = list(existing_facts)
         self.recorded_events = 0
         self.recorded_facts = 0
@@ -46,8 +48,10 @@ class _Store:
         *,
         status: str,
         error: str | None = None,
+        timing: EarningsSourceTiming | None = None,
     ) -> None:
         self.statuses.append((event_id, status, error))
+        self.timings.append(timing)
 
     def record_fact(
         self,
@@ -133,6 +137,13 @@ class EarningsShadowProcessorTests(unittest.TestCase):
             ["FETCHED", "PARSED"],
         )
         self.assertEqual(store.recorded_facts, 1)
+        final_timing = store.timings[-1]
+        assert final_timing is not None
+        self.assertEqual(
+            final_timing.document_fetch_route,
+            "legacy_fetch",
+        )
+        self.assertEqual(final_timing.fact_persisted_at, _NOW)
 
     def test_terminal_duplicate_does_not_fetch_or_parse(self) -> None:
         store = _Store(
@@ -168,6 +179,11 @@ class EarningsShadowProcessorTests(unittest.TestCase):
         assert error is not None
         self.assertNotIn(secret, error)
         self.assertIn("RuntimeError", error)
+        timing = store.timings[-1]
+        assert timing is not None
+        self.assertIsNotNone(timing.document_fetch_started_at)
+        self.assertIsNotNone(timing.document_fetch_completed_at)
+        self.assertIsNone(timing.parse_started_at)
 
     def test_missing_metric_is_no_match_not_no_resolution(self) -> None:
         store = _Store()

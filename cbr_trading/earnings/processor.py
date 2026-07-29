@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Protocol
@@ -10,9 +10,11 @@ from typing import Protocol
 from cbr_trading.domain.signals import ResolutionSignal
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
+    EarningsDocumentFetchResult,
     EarningsFactCandidate,
     EarningsMarketRule,
     EarningsParseResult,
+    EarningsSourceTiming,
     ParseStatus,
 )
 from cbr_trading.earnings.repository import StoredEarningsRecord
@@ -55,6 +57,7 @@ class EarningsStore(Protocol):
         *,
         status: str,
         error: str | None = None,
+        timing: EarningsSourceTiming | None = None,
     ) -> None: ...
 
     def record_fact(
@@ -85,6 +88,14 @@ class EarningsParser(Protocol):
         rule: EarningsMarketRule,
         detected_at: datetime,
     ) -> EarningsParseResult: ...
+
+
+@dataclass(frozen=True)
+class _DocumentFetchAttempt:
+    document: bytes | None
+    route: str | None
+    completed_at: datetime
+    error: str | None = None
 
 
 class EarningsShadowProcessor:
@@ -133,6 +144,10 @@ class EarningsShadowProcessor:
         candidate: EarningsDocumentCandidate,
     ) -> ShadowProcessingResult:
         stored_event = self._store.record_source_event(candidate)
+        timing = EarningsSourceTiming(
+            transport=candidate.transport,
+            transport_observed_at=candidate.received_at,
+        )
         existing_status = str(stored_event.status or "").upper()
         if (
             not stored_event.created
@@ -152,6 +167,7 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 status=ShadowProcessingStatus.QUARANTINED,
                 reason="active_rule_not_loaded",
+                timing=timing,
             )
         parser = self._parsers.get(rule.ticker)
         if parser is None:
@@ -160,13 +176,24 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 status=ShadowProcessingStatus.QUARANTINED,
                 reason="company_parser_not_configured",
+                timing=timing,
             )
 
-        document = self._fetch_document(
-            candidate,
-            event_id=stored_event.row_id,
+        fetch_started_at = self._clock()
+        fetched = self._fetch_document(candidate)
+        timing = replace(
+            timing,
+            document_fetch_started_at=fetch_started_at,
+            document_fetch_completed_at=fetched.completed_at,
+            document_fetch_route=fetched.route,
         )
-        if document is None:
+        if fetched.document is None:
+            self._store.update_source_event_status(
+                stored_event.row_id,
+                status="ERROR",
+                error=fetched.error or "document_fetch_failed",
+                timing=timing,
+            )
             return ShadowProcessingResult(
                 status=ShadowProcessingStatus.ERROR,
                 reason="document_fetch_failed",
@@ -176,21 +203,29 @@ class EarningsShadowProcessor:
         self._store.update_source_event_status(
             stored_event.row_id,
             status="FETCHED",
+            timing=timing,
         )
 
+        parse_started_at = self._clock()
         try:
             parsed = parser.parse(
-                document,
+                fetched.document,
                 source=candidate,
                 rule=rule,
-                detected_at=self._clock(),
+                detected_at=parse_started_at,
             )
         except Exception as exc:
+            timing = replace(
+                timing,
+                parse_started_at=parse_started_at,
+                parse_completed_at=self._clock(),
+            )
             error = f"parser_failed:{type(exc).__name__}"
             self._store.update_source_event_status(
                 stored_event.row_id,
                 status="ERROR",
                 error=error,
+                timing=timing,
             )
             return ShadowProcessingResult(
                 status=ShadowProcessingStatus.ERROR,
@@ -198,6 +233,12 @@ class EarningsShadowProcessor:
                 scope_id=candidate.scope_id,
                 event_id=stored_event.row_id,
             )
+        parse_completed_at = self._clock()
+        timing = replace(
+            timing,
+            parse_started_at=parse_started_at,
+            parse_completed_at=parse_completed_at,
+        )
 
         if parsed.status is ParseStatus.NO_MATCH:
             return self._finish_without_signal(
@@ -205,6 +246,7 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 status=ShadowProcessingStatus.NO_MATCH,
                 reason=parsed.reason,
+                timing=timing,
             )
         if parsed.status is ParseStatus.QUARANTINED:
             return self._finish_without_signal(
@@ -212,6 +254,7 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 status=ShadowProcessingStatus.QUARANTINED,
                 reason=parsed.reason,
+                timing=timing,
             )
         fact = parsed.candidate
         if fact is None:
@@ -220,12 +263,18 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 status=ShadowProcessingStatus.ERROR,
                 reason="accepted_parse_without_fact",
+                timing=timing,
             )
+        fact = replace(fact, detected_at=parse_completed_at)
 
         stored_fact = self._store.record_fact(
             source_event_id=stored_event.row_id,
             candidate=fact,
             reason=parsed.reason,
+        )
+        timing = replace(
+            timing,
+            fact_persisted_at=self._clock(),
         )
         resolver = EarningsResolutionSource(
             candidate_provider=lambda: tuple(
@@ -247,10 +296,12 @@ class EarningsShadowProcessor:
                 fact_id=stored_fact.row_id,
                 status=ShadowProcessingStatus.QUARANTINED,
                 reason=reason,
+                timing=timing,
             )
         self._store.update_source_event_status(
             stored_event.row_id,
             status="PARSED",
+            timing=timing,
         )
         return ShadowProcessingResult(
             status=ShadowProcessingStatus.SIGNAL,
@@ -264,26 +315,47 @@ class EarningsShadowProcessor:
     def _fetch_document(
         self,
         candidate: EarningsDocumentCandidate,
-        *,
-        event_id: int,
-    ) -> bytes | None:
+    ) -> _DocumentFetchAttempt:
         for attempt in range(1, self._max_fetch_attempts + 1):
             try:
-                return self._document_fetcher.fetch(candidate)
+                fetch_with_result = getattr(
+                    self._document_fetcher,
+                    "fetch_with_result",
+                    None,
+                )
+                if callable(fetch_with_result):
+                    result = fetch_with_result(candidate)
+                    if not isinstance(
+                        result,
+                        EarningsDocumentFetchResult,
+                    ):
+                        raise TypeError(
+                            "fetch_with_result returned an invalid result"
+                        )
+                else:
+                    result = EarningsDocumentFetchResult(
+                        document=self._document_fetcher.fetch(candidate),
+                        route="legacy_fetch",
+                    )
+                return _DocumentFetchAttempt(
+                    document=result.document,
+                    route=result.route,
+                    completed_at=self._clock(),
+                )
             except Exception as exc:
                 if attempt >= self._max_fetch_attempts:
-                    self._store.update_source_event_status(
-                        event_id,
-                        status="ERROR",
+                    return _DocumentFetchAttempt(
+                        document=None,
+                        route=None,
+                        completed_at=self._clock(),
                         error=(
                             "document_fetch_failed:"
                             f"{type(exc).__name__}"
                         ),
                     )
-                    return None
                 if self._fetch_retry_delay:
                     self._sleep(self._fetch_retry_delay)
-        return None
+        raise AssertionError("fetch attempt loop exited unexpectedly")
 
     def _finish_without_signal(
         self,
@@ -293,6 +365,7 @@ class EarningsShadowProcessor:
         status: ShadowProcessingStatus,
         reason: str,
         fact_id: int | None = None,
+        timing: EarningsSourceTiming | None = None,
     ) -> ShadowProcessingResult:
         database_status = {
             ShadowProcessingStatus.NO_MATCH: "NO_MATCH",
@@ -305,6 +378,7 @@ class EarningsShadowProcessor:
             event_id,
             status=database_status,
             error=reason,
+            timing=timing,
         )
         return ShadowProcessingResult(
             status=status,

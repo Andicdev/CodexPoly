@@ -9,6 +9,7 @@ from typing import Any
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
     EarningsProvider,
+    EarningsTransport,
     SourceAuthority,
 )
 from cbr_trading.sec_filings.contracts import (
@@ -185,11 +186,19 @@ def evaluate_sec_earnings_filing(
         ).encode("utf-8")
     ).hexdigest()
     metadata = {
+        **dict(envelope.metadata),
         "company_name": envelope.company_name,
         "description": envelope.description,
         "exhibit_description": exhibit.description,
         "exhibit_sequence": exhibit.sequence,
     }
+    transport_value = str(
+        envelope.metadata.get("transport") or ""
+    ).strip()
+    try:
+        transport = EarningsTransport(transport_value)
+    except ValueError:
+        transport = EarningsTransport.LEGACY_UNKNOWN
     candidate = EarningsDocumentCandidate(
         scope_id=watch.scope_id,
         provider=EarningsProvider.SEC,
@@ -205,6 +214,7 @@ def evaluate_sec_earnings_filing(
         received_at=envelope.received_at,
         authority=SourceAuthority.OFFICIAL_COMPANY,
         transport_fingerprint=fingerprint,
+        transport=transport,
         metadata={
             key: value
             for key, value in metadata.items()

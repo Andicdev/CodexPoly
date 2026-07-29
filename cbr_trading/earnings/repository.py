@@ -16,16 +16,24 @@ from cbr_trading.earnings.contracts import (
     EarningsMarketRule,
     EarningsMetric,
     EarningsProvider,
+    EarningsSourceTiming,
     EpsBasis,
     SourceAuthority,
 )
 from cbr_trading.secret_guard import redact_sensitive_text
 
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "migrations"
-    / "004_add_earnings_source_tables.sql"
+_MIGRATION_PATHS = (
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "004_add_earnings_source_tables.sql"
+    ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "016_add_earnings_source_telemetry.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
@@ -33,6 +41,12 @@ SELECT
     to_regclass('earnings_market_rules') IS NOT NULL AS rules_table,
     to_regclass('earnings_source_events') IS NOT NULL AS events_table,
     to_regclass('earnings_fact_candidates') IS NOT NULL AS facts_table,
+    to_regclass(
+        'earnings_source_processing_telemetry'
+    ) IS NOT NULL AS processing_telemetry_table,
+    to_regclass(
+        'earnings_source_transport_observations'
+    ) IS NOT NULL AS transport_observations_table,
     (
         SELECT count(*) = 23
         FROM information_schema.columns
@@ -51,6 +65,20 @@ SELECT
         WHERE table_schema = current_schema()
           AND table_name = 'earnings_fact_candidates'
     ) AS facts_columns,
+    (
+        SELECT count(*) = 11
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name =
+              'earnings_source_processing_telemetry'
+    ) AS processing_telemetry_columns,
+    (
+        SELECT count(*) = 8
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name =
+              'earnings_source_transport_observations'
+    ) AS transport_observations_columns,
     EXISTS (
         SELECT 1
         FROM pg_index
@@ -74,7 +102,22 @@ SELECT
             'ux_earnings_fact_candidates_key'
         )
           AND indisunique
-    ) AS facts_key_index
+    ) AS facts_key_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_index
+        WHERE indexrelid = to_regclass(
+            'ux_earnings_source_transport_observations_event_transport'
+        )
+          AND indisunique
+    ) AS transport_observations_key_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_index
+        WHERE indexrelid = to_regclass(
+            'ix_earnings_source_processing_telemetry_transport'
+        )
+    ) AS processing_telemetry_transport_index
 """.strip()
 
 _UPSERT_RULE_SQL = """
@@ -147,47 +190,87 @@ RETURNING id
 """.strip()
 
 _INSERT_EVENT_SQL = """
-INSERT INTO earnings_source_events (
-    idempotency_key,
-    rule_id,
-    scope_id,
-    provider,
-    provider_event_id,
-    ticker,
-    cik,
-    form_type,
-    items,
-    document_type,
-    source_url,
-    filing_url,
-    filed_at,
-    received_at,
-    authority,
-    transport_fingerprint,
-    metadata
+WITH inserted_event AS (
+    INSERT INTO earnings_source_events (
+        idempotency_key,
+        rule_id,
+        scope_id,
+        provider,
+        provider_event_id,
+        ticker,
+        cik,
+        form_type,
+        items,
+        document_type,
+        source_url,
+        filing_url,
+        filed_at,
+        received_at,
+        authority,
+        transport_fingerprint,
+        metadata
+    )
+    SELECT
+        :idempotency_key,
+        rule.id,
+        :scope_id,
+        :provider,
+        :provider_event_id,
+        :ticker,
+        :cik,
+        :form_type,
+        CAST(:items AS jsonb),
+        :document_type,
+        :source_url,
+        :filing_url,
+        :filed_at,
+        :received_at,
+        :authority,
+        :transport_fingerprint,
+        CAST(:metadata AS jsonb)
+    FROM earnings_market_rules AS rule
+    WHERE rule.scope_id = :scope_id
+    ON CONFLICT DO NOTHING
+    RETURNING id
+),
+inserted_processing_telemetry AS (
+    INSERT INTO earnings_source_processing_telemetry (
+        source_event_id,
+        source_transport,
+        transport_observed_at
+    )
+    SELECT
+        id,
+        :source_transport,
+        :transport_observed_at
+    FROM inserted_event
+    ON CONFLICT (source_event_id) DO NOTHING
+    RETURNING source_event_id
+),
+inserted_transport_observation AS (
+    INSERT INTO earnings_source_transport_observations (
+        source_event_id,
+        transport,
+        first_observed_at,
+        last_observed_at
+    )
+    SELECT
+        id,
+        :source_transport,
+        :transport_observed_at,
+        :transport_observed_at
+    FROM inserted_event
+    ON CONFLICT (source_event_id, transport) DO NOTHING
+    RETURNING source_event_id
 )
-SELECT
-    :idempotency_key,
-    rule.id,
-    :scope_id,
-    :provider,
-    :provider_event_id,
-    :ticker,
-    :cik,
-    :form_type,
-    CAST(:items AS jsonb),
-    :document_type,
-    :source_url,
-    :filing_url,
-    :filed_at,
-    :received_at,
-    :authority,
-    :transport_fingerprint,
-    CAST(:metadata AS jsonb)
-FROM earnings_market_rules AS rule
-WHERE rule.scope_id = :scope_id
-ON CONFLICT DO NOTHING
-RETURNING id
+SELECT inserted_event.id
+FROM inserted_event
+JOIN inserted_processing_telemetry
+  ON inserted_processing_telemetry.source_event_id =
+      inserted_event.id
+JOIN inserted_transport_observation
+  ON inserted_transport_observation.source_event_id =
+      inserted_event.id
 """.strip()
 
 _SELECT_EVENT_SQL = """
@@ -197,14 +280,116 @@ WHERE idempotency_key = :idempotency_key
 LIMIT 1
 """.strip()
 
-_UPDATE_EVENT_STATUS_SQL = """
-UPDATE earnings_source_events
+_UPSERT_DUPLICATE_TELEMETRY_SQL = """
+WITH inserted_processing_telemetry AS (
+    INSERT INTO earnings_source_processing_telemetry (
+        source_event_id,
+        source_transport,
+        transport_observed_at
+    )
+    VALUES (
+        :source_event_id,
+        :source_transport,
+        :transport_observed_at
+    )
+    ON CONFLICT (source_event_id) DO NOTHING
+    RETURNING source_event_id
+)
+INSERT INTO earnings_source_transport_observations (
+    source_event_id,
+    transport,
+    first_observed_at,
+    last_observed_at
+)
+VALUES (
+    :source_event_id,
+    :source_transport,
+    :transport_observed_at,
+    :transport_observed_at
+)
+ON CONFLICT (source_event_id, transport) DO UPDATE
 SET
-    status = :status,
-    error = :error,
+    first_observed_at = least(
+        earnings_source_transport_observations.first_observed_at,
+        EXCLUDED.first_observed_at
+    ),
+    last_observed_at = greatest(
+        earnings_source_transport_observations.last_observed_at,
+        EXCLUDED.last_observed_at
+    ),
+    observation_count =
+        earnings_source_transport_observations.observation_count + 1,
     updated_at = now()
-WHERE id = :event_id
-RETURNING id
+""".strip()
+
+_UPDATE_EVENT_STATUS_SQL = """
+WITH updated_event AS (
+    UPDATE earnings_source_events
+    SET
+        status = :status,
+        error = :error,
+        updated_at = now()
+    WHERE id = :event_id
+    RETURNING id
+)
+INSERT INTO earnings_source_processing_telemetry (
+    source_event_id,
+    source_transport,
+    transport_observed_at,
+    document_fetch_started_at,
+    document_fetch_completed_at,
+    document_fetch_route,
+    parse_started_at,
+    parse_completed_at,
+    fact_persisted_at
+)
+SELECT
+    id,
+    coalesce(:source_transport, 'legacy_unknown'),
+    coalesce(:transport_observed_at, now()),
+    :document_fetch_started_at,
+    :document_fetch_completed_at,
+    :document_fetch_route,
+    :parse_started_at,
+    :parse_completed_at,
+    :fact_persisted_at
+FROM updated_event
+ON CONFLICT (source_event_id) DO UPDATE
+SET
+    source_transport = coalesce(
+        :source_transport,
+        earnings_source_processing_telemetry.source_transport
+    ),
+    transport_observed_at = coalesce(
+        :transport_observed_at,
+        earnings_source_processing_telemetry.transport_observed_at
+    ),
+    document_fetch_started_at = coalesce(
+        :document_fetch_started_at,
+        earnings_source_processing_telemetry.document_fetch_started_at
+    ),
+    document_fetch_completed_at = coalesce(
+        :document_fetch_completed_at,
+        earnings_source_processing_telemetry.document_fetch_completed_at
+    ),
+    document_fetch_route = coalesce(
+        :document_fetch_route,
+        earnings_source_processing_telemetry.document_fetch_route
+    ),
+    parse_started_at = coalesce(
+        :parse_started_at,
+        earnings_source_processing_telemetry.parse_started_at
+    ),
+    parse_completed_at = coalesce(
+        :parse_completed_at,
+        earnings_source_processing_telemetry.parse_completed_at
+    ),
+    fact_persisted_at = coalesce(
+        :fact_persisted_at,
+        earnings_source_processing_telemetry.fact_persisted_at
+    ),
+    updated_at = now()
+RETURNING source_event_id AS id
 """.strip()
 
 _INSERT_FACT_SQL = """
@@ -367,11 +552,12 @@ class SqlAlchemyEarningsStore:
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
-                session.execute(
-                    text_factory(
-                        _MIGRATION_PATH.read_text(encoding="utf-8")
+                for migration_path in _MIGRATION_PATHS:
+                    session.execute(
+                        text_factory(
+                            migration_path.read_text(encoding="utf-8")
+                        )
                     )
-                )
                 session.commit()
         except Exception as exc:
             raise EarningsStoreError(
@@ -395,12 +581,18 @@ class SqlAlchemyEarningsStore:
             "rules_table",
             "events_table",
             "facts_table",
+            "processing_telemetry_table",
+            "transport_observations_table",
             "rules_columns",
             "events_columns",
             "facts_columns",
+            "processing_telemetry_columns",
+            "transport_observations_columns",
             "rules_scope_index",
             "events_key_index",
             "facts_key_index",
+            "transport_observations_key_index",
+            "processing_telemetry_transport_index",
         )
         if not all(bool(row.get(name)) for name in expected):
             raise EarningsStoreError(
@@ -440,9 +632,10 @@ class SqlAlchemyEarningsStore:
                     params,
                 ).mappings().one_or_none()
                 if inserted is not None:
+                    event_id = int(inserted["id"])
                     session.commit()
                     return StoredEarningsRecord(
-                        row_id=int(inserted["id"]),
+                        row_id=event_id,
                         created=True,
                         status="RECEIVED",
                     )
@@ -450,7 +643,20 @@ class SqlAlchemyEarningsStore:
                     text_factory(_SELECT_EVENT_SQL),
                     {"idempotency_key": idempotency_key},
                 ).mappings().one_or_none()
-                session.rollback()
+                if existing is None:
+                    session.rollback()
+                else:
+                    event_id = int(existing["id"])
+                    session.execute(
+                        text_factory(
+                            _UPSERT_DUPLICATE_TELEMETRY_SQL
+                        ),
+                        _transport_observation_params(
+                            event_id=event_id,
+                            candidate=candidate,
+                        ),
+                    )
+                    session.commit()
         except Exception as exc:
             raise EarningsStoreError(
                 "Failed to record earnings source event: "
@@ -472,6 +678,7 @@ class SqlAlchemyEarningsStore:
         *,
         status: str,
         error: str | None = None,
+        timing: EarningsSourceTiming | None = None,
     ) -> None:
         normalized_status = str(status or "").strip().upper()
         if normalized_status not in _EVENT_STATUSES:
@@ -490,6 +697,7 @@ class SqlAlchemyEarningsStore:
                         "event_id": int(event_id),
                         "status": normalized_status,
                         "error": safe_error,
+                        **_timing_params(timing),
                     },
                 ).mappings().one_or_none()
                 if updated is None:
@@ -712,7 +920,49 @@ def _event_params(
         "received_at": candidate.received_at,
         "authority": candidate.authority.value,
         "transport_fingerprint": candidate.transport_fingerprint,
+        "source_transport": candidate.transport.value,
+        "transport_observed_at": candidate.received_at,
         "metadata": _json_dumps(candidate.metadata),
+    }
+
+
+def _transport_observation_params(
+    *,
+    event_id: int,
+    candidate: EarningsDocumentCandidate,
+) -> dict[str, Any]:
+    return {
+        "source_event_id": int(event_id),
+        "source_transport": candidate.transport.value,
+        "transport_observed_at": candidate.received_at,
+    }
+
+
+def _timing_params(
+    timing: EarningsSourceTiming | None,
+) -> dict[str, Any]:
+    if timing is None:
+        return {
+            "source_transport": None,
+            "transport_observed_at": None,
+            "document_fetch_started_at": None,
+            "document_fetch_completed_at": None,
+            "document_fetch_route": None,
+            "parse_started_at": None,
+            "parse_completed_at": None,
+            "fact_persisted_at": None,
+        }
+    return {
+        "source_transport": timing.transport.value,
+        "transport_observed_at": timing.transport_observed_at,
+        "document_fetch_started_at": timing.document_fetch_started_at,
+        "document_fetch_completed_at": (
+            timing.document_fetch_completed_at
+        ),
+        "document_fetch_route": timing.document_fetch_route,
+        "parse_started_at": timing.parse_started_at,
+        "parse_completed_at": timing.parse_completed_at,
+        "fact_persisted_at": timing.fact_persisted_at,
     }
 
 

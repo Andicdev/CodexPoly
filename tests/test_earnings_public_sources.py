@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 from unittest.mock import patch
 
-from cbr_trading.earnings.contracts import EarningsProvider
+from cbr_trading.earnings.contracts import (
+    EarningsProvider,
+    EarningsTransport,
+)
 from cbr_trading.earnings.parsers.boeing import (
     ba_q2_2026_shadow_rule,
 )
@@ -323,6 +326,10 @@ class EarningsPublicSourceTests(unittest.TestCase):
         candidate = result.candidates[0]
         self.assertEqual(candidate.document_type, "PDF")
         self.assertEqual(
+            candidate.transport,
+            EarningsTransport.COMPANY_IR_POLL,
+        )
+        self.assertEqual(
             candidate.filed_at.isoformat(),
             "2026-07-28T20:06:18+00:00",
         )
@@ -369,9 +376,13 @@ class EarningsPublicSourceTests(unittest.TestCase):
             "cbr_trading.earnings.public_sources.PdfReader",
             return_value=reader,
         ):
-            document = fetcher.fetch(candidate)
+            fetch_result = fetcher.fetch_with_result(candidate)
 
-        self.assertEqual(document, b"Adjusted EPS $0.42")
+        self.assertEqual(
+            fetch_result.document,
+            b"Adjusted EPS $0.42",
+        )
+        self.assertEqual(fetch_result.route, "public_pdf_text")
 
     def test_july_29_premarket_public_source_matrix(self) -> None:
         expected = {
@@ -717,6 +728,29 @@ class EarningsPublicSourceTests(unittest.TestCase):
             )
         )
 
+    def test_transport_observation_is_timestamped_after_feed_fetch(
+        self,
+    ) -> None:
+        watch = self.by_provider[EarningsProvider.GLOBE_NEWSWIRE]
+        completed_at = _RECEIVED_AT + timedelta(milliseconds=25)
+        clock_values = iter((_RECEIVED_AT, completed_at))
+        client = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _GLOBE_FEED,
+                url=request.full_url,
+            ),
+            clock=lambda: next(clock_values),
+        )
+
+        result = client.poll((watch,))
+
+        self.assertEqual(
+            result.candidates[0].received_at,
+            completed_at,
+        )
+
     def test_sends_conditional_validator_on_later_poll(self) -> None:
         watch = self.by_provider[EarningsProvider.COMPANY_IR]
         requests = []
@@ -882,6 +916,10 @@ class EarningsPublicSourceTests(unittest.TestCase):
         self.assertEqual(
             fetcher.fetch(candidate),
             b"<html>official release</html>",
+        )
+        self.assertEqual(
+            candidate.transport,
+            EarningsTransport.GLOBE_NEWSWIRE_POLL,
         )
 
         bad_candidate = candidate.__class__(

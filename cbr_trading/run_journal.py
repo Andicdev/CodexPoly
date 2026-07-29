@@ -44,6 +44,14 @@ WITH run AS (
         source_event.filed_at,
         source_event.received_at,
         source_event.status AS source_status,
+        source_timing.source_transport,
+        source_timing.transport_observed_at,
+        source_timing.document_fetch_started_at,
+        source_timing.document_fetch_completed_at,
+        source_timing.document_fetch_route,
+        source_timing.parse_started_at,
+        source_timing.parse_completed_at,
+        source_timing.fact_persisted_at,
         claim.id AS claim_id,
         claim.outcome AS claim_outcome,
         claim.status AS claim_status,
@@ -87,6 +95,9 @@ WITH run AS (
             event.id
         LIMIT 1
     ) AS source_event ON true
+    LEFT JOIN earnings_source_processing_telemetry
+        AS source_timing
+      ON source_timing.source_event_id = source_event.id
     LEFT JOIN LATERAL (
         SELECT execution.*
         FROM resolution_execution_claims AS execution
@@ -395,6 +406,98 @@ SELECT
         'fact_value', fact_value,
         'strike', strike,
         'comparison_op', comparison_op,
+        'source_transport', source_transport,
+        'document_fetch_route', document_fetch_route,
+        'published_to_transport_ms',
+            CASE
+                WHEN transport_observed_at IS NULL
+                  OR coalesce(published_at, filed_at) IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            transport_observed_at
+                            - coalesce(published_at, filed_at)
+                        )) * 1000
+                    )::bigint
+                )
+            END,
+        'transport_to_fetch_start_ms',
+            CASE
+                WHEN document_fetch_started_at IS NULL
+                  OR transport_observed_at IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            document_fetch_started_at
+                            - transport_observed_at
+                        )) * 1000
+                    )::bigint
+                )
+            END,
+        'document_fetch_ms',
+            CASE
+                WHEN document_fetch_completed_at IS NULL
+                  OR document_fetch_started_at IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            document_fetch_completed_at
+                            - document_fetch_started_at
+                        )) * 1000
+                    )::bigint
+                )
+            END,
+        'parse_ms',
+            CASE
+                WHEN parse_completed_at IS NULL
+                  OR parse_started_at IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            parse_completed_at
+                            - parse_started_at
+                        )) * 1000
+                    )::bigint
+                )
+            END,
+        'fact_persist_ms',
+            CASE
+                WHEN fact_persisted_at IS NULL
+                  OR parse_completed_at IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            fact_persisted_at
+                            - parse_completed_at
+                        )) * 1000
+                    )::bigint
+                )
+            END,
+        'transport_to_fact_ms',
+            CASE
+                WHEN fact_persisted_at IS NULL
+                  OR transport_observed_at IS NULL
+                    THEN NULL
+                ELSE greatest(
+                    0,
+                    round(
+                        extract(epoch FROM (
+                            fact_persisted_at
+                            - transport_observed_at
+                        )) * 1000
+                    )::bigint
+                )
+            END,
         'auto_reconciled', true
     ),
     CASE
@@ -463,7 +566,8 @@ WHERE coalesce(
       resolution_run_journal.last_order_observed_at,
       resolution_run_journal.source_url,
       resolution_run_journal.error_stage,
-      resolution_run_journal.error_code
+      resolution_run_journal.error_code,
+      resolution_run_journal.details
   ) IS DISTINCT FROM ROW(
       EXCLUDED.source_provider,
       EXCLUDED.source_event_ref,
@@ -485,7 +589,8 @@ WHERE coalesce(
       EXCLUDED.last_order_observed_at,
       EXCLUDED.source_url,
       EXCLUDED.error_stage,
-      EXCLUDED.error_code
+      EXCLUDED.error_code,
+      EXCLUDED.details
   )
 RETURNING id
 """.strip()

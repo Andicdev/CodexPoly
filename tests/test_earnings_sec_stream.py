@@ -12,6 +12,7 @@ from cbr_trading.earnings.sec_stream import (
     decode_sec_stream_message,
     evaluate_sec_earnings_filing,
 )
+from cbr_trading.earnings.contracts import EarningsTransport
 
 
 _NOW = datetime(2026, 7, 27, 21, 0, 1, tzinfo=timezone.utc)
@@ -95,6 +96,10 @@ class SecEarningsFilterTests(unittest.TestCase):
         self.assertEqual(candidate.ticker, "NVTS")
         self.assertEqual(candidate.cik, "1821769")
         self.assertEqual(candidate.document_type, "EX-99.1")
+        self.assertEqual(
+            candidate.transport,
+            EarningsTransport.SEC_API_WEBSOCKET,
+        )
         self.assertEqual(candidate.filed_at.hour, 21)
         self.assertEqual(
             candidate.source_url,

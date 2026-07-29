@@ -28,8 +28,10 @@ from pypdf import PdfReader
 
 from cbr_trading.earnings.contracts import (
     EarningsDocumentCandidate,
+    EarningsDocumentFetchResult,
     EarningsMarketRule,
     EarningsProvider,
+    EarningsTransport,
     SourceAuthority,
 )
 
@@ -300,6 +302,7 @@ class PublicReleaseFeedClient:
         max_bytes: int = 2 * 1024 * 1024,
         opener: Callable[..., Any] | None = None,
         logger: logging.Logger | None = None,
+        clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
         error_backoff_initial: float = 1.0,
         error_backoff_max: float = 30.0,
@@ -328,6 +331,7 @@ class PublicReleaseFeedClient:
         self._logger = logger or logging.getLogger(
             "cbr_trading.earnings.public"
         )
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._monotonic = monotonic or time.monotonic
         self._error_backoff_initial = float(
             error_backoff_initial
@@ -351,9 +355,14 @@ class PublicReleaseFeedClient:
             raise TypeError(
                 "watches must contain PublicReleaseWatch objects"
             )
-        detected_at = _as_utc(
-            received_at or datetime.now(timezone.utc),
-            "received_at",
+        fixed_received_at = (
+            _as_utc(received_at, "received_at")
+            if received_at is not None
+            else None
+        )
+        poll_started_at = (
+            fixed_received_at
+            or _as_utc(self._clock(), "clock")
         )
         by_feed: dict[
             tuple[str, str, int],
@@ -389,13 +398,17 @@ class PublicReleaseFeedClient:
                 if kind == "direct_document":
                     probe = self._probe_direct_document(
                         feed_url,
-                        detected_at=detected_at,
+                        detected_at=poll_started_at,
                     )
                     self._clear_feed_failure(feed_url)
                     if probe is None:
                         not_modified += 1
                         continue
                     successes += 1
+                    observed_at = (
+                        fixed_received_at
+                        or _as_utc(self._clock(), "clock")
+                    )
                     for watch in feed_watches:
                         candidates.append(
                             _candidate_from_item(
@@ -407,7 +420,7 @@ class PublicReleaseFeedClient:
                                     contributor=None,
                                 ),
                                 watch=watch,
-                                received_at=detected_at,
+                                received_at=observed_at,
                             )
                         )
                     continue
@@ -428,6 +441,10 @@ class PublicReleaseFeedClient:
                 )
                 self._clear_feed_failure(feed_url)
                 successes += 1
+                observed_at = (
+                    fixed_received_at
+                    or _as_utc(self._clock(), "clock")
+                )
                 for watch in feed_watches:
                     for item in items:
                         if (
@@ -443,7 +460,7 @@ class PublicReleaseFeedClient:
                                 _candidate_from_item(
                                     item,
                                     watch=watch,
-                                    received_at=detected_at,
+                                    received_at=observed_at,
                                 )
                             )
                         except PublicReleaseSourceError:
@@ -755,6 +772,12 @@ class PublicReleaseDocumentFetcher:
         self,
         candidate: EarningsDocumentCandidate,
     ) -> bytes:
+        return self.fetch_with_result(candidate).document
+
+    def fetch_with_result(
+        self,
+        candidate: EarningsDocumentCandidate,
+    ) -> EarningsDocumentFetchResult:
         key = (candidate.scope_id, candidate.provider)
         allowed_hosts = self._allowed_hosts.get(key)
         if not allowed_hosts:
@@ -822,11 +845,17 @@ class PublicReleaseDocumentFetcher:
             content_type == "application/pdf"
             or document.startswith(b"%PDF-")
         ):
-            return _extract_pdf_text(
-                document,
-                max_bytes=self._max_bytes,
+            return EarningsDocumentFetchResult(
+                document=_extract_pdf_text(
+                    document,
+                    max_bytes=self._max_bytes,
+                ),
+                route="public_pdf_text",
             )
-        return document
+        return EarningsDocumentFetchResult(
+            document=document,
+            route="public_document",
+        )
 
 
 def _candidate_from_item(
@@ -851,6 +880,7 @@ def _candidate_from_item(
         if urlparse(item.link).path.casefold().endswith(".pdf")
         else "HTML"
     )
+    transport = _transport_for_provider(watch.provider)
     return EarningsDocumentCandidate(
         scope_id=watch.scope_id,
         provider=watch.provider,
@@ -866,13 +896,39 @@ def _candidate_from_item(
         received_at=received_at,
         authority=SourceAuthority.OFFICIAL_COMPANY,
         transport_fingerprint=fingerprint,
+        transport=transport,
         metadata={
+            "transport": transport.value,
             "feed_url": watch.feed_url,
             "listing_kind": watch.kind,
             "release_title": item.title,
             "contributor": item.contributor,
         },
     )
+
+
+def _transport_for_provider(
+    provider: EarningsProvider,
+) -> EarningsTransport:
+    transports = {
+        EarningsProvider.COMPANY_IR: EarningsTransport.COMPANY_IR_POLL,
+        EarningsProvider.PRESS_RELEASE_RSS: (
+            EarningsTransport.PRESS_RELEASE_RSS_POLL
+        ),
+        EarningsProvider.GLOBE_NEWSWIRE: (
+            EarningsTransport.GLOBE_NEWSWIRE_POLL
+        ),
+        EarningsProvider.BUSINESS_WIRE: (
+            EarningsTransport.BUSINESS_WIRE_POLL
+        ),
+        EarningsProvider.PR_NEWSWIRE: (
+            EarningsTransport.PR_NEWSWIRE_POLL
+        ),
+        EarningsProvider.SEEKING_ALPHA: (
+            EarningsTransport.SEEKING_ALPHA_POLL
+        ),
+    }
+    return transports.get(provider, EarningsTransport.LEGACY_UNKNOWN)
 
 
 def _parse_feed(document: bytes) -> tuple[_FeedItem, ...]:

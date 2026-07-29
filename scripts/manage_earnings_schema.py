@@ -24,7 +24,9 @@ _EXCLUDED_TABLES_SQL = """
     'resolution_execution_claims',
     'earnings_market_rules',
     'earnings_source_events',
-    'earnings_fact_candidates'
+    'earnings_fact_candidates',
+    'earnings_source_processing_telemetry',
+    'earnings_source_transport_observations'
 )
 """.strip()
 
@@ -38,7 +40,10 @@ def main() -> int:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Explicitly apply migration 004 before checking it.",
+        help=(
+            "Explicitly apply additive earnings migrations 004 and 016 "
+            "before checking them."
+        ),
     )
     parser.add_argument(
         "--seed-nvts-shadow",
@@ -141,6 +146,8 @@ def main() -> int:
     no_runtime_rows = (
         after["source_event_rows"] == 0
         and after["fact_candidate_rows"] == 0
+        and after["processing_telemetry_rows"] == 0
+        and after["transport_observation_rows"] == 0
     )
     payload = {
         "ok": (
@@ -223,7 +230,9 @@ def _snapshot(database_url: str) -> dict[str, Any]:
                           AND table_name IN (
                               'earnings_market_rules',
                               'earnings_source_events',
-                              'earnings_fact_candidates'
+                              'earnings_fact_candidates',
+                              'earnings_source_processing_telemetry',
+                              'earnings_source_transport_observations'
                           )
                         """
                     )
@@ -233,6 +242,8 @@ def _snapshot(database_url: str) -> dict[str, Any]:
                 "earnings_market_rules",
                 "earnings_source_events",
                 "earnings_fact_candidates",
+                "earnings_source_processing_telemetry",
+                "earnings_source_transport_observations",
             }
             market_rule_rows = _count_rows(
                 connection,
@@ -252,6 +263,24 @@ def _snapshot(database_url: str) -> dict[str, Any]:
                 "earnings_fact_candidates",
                 exists="earnings_fact_candidates" in existing,
             )
+            transport_observation_rows = _count_rows(
+                connection,
+                text,
+                "earnings_source_transport_observations",
+                exists=(
+                    "earnings_source_transport_observations"
+                    in existing
+                ),
+            )
+            processing_telemetry_rows = _count_rows(
+                connection,
+                text,
+                "earnings_source_processing_telemetry",
+                exists=(
+                    "earnings_source_processing_telemetry"
+                    in existing
+                ),
+            )
     finally:
         engine.dispose()
     return {
@@ -261,6 +290,8 @@ def _snapshot(database_url: str) -> dict[str, Any]:
         "market_rule_rows": market_rule_rows,
         "source_event_rows": source_event_rows,
         "fact_candidate_rows": fact_candidate_rows,
+        "processing_telemetry_rows": processing_telemetry_rows,
+        "transport_observation_rows": transport_observation_rows,
     }
 
 
@@ -277,6 +308,8 @@ def _count_rows(
         "earnings_market_rules",
         "earnings_source_events",
         "earnings_fact_candidates",
+        "earnings_source_processing_telemetry",
+        "earnings_source_transport_observations",
     }
     if table_name not in allowed:
         raise ValueError("unsupported earnings table")

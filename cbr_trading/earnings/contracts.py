@@ -18,6 +18,20 @@ class EarningsProvider(str, Enum):
     SEEKING_ALPHA = "seeking_alpha"
 
 
+class EarningsTransport(str, Enum):
+    """Concrete delivery path that first exposed a source document."""
+
+    LEGACY_UNKNOWN = "legacy_unknown"
+    SEC_API_WEBSOCKET = "sec_api_websocket"
+    SEC_CURRENT_POLL = "sec_current_poll"
+    COMPANY_IR_POLL = "company_ir_poll"
+    PRESS_RELEASE_RSS_POLL = "press_release_rss_poll"
+    GLOBE_NEWSWIRE_POLL = "globenewswire_poll"
+    BUSINESS_WIRE_POLL = "businesswire_poll"
+    PR_NEWSWIRE_POLL = "prnewswire_poll"
+    SEEKING_ALPHA_POLL = "seeking_alpha_poll"
+
+
 class SourceAuthority(str, Enum):
     OFFICIAL_COMPANY = "official_company"
     SECONDARY = "secondary"
@@ -152,6 +166,7 @@ class EarningsDocumentCandidate:
     received_at: datetime
     authority: SourceAuthority
     transport_fingerprint: str
+    transport: EarningsTransport = EarningsTransport.LEGACY_UNKNOWN
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -219,10 +234,114 @@ class EarningsDocumentCandidate:
                 "transport_fingerprint",
             ),
         )
+        if not isinstance(self.transport, EarningsTransport):
+            try:
+                transport = EarningsTransport(
+                    str(self.transport or "").strip().casefold()
+                )
+            except ValueError:
+                raise ValueError(
+                    "transport is not a supported earnings transport"
+                ) from None
+            object.__setattr__(self, "transport", transport)
         object.__setattr__(
             self,
             "metadata",
             MappingProxyType(dict(self.metadata)),
+        )
+
+
+@dataclass(frozen=True)
+class EarningsDocumentFetchResult:
+    """Fetched bytes plus the concrete document-download route."""
+
+    document: bytes
+    route: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.document, bytes) or not self.document:
+            raise ValueError("document must contain bytes")
+        object.__setattr__(
+            self,
+            "route",
+            _required_text(self.route, "route"),
+        )
+
+
+@dataclass(frozen=True)
+class EarningsSourceTiming:
+    """UTC stage markers collected without changing source semantics."""
+
+    transport: EarningsTransport
+    transport_observed_at: datetime
+    document_fetch_started_at: datetime | None = None
+    document_fetch_completed_at: datetime | None = None
+    document_fetch_route: str | None = None
+    parse_started_at: datetime | None = None
+    parse_completed_at: datetime | None = None
+    fact_persisted_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.transport, EarningsTransport):
+            raise TypeError("transport must be EarningsTransport")
+        ordered = (
+            (
+                "transport_observed_at",
+                _as_utc(
+                    self.transport_observed_at,
+                    "transport_observed_at",
+                ),
+            ),
+            (
+                "document_fetch_started_at",
+                _optional_utc(
+                    self.document_fetch_started_at,
+                    "document_fetch_started_at",
+                ),
+            ),
+            (
+                "document_fetch_completed_at",
+                _optional_utc(
+                    self.document_fetch_completed_at,
+                    "document_fetch_completed_at",
+                ),
+            ),
+            (
+                "parse_started_at",
+                _optional_utc(
+                    self.parse_started_at,
+                    "parse_started_at",
+                ),
+            ),
+            (
+                "parse_completed_at",
+                _optional_utc(
+                    self.parse_completed_at,
+                    "parse_completed_at",
+                ),
+            ),
+            (
+                "fact_persisted_at",
+                _optional_utc(
+                    self.fact_persisted_at,
+                    "fact_persisted_at",
+                ),
+            ),
+        )
+        previous: datetime | None = None
+        for name, value in ordered:
+            if value is None:
+                continue
+            if previous is not None and value < previous:
+                raise ValueError(
+                    "earnings source timing stages are out of order"
+                )
+            object.__setattr__(self, name, value)
+            previous = value
+        object.__setattr__(
+            self,
+            "document_fetch_route",
+            _optional_text(self.document_fetch_route),
         )
 
 
@@ -408,3 +527,12 @@ def _as_utc(value: datetime, name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _optional_utc(
+    value: datetime | None,
+    name: str,
+) -> datetime | None:
+    if value is None:
+        return None
+    return _as_utc(value, name)

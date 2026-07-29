@@ -107,6 +107,21 @@ operator-managed `default` template from quantity `50` to `100`. Existing
 execution profiles remain unchanged and must be explicitly reviewed before
 adopting the larger quantity.
 
+`016_add_earnings_source_telemetry.sql` creates only:
+
+- `earnings_source_processing_telemetry`;
+- `earnings_source_transport_observations`.
+
+The processing row records the transport that won processing plus
+document-fetch, parse, and fact-persistence stage timestamps. The observation
+table independently records every transport that saw the same deduplicated
+document, so SEC-API WebSocket, SEC current filings polling, company IR, and
+press-wire discovery latency can be compared. First-seen telemetry is inserted
+in the same SQL statement as the source event, without another
+application/database round trip. Existing rows are retained and represented
+as `legacy_unknown`; the original earnings tables are not altered, preserving
+compatibility with the previous runtime and its exact schema check.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

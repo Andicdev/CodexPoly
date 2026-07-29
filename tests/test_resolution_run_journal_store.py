@@ -117,6 +117,18 @@ class ResolutionRunJournalStoreTests(unittest.TestCase):
             "IS DISTINCT FROM ROW(",
             _RECONCILE_EARNINGS_SQL,
         )
+        self.assertIn(
+            "'source_transport', source_transport",
+            _RECONCILE_EARNINGS_SQL,
+        )
+        self.assertIn(
+            "'transport_to_fact_ms'",
+            _RECONCILE_EARNINGS_SQL,
+        )
+        self.assertIn(
+            "resolution_run_journal.details",
+            _RECONCILE_EARNINGS_SQL,
+        )
         self.assertNotIn(
             "coalesce(source_error",
             _RECONCILE_EARNINGS_SQL,
