@@ -1011,7 +1011,7 @@ def msft_q4_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def meta_q2_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="META",
         cik=META_CIK,
         fiscal_quarter=2,
@@ -1026,6 +1026,40 @@ def meta_q2_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=META_Q2_2026_CONDITION_ID,
         metric_selection="financial_highlights_gaap_diluted_eps",
+    )
+    title_all = [
+        "Meta Reports",
+        "Second Quarter",
+        "2026",
+        "Results",
+    ]
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["investor.atmeta.com"],
+                "feed_url": (
+                    "https://investor.atmeta.com/"
+                    "rss/pressrelease.aspx"
+                ),
+                "kind": "rss",
+                "provider": "company_ir",
+                "title_all": title_all,
+                "title_none": ["to announce"],
+            },
+            "press_wire": {
+                "allowed_document_hosts": ["www.prnewswire.com"],
+                "feed_url": (
+                    "https://www.prnewswire.com/rss/"
+                    "news-releases-list.rss"
+                ),
+                "kind": "rss",
+                "provider": "prnewswire",
+                "title_all": title_all,
+                "title_none": ["to announce"],
+            },
+        },
     )
 
 

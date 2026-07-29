@@ -22,6 +22,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     grmn_q2_2026_shadow_rule,
     hum_q2_2026_shadow_rule,
     iart_q2_2026_shadow_rule,
+    meta_q2_2026_shadow_rule,
     pag_q2_2026_shadow_rule,
     pg_q4_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
@@ -220,6 +221,25 @@ _BUSINESS_WIRE_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
       <link>https://www.businesswire.com/news/home/sofi-schedule</link>
       <title>SoFi Schedules Second Quarter 2026 Results Call</title>
       <pubDate>Wed, 01 Jul 2026 12:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+_META_IR_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid isPermaLink="true">
+        https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Second-Quarter-2026-Results/default.aspx
+      </guid>
+      <link>https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Second-Quarter-2026-Results/default.aspx</link>
+      <title>Meta Reports Second Quarter 2026 Results</title>
+      <pubDate>Wed, 29 Jul 2026 16:01:00 -0400</pubDate>
+    </item>
+    <item>
+      <link>https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-to-Announce-Second-Quarter-2026-Results/default.aspx</link>
+      <title>Meta to Announce Second Quarter 2026 Results</title>
+      <pubDate>Tue, 14 Jul 2026 16:05:00 -0400</pubDate>
     </item>
   </channel>
 </rss>
@@ -613,6 +633,66 @@ class EarningsPublicSourceTests(unittest.TestCase):
             candidate.source_url,
         )
         self.assertNotIn("earnings-date", candidate.source_url)
+
+    def test_meta_builds_ir_and_prnewswire_watches(self) -> None:
+        watches = public_release_watches_from_rules(
+            (meta_q2_2026_shadow_rule(),)
+        )
+        by_provider = {
+            watch.provider: watch
+            for watch in watches
+        }
+        self.assertEqual(
+            set(by_provider),
+            {
+                EarningsProvider.COMPANY_IR,
+                EarningsProvider.PR_NEWSWIRE,
+            },
+        )
+        self.assertEqual(
+            by_provider[EarningsProvider.COMPANY_IR].feed_url,
+            "https://investor.atmeta.com/rss/pressrelease.aspx",
+        )
+
+    def test_meta_ir_routes_results_and_rejects_announcement(self) -> None:
+        company_watch = next(
+            watch
+            for watch in public_release_watches_from_rules(
+                (meta_q2_2026_shadow_rule(),)
+            )
+            if watch.provider is EarningsProvider.COMPANY_IR
+        )
+        received_at = datetime(
+            2026,
+            7,
+            29,
+            20,
+            1,
+            3,
+            tzinfo=timezone.utc,
+        )
+        result = PublicReleaseFeedClient(
+            user_agent="CodexPoly test@example.com",
+            timeout=3,
+            opener=lambda request, **_kwargs: _Response(
+                _META_IR_FEED,
+                url=request.full_url,
+            ),
+        ).poll((company_watch,), received_at=received_at)
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        self.assertEqual(
+            candidate.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+        self.assertIn(
+            "Meta-Reports-Second-Quarter-2026-Results",
+            candidate.source_url,
+        )
+        self.assertNotIn("to-Announce", candidate.source_url)
 
     def test_businesswire_feed_routes_each_premarket_issuer(self) -> None:
         rules = (
