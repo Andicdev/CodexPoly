@@ -21,6 +21,10 @@ _ARMED_CHECK = (
     _ROOT / "deploy" / "lightsail" / "checks"
     / "verify_way_july_29_auto_live_armed.sql"
 )
+_ACTIVE_CHECK = (
+    _ROOT / "deploy" / "lightsail" / "checks"
+    / "verify_way_july_29_live_active.sql"
+)
 
 
 class WaystarPostmarketProfileSqlTests(unittest.TestCase):
@@ -39,6 +43,9 @@ class WaystarPostmarketProfileSqlTests(unittest.TestCase):
         self.assertNotIn("'ENABLED'", text)
         self.assertIn("'AUTO_PREFLIGHT'", text)
         self.assertNotIn("'AUTO_LIVE'", text)
+        self.assertIn("'diluted',\n    'basic',", text)
+        self.assertIn("INSERT INTO earnings_release_catalog", text)
+        self.assertIn("ON CONFLICT (event_key) DO UPDATE", text)
         self.assertIn("quantity = 100", text)
         self.assertIn("reviewed_notional <> 99.9", text)
         self.assertNotIn("DELETE FROM", upper)
@@ -58,7 +65,7 @@ class WaystarPostmarketProfileSqlTests(unittest.TestCase):
         self.assertIn("'CONFIRMED'", text)
 
     def test_checks_are_read_only_and_fail_closed(self) -> None:
-        for path in (_CHECK, _ARMED_CHECK):
+        for path in (_CHECK, _ARMED_CHECK, _ACTIVE_CHECK):
             text = path.read_text(encoding="utf-8")
             upper = text.upper()
             self.assertIn("BEGIN TRANSACTION READ ONLY", upper)

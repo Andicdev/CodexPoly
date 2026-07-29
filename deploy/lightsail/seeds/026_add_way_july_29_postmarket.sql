@@ -70,8 +70,8 @@ VALUES (
     DATE '2026-06-30',
     TIMESTAMPTZ '2026-07-29 20:05:00+00',
     'non_gaap_eps',
-    'basic',
     'diluted',
+    'basic',
     '>',
     0.40,
     2,
@@ -213,19 +213,34 @@ SET
     updated_at = now()
 WHERE resolution_execution_profiles.status = 'DISABLED';
 
-UPDATE earnings_release_catalog
-SET
-    market_session = 'POST_MARKET',
-    scheduled_release_at =
-        TIMESTAMPTZ '2026-07-29 20:05:00+00',
-    conference_call_at =
-        TIMESTAMPTZ '2026-07-29 20:30:00+00',
-    schedule_status = 'CONFIRMED',
-    schedule_source_url =
-        'https://investors.waystar.com/news-releases/news-release-details/waystar-report-second-quarter-2026-financial-results-july-29',
-    integration_status = 'PARSER_ONLY',
-    document_format = 'FULL_HTML',
-    metric_options = '{
+INSERT INTO earnings_release_catalog (
+    event_key,
+    ticker,
+    release_date,
+    market_session,
+    scheduled_release_at,
+    conference_call_at,
+    schedule_status,
+    schedule_source_url,
+    integration_status,
+    document_format,
+    metric_options,
+    source_options,
+    notes,
+    verified_at
+)
+VALUES (
+    'WAY:2026-07-29',
+    'WAY',
+    DATE '2026-07-29',
+    'POST_MARKET',
+    TIMESTAMPTZ '2026-07-29 20:05:00+00',
+    TIMESTAMPTZ '2026-07-29 20:30:00+00',
+    'CONFIRMED',
+    'https://investors.waystar.com/news-releases/news-release-details/waystar-report-second-quarter-2026-financial-results-july-29',
+    'PARSER_ONLY',
+    'FULL_HTML',
+    '{
         "comparison_op": ">",
         "fallback_basis": "basic",
         "market_basis": "non_gaap_eps",
@@ -233,21 +248,35 @@ SET
         "reported": ["non_gaap_eps"],
         "strike": "0.40"
     }'::jsonb,
-    source_options = '[
+    '[
         {"delivery": "websocket", "provider": "sec_api", "status": "available"},
         {"delivery": "polling", "provider": "sec", "status": "profile_gated"},
         {"delivery": "rss", "provider": "company_ir", "status": "profile_gated"},
         {"delivery": "rss", "provider": "prnewswire", "status": "profile_gated"}
     ]'::jsonb,
-    notes = (
-        'Official Q2 release and 20:30 UTC call confirmed; parser replayed '
-        'against the real Q1 2026 release.'
-    ),
-    verified_at = now(),
+    'Official Q2 release and 20:30 UTC call confirmed; parser replayed against the real Q1 2026 release.',
+    now()
+)
+ON CONFLICT (event_key) DO UPDATE
+SET
+    ticker = EXCLUDED.ticker,
+    release_date = EXCLUDED.release_date,
+    market_session = EXCLUDED.market_session,
+    scheduled_release_at = EXCLUDED.scheduled_release_at,
+    conference_call_at = EXCLUDED.conference_call_at,
+    schedule_status = EXCLUDED.schedule_status,
+    schedule_source_url = EXCLUDED.schedule_source_url,
+    integration_status = EXCLUDED.integration_status,
+    document_format = EXCLUDED.document_format,
+    metric_options = EXCLUDED.metric_options,
+    source_options = EXCLUDED.source_options,
+    notes = EXCLUDED.notes,
+    verified_at = EXCLUDED.verified_at,
     updated_at = now()
-WHERE event_key = 'WAY:2026-07-29'
-  AND ticker = 'WAY'
-  AND integration_status = 'RESEARCH_PENDING';
+WHERE earnings_release_catalog.integration_status IN (
+    'RESEARCH_PENDING',
+    'PARSER_ONLY'
+);
 
 INSERT INTO resolution_profile_schedules (
     schedule_key,
@@ -308,6 +337,8 @@ BEGIN
           AND ticker = 'WAY'
           AND cik = '1990354'
           AND metric_kind = 'non_gaap_eps'
+          AND primary_basis = 'diluted'
+          AND fallback_basis = 'basic'
           AND comparison_op = '>'
           AND strike = 0.40
           AND source_policy -> 'sec' ->> 'required_item' = '2.02'
