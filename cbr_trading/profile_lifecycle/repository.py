@@ -157,6 +157,7 @@ SELECT
     schedule.profile_key,
     schedule.automation_mode,
     schedule.state,
+    schedule.last_error_code,
     schedule.activate_at,
     schedule.deactivate_at,
     profile.scope_id,
@@ -510,7 +511,10 @@ class SqlAlchemyProfileLifecycleStore:
                 reason = (
                     "preflight_not_requested"
                     if previous is ProfileScheduleState.PENDING
-                    else "authenticated_preflight_not_ready"
+                    else (
+                        str(row.get("last_error_code") or "").strip()
+                        or "authenticated_preflight_not_ready"
+                    )
                 )
                 self._set_schedule_state(
                     session,
@@ -953,6 +957,110 @@ class SqlAlchemyProfileLifecycleStore:
             event_kind="PREFLIGHT_BLOCKED",
             error_code=normalized[:100],
         )
+
+    def defer_preflight(
+        self,
+        claim: ProfilePreflightClaim,
+        *,
+        checked_at: datetime,
+        retry_at: datetime,
+        error_code: str,
+    ) -> None:
+        checked = _as_utc(checked_at)
+        retry = _as_utc(retry_at)
+        normalized = str(error_code or "").strip()[:100]
+        if not normalized:
+            raise ValueError("error_code is required")
+        if retry <= checked:
+            raise ValueError("retry_at must be after checked_at")
+        bounded_retry = min(retry, claim.deactivate_at)
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(
+                        """
+                        SELECT
+                            schedule.id,
+                            schedule.schedule_key,
+                            schedule.profile_key,
+                            schedule.automation_mode,
+                            schedule.activate_at,
+                            schedule.deactivate_at,
+                            profile.scope_id,
+                            profile.source_reference
+                        FROM resolution_profile_schedules AS schedule
+                        JOIN resolution_execution_profiles AS profile
+                          ON profile.profile_key = schedule.profile_key
+                        WHERE schedule.schedule_key = :schedule_key
+                          AND schedule.profile_key = :profile_key
+                          AND schedule.preflight_request_id = :request_id
+                          AND schedule.state = 'PREFLIGHTING'
+                        FOR UPDATE OF schedule
+                        """
+                    ),
+                    {
+                        "schedule_key": claim.schedule_key,
+                        "profile_key": claim.profile_key,
+                        "request_id": claim.request_id,
+                    },
+                ).mappings().one_or_none()
+                if row is None:
+                    session.rollback()
+                    raise ProfileLifecycleStoreError(
+                        "Profile preflight claim is no longer current"
+                    )
+                session.execute(
+                    text_factory(
+                        """
+                        UPDATE resolution_profile_schedules
+                        SET
+                            preflight_lease_until = :retry_at,
+                            readiness_checked_at = :checked_at,
+                            readiness_valid_until = NULL,
+                            readiness_evidence = '{}'::jsonb,
+                            last_error_code = :error_code,
+                            updated_at = now()
+                        WHERE id = :schedule_id
+                        """
+                    ),
+                    {
+                        "retry_at": bounded_retry,
+                        "checked_at": checked,
+                        "error_code": normalized,
+                        "schedule_id": int(row["id"]),
+                    },
+                )
+                transition = self._insert_event(
+                    session,
+                    text_factory,
+                    row=row,
+                    previous_state=ProfileScheduleState.PREFLIGHTING,
+                    next_state=ProfileScheduleState.PREFLIGHTING,
+                    event_kind="PREFLIGHT_RETRY_SCHEDULED",
+                    reason_code=normalized,
+                    metadata={
+                        "retry_at": bounded_retry.isoformat(),
+                    },
+                )
+                session.execute(
+                    text_factory(
+                        """
+                        UPDATE resolution_profile_schedule_events
+                        SET notification_enqueued_at = now()
+                        WHERE id = :event_id
+                        """
+                    ),
+                    {"event_id": transition.event_id},
+                )
+                session.commit()
+        except ProfileLifecycleStoreError:
+            raise
+        except Exception as exc:
+            raise ProfileLifecycleStoreError(
+                "Failed to defer profile preflight: "
+                f"{type(exc).__name__}"
+            ) from None
 
     def load_unnotified_event(
         self,

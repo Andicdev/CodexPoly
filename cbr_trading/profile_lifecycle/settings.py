@@ -111,6 +111,7 @@ class ProfileReadinessSettings:
     poll_interval: float = 1.0
     heartbeat_interval: float = 60.0
     lease_seconds: float = 60.0
+    retry_seconds: float = 10.0
     readiness_ttl_seconds: float = 1_800.0
     log_level: str = "INFO"
 
@@ -134,6 +135,9 @@ class ProfileReadinessSettings:
             lease_seconds=float(
                 _clean(env.get("PROFILE_READINESS_LEASE_SEC")) or "60"
             ),
+            retry_seconds=float(
+                _clean(env.get("PROFILE_READINESS_RETRY_SEC")) or "10"
+            ),
             readiness_ttl_seconds=float(
                 _clean(env.get("PROFILE_READINESS_TTL_SEC")) or "1800"
             ),
@@ -154,6 +158,7 @@ class ProfileReadinessSettings:
             "poll_interval",
             "heartbeat_interval",
             "lease_seconds",
+            "retry_seconds",
             "readiness_ttl_seconds",
         ):
             if getattr(self, name) <= 0:

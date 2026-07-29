@@ -438,8 +438,13 @@ Schedule -> LifecycleController -> profile status
 `AUTO_PREFLIGHT` requests a separate authenticated readiness worker which
 loads a disabled profile, prepares and pre-signs both outcomes, records only
 non-secret aggregate evidence, and closes the executor without calling
-`execute()`. A successful check moves the schedule to `READY` but leaves the
-profile `DISABLED`. `AUTO_LIVE` additionally requires a fresh readiness
+`execute()`. A failed attempt remains `PREFLIGHTING` and is retried on a
+bounded lease until the scheduler's activation grace ends; the retry audit
+stores a classified non-secret error code without sending repeated Telegram
+messages. This prevents one transient market/authentication response from
+permanently dropping an otherwise valid profile. A successful check moves the
+schedule to `READY` but leaves the profile `DISABLED`. `AUTO_LIVE` additionally
+requires a fresh readiness
 result, the global automatic-live switch, an active window, and an aggregate
 worst-selected-outcome notional cap before an atomic transition to
 `ENABLED`. After a matching signal has traversed strategy and executor, the
@@ -465,6 +470,15 @@ ends at a non-submitting executor. `preflight` authenticates and pre-signs
 both alternatives without creating execution claims. `live` uses
 `PolymarketPreparedExecutor`; a repricing profile additionally requires the
 persistent supervisor and market channel before preparation.
+
+Tick repricing keeps submit-first latency for a fresh tick change. If the
+source order has already been live for more than five seconds, the tick event
+is no longer treated as hot: the supervisor first inspects the exact owned
+orders, skips replacement after a complete fill, and sizes a replacement only
+to the observed remainder after a partial fill. An unavailable stale-order
+inspection fails closed. This prevents a delayed tick signal from duplicating
+an order that filled minutes earlier without adding a lookup to the immediate
+submit-first path.
 
 Only `VALIDATED` official facts enter the source. Facts for all scopes are
 loaded in one polling snapshot, then each prepared event coordinator consumes

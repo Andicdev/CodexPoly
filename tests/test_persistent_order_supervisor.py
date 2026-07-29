@@ -68,6 +68,7 @@ def _record(
     status: OrderGroupStatus = OrderGroupStatus.ACTIVE,
     revision: int = 0,
     reprice_count: int = 0,
+    created_at: datetime | None = None,
 ) -> OrderGroupRecord:
     return OrderGroupRecord(
         registration=registration_from_handle(
@@ -82,6 +83,7 @@ def _record(
         revision=revision,
         reprice_count=reprice_count,
         live_order_ids=live_order_ids,
+        created_at=created_at,
     )
 
 
@@ -911,6 +913,130 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         )
         self.assertEqual(len(gateway.place_calls), 1)
         self.assertEqual(gateway.inspect_calls, [])
+
+    def test_stale_group_filled_before_tick_skips_replacement(
+        self,
+    ) -> None:
+        group = _record(
+            created_at=_event().observed_at - timedelta(minutes=8)
+        )
+        repository = _Repository(groups=(group,))
+        gateway = _Gateway(
+            inspections=(
+                _inspection(
+                    ("order-1",),
+                    state=RemoteOrderState.FILLED,
+                    original=Decimal("25"),
+                    matched=Decimal("25"),
+                ),
+            ),
+            replacements=(_replacement(),),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.on_tick_size_change(_event())
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.COMPLETED,
+        )
+        self.assertEqual(
+            gateway.inspect_calls,
+            [("primary", ("order-1",))],
+        )
+        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertEqual(
+            repository.complete_without_calls[0][1],
+            ("order-1",),
+        )
+        self.assertEqual(
+            repository.complete_without_calls[0][3][0].phase,
+            OrderObservationPhase.PRE_CANCEL,
+        )
+
+    def test_stale_partial_fill_replaces_only_remaining_quantity(
+        self,
+    ) -> None:
+        group = _record(
+            created_at=_event().observed_at - timedelta(minutes=8)
+        )
+        repository = _Repository(groups=(group,))
+        gateway = _Gateway(
+            inspections=(
+                _inspection(
+                    ("order-1",),
+                    state=RemoteOrderState.OPEN,
+                    original=Decimal("25"),
+                    matched=Decimal("10"),
+                ),
+            ),
+            replacements=(
+                _replacement(quantity=Decimal("15")),
+            ),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.on_tick_size_change(_event())
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.REPLACED,
+        )
+        self.assertEqual(
+            gateway.place_calls[0].quantity,
+            Decimal("15"),
+        )
+        self.assertEqual(
+            gateway.cancel_calls,
+            [("primary", ("order-1",))],
+        )
+        self.assertEqual(
+            repository.complete_calls[0][4][0].phase,
+            OrderObservationPhase.PRE_CANCEL,
+        )
+
+    def test_stale_preinspection_failure_fails_closed(
+        self,
+    ) -> None:
+        group = _record(
+            created_at=_event().observed_at - timedelta(minutes=8)
+        )
+        repository = _Repository(groups=(group,))
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=("order-1",),
+                    snapshots=(),
+                    failed_order_ids=("order-1",),
+                    error="temporary lookup failure",
+                ),
+            ),
+            replacements=(_replacement(),),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.on_tick_size_change(_event())
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.FAILED,
+        )
+        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(gateway.cancel_calls, [])
+        self.assertIn(
+            "stage=stale_source_preinspection",
+            results[0].error,
+        )
 
     def test_does_not_read_unconfirmed_post_cancel_state(
         self,

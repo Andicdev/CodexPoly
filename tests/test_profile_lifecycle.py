@@ -516,6 +516,7 @@ class _ReadinessStore:
             deactivate_at=_NOW + timedelta(hours=8),
         )
         self.completed = []
+        self.deferred = []
         self.failed = []
 
     def claim_preflight(self, *, now, lease_seconds):
@@ -527,6 +528,9 @@ class _ReadinessStore:
 
     def fail_preflight(self, claim, **kwargs):
         self.failed.append((claim, kwargs))
+
+    def defer_preflight(self, claim, **kwargs):
+        self.deferred.append((claim, kwargs))
 
 
 class _ProfileStore:
@@ -562,6 +566,24 @@ class _PreflightExecutor:
         self.closed = True
 
 
+class _FailedPreflightExecutor(_PreflightExecutor):
+    def prepare(self, templates, *, context: PreparationContext):
+        return PreparationSummary(
+            items=tuple(
+                PreparationItem(
+                    template_id=template.template_id,
+                    status=PreparationStatus.FAILED,
+                    error=(
+                        "Authenticated preflight failed: "
+                        "UnexpectedResponseError"
+                    ),
+                )
+                for template in templates
+            ),
+            context=context,
+        )
+
+
 class ProfileReadinessWorkerTests(unittest.TestCase):
     def test_authenticated_preflight_records_ready_without_execute(
         self,
@@ -584,10 +606,46 @@ class ProfileReadinessWorkerTests(unittest.TestCase):
 
         self.assertTrue(processed)
         self.assertEqual(len(store.completed), 1)
+        self.assertEqual(store.deferred, [])
         self.assertEqual(store.failed, [])
         evidence = store.completed[0][1]["evidence"]
         self.assertTrue(evidence["all_presigned"])
         self.assertEqual(evidence["template_count"], 2)
+        self.assertTrue(executor.closed)
+
+    def test_transient_preflight_failure_is_deferred_for_retry(
+        self,
+    ) -> None:
+        store = _ReadinessStore()
+        executor = _FailedPreflightExecutor()
+        worker = ProfileReadinessWorker(
+            settings=ProfileReadinessSettings(
+                database_url="postgresql://configured",
+                retry_seconds=10,
+                readiness_ttl_seconds=1_800,
+            ),
+            store=store,
+            profile_store=_ProfileStore(),
+            safety=LiveSafetySettings(),
+            executor_factory=lambda profile: executor,
+            clock=lambda: _NOW,
+        )
+
+        processed = worker.run_once()
+
+        self.assertTrue(processed)
+        self.assertEqual(store.completed, [])
+        self.assertEqual(store.failed, [])
+        self.assertEqual(len(store.deferred), 1)
+        deferred = store.deferred[0][1]
+        self.assertEqual(
+            deferred["error_code"],
+            "preflight_transport_unavailable",
+        )
+        self.assertEqual(
+            deferred["retry_at"],
+            _NOW + timedelta(seconds=10),
+        )
         self.assertTrue(executor.closed)
 
 

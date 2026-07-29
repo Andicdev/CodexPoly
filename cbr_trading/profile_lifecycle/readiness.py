@@ -50,6 +50,15 @@ class ReadinessStore(Protocol):
         error_code: str,
     ) -> None: ...
 
+    def defer_preflight(
+        self,
+        claim: ProfilePreflightClaim,
+        *,
+        checked_at: datetime,
+        retry_at: datetime,
+        error_code: str,
+    ) -> None: ...
+
 
 class ProfileStore(Protocol):
     def ensure_ready(self) -> None: ...
@@ -93,6 +102,7 @@ class ProfileReadinessWorker:
         )
         self._checked = 0
         self._ready = 0
+        self._retried = 0
         self._blocked = 0
 
     def run_once(self) -> bool:
@@ -125,8 +135,8 @@ class ProfileReadinessWorker:
                 ),
             )
             if not summary.ready:
-                raise RuntimeError(
-                    "authenticated_preflight_not_ready"
+                raise _PreflightNotReady(
+                    _summary_error_code(summary)
                 )
             checked_at = self._now()
             valid_until = min(
@@ -167,14 +177,33 @@ class ProfileReadinessWorker:
                 len(templates),
             )
         except Exception as exc:
-            self._blocked += 1
             error_code = _safe_error_code(exc)
+            checked_at = self._now()
+            retry_at = min(
+                checked_at
+                + timedelta(
+                    seconds=self._settings.retry_seconds
+                ),
+                claim.deactivate_at,
+            )
+            should_retry = (
+                error_code != "preflight_window_expired"
+                and retry_at > checked_at
+            )
             try:
-                self._store.fail_preflight(
-                    claim,
-                    checked_at=self._now(),
-                    error_code=error_code,
-                )
+                if should_retry:
+                    self._store.defer_preflight(
+                        claim,
+                        checked_at=checked_at,
+                        retry_at=retry_at,
+                        error_code=error_code,
+                    )
+                else:
+                    self._store.fail_preflight(
+                        claim,
+                        checked_at=checked_at,
+                        error_code=error_code,
+                    )
             except Exception as persistence_exc:
                 self._logger.error(
                     "Profile preflight failure could not be persisted "
@@ -183,13 +212,24 @@ class ProfileReadinessWorker:
                     type(persistence_exc).__name__,
                 )
                 raise
-            self._logger.warning(
-                "Profile authenticated preflight blocked profile=%s "
-                "schedule=%s error_code=%s",
-                claim.profile_key,
-                claim.schedule_key,
-                error_code,
-            )
+            if should_retry:
+                self._retried += 1
+                self._logger.warning(
+                    "Profile authenticated preflight deferred "
+                    "profile=%s schedule=%s error_code=%s",
+                    claim.profile_key,
+                    claim.schedule_key,
+                    error_code,
+                )
+            else:
+                self._blocked += 1
+                self._logger.warning(
+                    "Profile authenticated preflight blocked "
+                    "profile=%s schedule=%s error_code=%s",
+                    claim.profile_key,
+                    claim.schedule_key,
+                    error_code,
+                )
         finally:
             if executor is not None:
                 try:
@@ -249,14 +289,77 @@ class ProfileReadinessWorker:
             await asyncio.sleep(self._settings.heartbeat_interval)
             self._logger.info(
                 "Profile readiness heartbeat checked=%s ready=%s "
-                "blocked=%s",
+                "retried=%s blocked=%s",
                 self._checked,
                 self._ready,
+                self._retried,
                 self._blocked,
             )
 
 
+class _PreflightNotReady(RuntimeError):
+    def __init__(self, error_code: str):
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
+def _summary_error_code(summary: Any) -> str:
+    errors = " ".join(
+        str(getattr(item, "error", "") or "").casefold()
+        for item in tuple(getattr(summary, "items", ()))
+    )
+    if "insufficient collateral" in errors:
+        return "preflight_insufficient_collateral"
+    if any(
+        marker in errors
+        for marker in (
+            "max_notional",
+            "max_order",
+            "aggregate notional",
+            "account_not_allowed",
+            "live safety",
+        )
+    ):
+        return "preflight_safety_not_ready"
+    if any(
+        marker in errors
+        for marker in (
+            "wallet",
+            "signature type",
+            "decrypt",
+            "authentication",
+        )
+    ):
+        return "preflight_account_authentication_failed"
+    if any(
+        marker in errors
+        for marker in (
+            "order book",
+            "condition",
+            "tick size",
+            "minimum order",
+            "market snapshot",
+        )
+    ):
+        return "preflight_market_not_ready"
+    if any(
+        marker in errors
+        for marker in (
+            "timeout",
+            "connection",
+            "unexpectedresponse",
+            "rate limit",
+            "httperror",
+        )
+    ):
+        return "preflight_transport_unavailable"
+    return "authenticated_preflight_not_ready"
+
+
 def _safe_error_code(exc: Exception) -> str:
+    explicit = str(getattr(exc, "error_code", "") or "").strip()
+    if explicit:
+        return explicit[:100]
     safe = redact_exception(exc).casefold()
     if "window_expired" in safe:
         return "preflight_window_expired"

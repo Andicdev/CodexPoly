@@ -55,6 +55,7 @@ class PersistentOrderSupervisor:
             minutes=5
         ),
         reconciliation_batch_size: int = 100,
+        preinspect_after: timedelta = timedelta(seconds=5),
         clock: Callable[[], datetime] | None = None,
     ):
         if (
@@ -73,6 +74,11 @@ class PersistentOrderSupervisor:
             raise ValueError(
                 "reconciliation_batch_size must be between 1 and 1000"
             )
+        if (
+            not isinstance(preinspect_after, timedelta)
+            or preinspect_after <= timedelta(0)
+        ):
+            raise ValueError("preinspect_after must be positive")
         self._repository = repository
         self._gateway = gateway
         self._reconciliation_stale_after = (
@@ -81,6 +87,7 @@ class PersistentOrderSupervisor:
         self._reconciliation_batch_size = (
             reconciliation_batch_size
         )
+        self._preinspect_after = preinspect_after
         self._clock = clock or _utc_now
         self._lock = threading.RLock()
         self._closed = False
@@ -201,16 +208,82 @@ class PersistentOrderSupervisor:
         replacements: tuple[PlacedOrder, ...] = ()
         observations: tuple[OrderObservation, ...] = ()
         replacement_persisted = False
-        stage = "replacement_request"
+        replacement_quantity = group.registration.quantity
+        replacement_notional = group.registration.notional
+        cancellation_targets = group.live_order_ids
+        stage = "stale_source_preinspection"
         try:
             if not group.live_order_ids:
                 raise RuntimeError("order_group_has_no_live_orders")
 
+            if self._requires_stale_preinspection(group, event=event):
+                inspection = self._gateway.inspect_orders(
+                    account_name=group.registration.account_name,
+                    order_ids=group.live_order_ids,
+                )
+                snapshots = _validated_inspection(
+                    inspection,
+                    requested_order_ids=group.live_order_ids,
+                    group=group,
+                )
+                if inspection.failed_order_ids:
+                    raise RuntimeError(
+                        inspection.error
+                        or "stale_source_preinspection_failed"
+                    )
+                _require_known_states(snapshots)
+                _validate_original_sizing(snapshots, group=group)
+                observations = tuple(
+                    OrderObservation(
+                        phase=OrderObservationPhase.PRE_CANCEL,
+                        snapshot=snapshot,
+                    )
+                    for snapshot in snapshots
+                )
+                filled = tuple(
+                    snapshot.order_id
+                    for snapshot in snapshots
+                    if snapshot.state == RemoteOrderState.FILLED
+                )
+                cancelled = tuple(
+                    snapshot.order_id
+                    for snapshot in snapshots
+                    if snapshot.state == RemoteOrderState.CANCELLED
+                )
+                cancellation_targets = tuple(
+                    snapshot.order_id
+                    for snapshot in snapshots
+                    if snapshot.state == RemoteOrderState.OPEN
+                )
+                (
+                    replacement_quantity,
+                    replacement_notional,
+                ) = _remaining_from_snapshots(group, snapshots=snapshots)
+                if (
+                    replacement_quantity is None
+                    and replacement_notional is None
+                ):
+                    stage = "filled_source_completion"
+                    self._repository.complete_without_replacement(
+                        claim,
+                        filled_order_ids=filled,
+                        cancelled_order_ids=cancelled,
+                        observations=observations,
+                    )
+                    return SupervisionResult(
+                        event_id=event.event_id,
+                        order_group_id=(
+                            group.registration.order_group_id
+                        ),
+                        status=SupervisionStatus.COMPLETED,
+                    )
+
+            stage = "replacement_request"
             request = _replacement_request(
                 group,
                 cancelled_order_ids=group.live_order_ids,
-                remaining_quantity=group.registration.quantity,
-                remaining_notional=group.registration.notional,
+                remaining_quantity=replacement_quantity,
+                remaining_notional=replacement_notional,
             )
             stage = "replacement_submission"
             replacements = tuple(
@@ -235,34 +308,46 @@ class PersistentOrderSupervisor:
             replacement_persisted = True
 
             stage = "source_cancellation"
-            cancellation = self._gateway.cancel_orders(
-                account_name=group.registration.account_name,
-                order_ids=group.live_order_ids,
-            )
-            if not isinstance(cancellation, CancellationResult):
-                raise TypeError(
-                    "gateway returned invalid cancellation result"
+            if cancellation_targets:
+                cancellation = self._gateway.cancel_orders(
+                    account_name=group.registration.account_name,
+                    order_ids=cancellation_targets,
                 )
-            if (
-                set(cancellation.requested_order_ids)
-                != set(group.live_order_ids)
-            ):
-                raise ValueError(
-                    "gateway cancellation scope does not match "
-                    "source group orders"
+                if not isinstance(cancellation, CancellationResult):
+                    raise TypeError(
+                        "gateway returned invalid cancellation result"
+                    )
+                if set(cancellation.requested_order_ids) != set(
+                    cancellation_targets
+                ):
+                    raise ValueError(
+                        "gateway cancellation scope does not match "
+                        "source group orders"
+                    )
+                confirmed_cancelled = set(
+                    cancellation.cancelled_order_ids
                 )
-            cancelled = tuple(cancellation.cancelled_order_ids)
-            if cancellation.failed_order_ids:
-                raise RuntimeError(
-                    cancellation.error
-                    or "one_or_more_cancellations_failed"
+                cancelled = _unique_ids(
+                    cancelled,
+                    tuple(
+                        order_id
+                        for order_id in cancellation_targets
+                        if order_id in confirmed_cancelled
+                    ),
                 )
+                if cancellation.failed_order_ids:
+                    raise RuntimeError(
+                        cancellation.error
+                        or "one_or_more_cancellations_failed"
+                    )
 
             stage = "completion_persistence"
             self._repository.complete_reprice(
                 claim,
-                cancelled_order_ids=group.live_order_ids,
+                cancelled_order_ids=cancelled,
                 replacement_orders=replacements,
+                filled_order_ids=filled,
+                observations=observations,
             )
             return SupervisionResult(
                 event_id=event.event_id,
@@ -304,6 +389,17 @@ class PersistentOrderSupervisor:
                     for order in replacements
                 ),
             )
+
+    def _requires_stale_preinspection(
+        self,
+        group: OrderGroupRecord,
+        *,
+        event: TickSizeChange,
+    ) -> bool:
+        created_at = group.created_at
+        if created_at is None:
+            return False
+        return event.observed_at - created_at >= self._preinspect_after
 
     def _reconcile_candidate(
         self,
@@ -857,6 +953,38 @@ def _remaining_sizing(
             final_by_id[order_id].remaining_quantity
             * final_by_id[order_id].limit_price
             for order_id in cancelled_order_ids
+        ),
+        Decimal("0"),
+    )
+    if remaining_notional == 0:
+        return None, None
+    return None, remaining_notional
+
+
+def _remaining_from_snapshots(
+    group: OrderGroupRecord,
+    *,
+    snapshots: Sequence[RemoteOrderSnapshot],
+) -> tuple[Decimal | None, Decimal | None]:
+    registration = group.registration
+    if registration.quantity is not None:
+        remaining_quantity = sum(
+            (
+                snapshot.remaining_quantity
+                for snapshot in snapshots
+            ),
+            Decimal("0"),
+        )
+        if remaining_quantity == 0:
+            return None, None
+        return remaining_quantity, None
+
+    if registration.notional is None:
+        raise ValueError("order group sizing is missing")
+    remaining_notional = sum(
+        (
+            snapshot.remaining_quantity * snapshot.limit_price
+            for snapshot in snapshots
         ),
         Decimal("0"),
     )

@@ -34,6 +34,12 @@ Only schedules in the selected block are changed together:
 5. finish each resolved or missed profile independently;
 6. disable every remaining profile when the block window closes.
 
+Authenticated preflight is retryable while the schedule remains
+`PREFLIGHTING`. A transient failed attempt records a classified safe error and
+sets a short retry lease; it does not immediately make the profile
+`BLOCKED`. The scheduler still fails closed at the activation-grace deadline
+if no attempt reaches `READY`.
+
 Starting `PRE_MARKET` must not implicitly arm `POST_MARKET`. Starting
 `POST_MARKET` requires a new guarded transition and a new production audit.
 This keeps preparation capacity, notional accounting, incident handling, and
