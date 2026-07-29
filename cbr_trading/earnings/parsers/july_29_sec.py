@@ -973,7 +973,7 @@ def pag_q2_2026_shadow_rule() -> EarningsMarketRule:
 
 
 def qcom_q3_2026_shadow_rule() -> EarningsMarketRule:
-    return _sec_rule(
+    rule = _sec_rule(
         ticker="QCOM",
         cik=QUALCOMM_CIK,
         fiscal_quarter=3,
@@ -988,6 +988,28 @@ def qcom_q3_2026_shadow_rule() -> EarningsMarketRule:
         ),
         condition_id=QUALCOMM_Q3_2026_CONDITION_ID,
         metric_selection="primary_headline_non_gaap_eps",
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "company_ir": {
+                "allowed_document_hosts": ["s204.q4cdn.com"],
+                "feed_url": (
+                    "https://s204.q4cdn.com/645488518/files/"
+                    "doc_financials/2026/q3/"
+                    "FY2026-3rd-Quarter-Earnings-Release.pdf"
+                ),
+                "kind": "direct_document",
+                "provider": "company_ir",
+                "title_all": [
+                    "Qualcomm",
+                    "Third Quarter",
+                    "Fiscal 2026",
+                    "Earnings Release",
+                ],
+            },
+        },
     )
 
 

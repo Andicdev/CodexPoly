@@ -24,6 +24,7 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     iart_q2_2026_shadow_rule,
     meta_q2_2026_shadow_rule,
     msft_q4_2026_shadow_rule,
+    qcom_q3_2026_shadow_rule,
     pag_q2_2026_shadow_rule,
     pg_q4_2026_shadow_rule,
     sofi_q2_2026_shadow_rule,
@@ -736,6 +737,32 @@ class EarningsPublicSourceTests(unittest.TestCase):
         self.assertEqual(
             watch.allowed_document_hosts,
             ("www.microsoft.com",),
+        )
+
+    def test_qualcomm_builds_direct_official_earnings_pdf_watch(
+        self,
+    ) -> None:
+        watches = public_release_watches_from_rules(
+            (qcom_q3_2026_shadow_rule(),)
+        )
+        self.assertEqual(len(watches), 1)
+        watch = watches[0]
+        self.assertEqual(
+            watch.provider,
+            EarningsProvider.COMPANY_IR,
+        )
+        self.assertEqual(watch.kind, "direct_document")
+        self.assertEqual(
+            watch.feed_url,
+            (
+                "https://s204.q4cdn.com/645488518/files/"
+                "doc_financials/2026/q3/"
+                "FY2026-3rd-Quarter-Earnings-Release.pdf"
+            ),
+        )
+        self.assertEqual(
+            watch.allowed_document_hosts,
+            ("s204.q4cdn.com",),
         )
 
     def test_microsoft_ir_routes_results_and_rejects_announcement(
