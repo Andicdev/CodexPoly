@@ -26,6 +26,13 @@ _VERIFY = (
     / "checks"
     / "verify_july_29_completion_reconciliation.sql"
 )
+_GENERIC_VERIFY = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_profile_completion_runtime_invariants.sql"
+)
 
 
 class July29CompletionReconciliationSqlTests(unittest.TestCase):
@@ -69,7 +76,7 @@ class July29CompletionReconciliationSqlTests(unittest.TestCase):
         self.assertNotIn("CANCEL", upper)
 
     def test_diagnostic_and_verification_are_read_only(self) -> None:
-        for path in (_DIAGNOSTIC, _VERIFY):
+        for path in (_DIAGNOSTIC, _VERIFY, _GENERIC_VERIFY):
             upper = path.read_text(encoding="utf-8").upper()
 
             self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
@@ -78,6 +85,24 @@ class July29CompletionReconciliationSqlTests(unittest.TestCase):
             self.assertNotIn("INSERT ", upper)
             self.assertNotIn("DELETE ", upper)
             self.assertNotIn("CANCEL", upper)
+
+    def test_generic_completion_invariant_distinguishes_live_and_historical(
+        self,
+    ) -> None:
+        upper = _GENERIC_VERIFY.read_text(encoding="utf-8").upper()
+
+        self.assertIn("'RESOLUTION_EXECUTION_COMPLETED'", upper)
+        self.assertIn("'HISTORICAL_EXECUTED_CLAIM_RECONCILED'", upper)
+        self.assertIn("EVENT.PREVIOUS_STATE = 'ACTIVE'", upper)
+        self.assertIn(
+            "EVENT.PREVIOUS_STATE IN ('ACTIVE', 'BLOCKED')",
+            upper,
+        )
+        self.assertIn("'HISTORICAL_RECONCILIATION' = 'TRUE'", upper)
+        self.assertIn(
+            "'EXISTING_ORDERS_LEFT_UNCHANGED' = 'TRUE'",
+            upper,
+        )
 
 
 if __name__ == "__main__":

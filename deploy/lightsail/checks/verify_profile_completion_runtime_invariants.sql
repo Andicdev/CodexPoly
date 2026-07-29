@@ -28,12 +28,25 @@ BEGIN
               SELECT 1
               FROM resolution_profile_schedule_events AS event
               WHERE event.schedule_id = schedule.id
-                AND event.previous_state = 'ACTIVE'
                 AND event.next_state = 'COMPLETED'
                 AND event.event_kind =
                     'RESOLUTION_EXECUTION_COMPLETED'
-                AND event.reason_code =
-                    'resolution_execution_completed'
+                AND (
+                    (
+                        event.previous_state = 'ACTIVE'
+                        AND event.reason_code =
+                            'resolution_execution_completed'
+                    )
+                    OR (
+                        event.previous_state IN ('ACTIVE', 'BLOCKED')
+                        AND event.reason_code =
+                            'historical_executed_claim_reconciled'
+                        AND event.metadata
+                            ->> 'historical_reconciliation' = 'true'
+                        AND event.metadata
+                            ->> 'existing_orders_left_unchanged' = 'true'
+                    )
+                )
           )
     ) THEN
         RAISE EXCEPTION
