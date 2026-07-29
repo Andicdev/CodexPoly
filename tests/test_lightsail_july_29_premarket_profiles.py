@@ -40,6 +40,20 @@ _ARMED_CHECK = (
     / "checks"
     / "verify_july_29_premarket_auto_live_armed.sql"
 )
+_READY_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_29_premarket_preflight_ready.sql"
+)
+_ACTIVE_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_29_premarket_live_active.sql"
+)
 
 
 class July29PremarketProfileSqlTests(unittest.TestCase):
@@ -155,6 +169,25 @@ class July29PremarketProfileSqlTests(unittest.TestCase):
         self.assertIn("FRESH FULLY-LIVE RESOLUTION HEARTBEAT", upper)
         self.assertIn("FACTS OR CLAIMS ALREADY EXIST", upper)
         self.assertNotIn("SELECT *", upper)
+
+    def test_ready_and_active_checks_are_read_only(self) -> None:
+        ready = _READY_CHECK.read_text(encoding="utf-8")
+        active = _ACTIVE_CHECK.read_text(encoding="utf-8")
+
+        for text in (ready, active):
+            upper = text.upper()
+            self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
+            self.assertIn("ROLLBACK", upper)
+            self.assertIn("READINESS_EVIDENCE <> '{}'::JSONB", upper)
+            self.assertIn("FRESH FULLY-LIVE RESOLUTION HEARTBEAT", upper)
+            self.assertIn("FACTS OR CLAIMS ALREADY EXIST", upper)
+            self.assertNotIn("SELECT *", upper)
+
+        self.assertIn("schedule.state = 'READY'", ready)
+        self.assertIn("profile.status = 'DISABLED'", ready)
+        self.assertIn("schedule.state = 'ACTIVE'", active)
+        self.assertIn("profile.status = 'ENABLED'", active)
+        self.assertIn("active_notional <> 899.1", active)
 
 
 if __name__ == "__main__":
