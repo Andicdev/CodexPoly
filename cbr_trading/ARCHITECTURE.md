@@ -122,10 +122,11 @@ parameters needed to persist a replaceable order without re-reading a
 source-specific rule. Repricing registration requires side, desired price,
 and exactly one sizing mode.
 
-The migrations are intentionally forward-only and additive. They use only
-`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`; they do not
-alter or drop any legacy table, column, constraint, or data. Migration 002
-only adds the observation table and leaves migration 001 unchanged. The
+The migrations are intentionally forward-only and preserve legacy tables,
+columns, and data. Most migrations add tables, indexes, or views. A migration
+may replace a validation constraint when a new backward-compatible state is
+introduced; migration 018 does this to add `OBSERVED` while retaining every
+previously accepted fact status. No legacy field or row is removed. The
 production runner does not apply migrations automatically. Migration and
 readiness verification are explicit repository operations.
 
