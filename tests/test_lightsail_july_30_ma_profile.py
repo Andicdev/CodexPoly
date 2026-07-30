@@ -30,6 +30,8 @@ class July30MastercardProfileTests(unittest.TestCase):
         self.assertIn("'AUTO_PREFLIGHT'", text)
         self.assertIn("'DISABLED'", text)
         self.assertIn('"provider": "businesswire"', text)
+        self.assertIn("'MIXED'", text)
+        self.assertNotIn("'FULL_HTML_OR_PDF'", text)
         self.assertIn("'2026-07-30 13:00:00+00'", text)
         self.assertIn("0.999", text)
         self.assertIn("quantity = 100", text)

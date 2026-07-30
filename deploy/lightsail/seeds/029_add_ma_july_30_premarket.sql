@@ -227,7 +227,7 @@ VALUES (
     'CONFIRMED',
     'https://investor.mastercard.com/investor-news/investor-news-details/2026/Mastercard-Incorporated-to-Host-Conference-Call-on-Second-Quarter-2026-Financial-Results/default.aspx',
     'PARSER_ONLY',
-    'FULL_HTML_OR_PDF',
+    'MIXED',
     '{
         "comparison_op": ">",
         "market_basis": "non_gaap_eps",
