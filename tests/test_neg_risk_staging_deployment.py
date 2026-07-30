@@ -15,6 +15,18 @@ COMPOSE = (
 
 
 class NegRiskStagingDeploymentTests(unittest.TestCase):
+    def test_runtime_image_contains_neg_risk_package(
+        self,
+    ) -> None:
+        dockerfile = (
+            ROOT / "Dockerfile"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "COPY neg_risk_trading neg_risk_trading",
+            dockerfile,
+        )
+
     def test_recorder_is_shadow_only_and_uses_isolated_database(
         self,
     ) -> None:
