@@ -74,7 +74,9 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     wing_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.july_30_sec import (
+    MastercardAdjustedDilutedEpsParser,
     VirtuNormalizedAdjustedEpsParser,
+    mastercard_q2_2026_shadow_rule,
     virt_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.navitas import (
@@ -114,6 +116,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "IVZ": InvescoAdjustedDilutedEpsParser(),
         "JBLU": JetBlueAdjustedDilutedEpsParser(),
         "KO": CocaColaComparableEpsParser(),
+        "MA": MastercardAdjustedDilutedEpsParser(),
         "META": MetaGaapEpsParser(),
         "MSFT": MicrosoftGaapEpsParser(),
         "NVTS": NavitasEpsParser(),
@@ -153,6 +156,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         ivz_q2_2026_shadow_rule(),
         jblu_q2_2026_shadow_rule(),
         ko_q2_2026_shadow_rule(),
+        mastercard_q2_2026_shadow_rule(),
         meta_q2_2026_shadow_rule(),
         msft_q4_2026_shadow_rule(),
         nvts_q2_2026_shadow_rule(),
@@ -191,6 +195,7 @@ __all__ = [
     "IntegraAdjustedDilutedEpsParser",
     "InvescoAdjustedDilutedEpsParser",
     "JetBlueAdjustedDilutedEpsParser",
+    "MastercardAdjustedDilutedEpsParser",
     "MetaGaapEpsParser",
     "MicrosoftGaapEpsParser",
     "NavitasEpsParser",
@@ -229,6 +234,7 @@ __all__ = [
     "ivz_q2_2026_shadow_rule",
     "jblu_q2_2026_shadow_rule",
     "ko_q2_2026_shadow_rule",
+    "mastercard_q2_2026_shadow_rule",
     "meta_q2_2026_shadow_rule",
     "msft_q4_2026_shadow_rule",
     "nvts_q2_2026_shadow_rule",

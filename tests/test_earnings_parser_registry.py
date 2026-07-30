@@ -33,6 +33,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "IVZ",
                 "JBLU",
                 "KO",
+                "MA",
                 "META",
                 "MSFT",
                 "NVTS",
@@ -73,6 +74,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "IVZ",
                 "JBLU",
                 "KO",
+                "MA",
                 "META",
                 "MSFT",
                 "NVTS",
@@ -98,7 +100,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            35,
+            36,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(

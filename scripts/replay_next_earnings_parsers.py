@@ -59,6 +59,11 @@ from cbr_trading.earnings.parsers.july_28_sec import (
     ups_q2_2026_shadow_rule,
     visa_q3_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.july_30_sec import (
+    MASTERCARD_CIK,
+    MastercardAdjustedDilutedEpsParser,
+    mastercard_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.royal_caribbean import (
     ROYAL_CARIBBEAN_CIK,
     RoyalCaribbeanAdjustedEpsParser,
@@ -187,6 +192,22 @@ _REPLAYS = {
             "000162828026027723/a2026q1earningsreleaseex-9.htm"
         ),
         "0.86",
+    ),
+    "MA": (
+        MastercardAdjustedDilutedEpsParser(),
+        replace(
+            mastercard_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("MA", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        MASTERCARD_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1141391/"
+            "000114139126000029/"
+            "ma03312026-exx991xearnings.htm"
+        ),
+        "4.60",
     ),
     "PYPL": (
         PayPalNonGaapEpsParser(),
