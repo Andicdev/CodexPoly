@@ -34,6 +34,7 @@ class EarningsWorkerSettings:
     sec_current_polling_enabled: bool = False
     sec_current_poll_interval: float = 0.25
     sec_current_max_requests_per_second: float = 5.0
+    source_observation_tail_seconds: float = 0.0
     mstr_btc_shadow_enabled: bool = False
     mstr_btc_ledger_enabled: bool = False
     mstr_btc_ledger_url: str = "https://www.strategy.com/ledger"
@@ -152,6 +153,14 @@ class EarningsWorkerSettings:
                 )
                 or "5"
             ),
+            source_observation_tail_seconds=float(
+                _clean(
+                    env.get(
+                        "EARNINGS_SOURCE_OBSERVATION_TAIL_SEC"
+                    )
+                )
+                or "0"
+            ),
             mstr_btc_shadow_enabled=_bool_value(
                 env.get("MSTR_BTC_SHADOW_ENABLED"),
                 default=False,
@@ -266,6 +275,11 @@ class EarningsWorkerSettings:
             raise ValueError(
                 "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC must be "
                 "between 0.5 and 5"
+            )
+        if not 0 <= self.source_observation_tail_seconds <= 86_400:
+            raise ValueError(
+                "EARNINGS_SOURCE_OBSERVATION_TAIL_SEC must be "
+                "between 0 and 86400"
             )
         if (
             self.mstr_btc_ledger_enabled

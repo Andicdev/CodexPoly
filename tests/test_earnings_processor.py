@@ -37,6 +37,7 @@ class _Store:
         self.facts = list(existing_facts)
         self.recorded_events = 0
         self.recorded_facts = 0
+        self.recorded_fact_statuses = []
 
     def record_source_event(self, _candidate):
         self.recorded_events += 1
@@ -59,13 +60,16 @@ class _Store:
         source_event_id: int,
         candidate,
         reason: str,
+        status: str = "VALIDATED",
     ):
         self.recorded_facts += 1
-        self.facts.append(candidate)
+        self.recorded_fact_statuses.append(status)
+        if status == "VALIDATED":
+            self.facts.append(candidate)
         return StoredEarningsRecord(
             row_id=22,
             created=True,
-            status="VALIDATED",
+            status=status,
         )
 
     def load_validated_facts(self, *, scope_id=None):
@@ -137,6 +141,10 @@ class EarningsShadowProcessorTests(unittest.TestCase):
             ["FETCHED", "PARSED"],
         )
         self.assertEqual(store.recorded_facts, 1)
+        self.assertEqual(
+            store.recorded_fact_statuses,
+            ["VALIDATED"],
+        )
         final_timing = store.timings[-1]
         assert final_timing is not None
         self.assertEqual(
@@ -144,6 +152,45 @@ class EarningsShadowProcessorTests(unittest.TestCase):
             "legacy_fetch",
         )
         self.assertEqual(final_timing.fact_persisted_at, _NOW)
+
+    def test_observation_only_fact_cannot_emit_signal(self) -> None:
+        store = _Store()
+        fetcher = _Fetcher(
+            _document(
+                "June 30, 2026",
+                "(0.03)",
+            ).encode()
+        )
+        processor = EarningsShadowProcessor(
+            store=store,
+            rules=[nvts_q2_2026_shadow_rule()],
+            parsers={"NVTS": NavitasEpsParser()},
+            document_fetcher=fetcher,
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            observation_only=True,
+            clock=lambda: _NOW,
+            sleep=lambda _seconds: None,
+        )
+
+        result = processor.process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(
+            result.status,
+            ShadowProcessingStatus.OBSERVED,
+        )
+        self.assertIsNone(result.signal)
+        self.assertEqual(
+            store.recorded_fact_statuses,
+            ["OBSERVED"],
+        )
+        self.assertEqual(store.facts, [])
+        self.assertEqual(
+            [status for _, status, _ in store.statuses],
+            ["FETCHED", "PARSED"],
+        )
 
     def test_terminal_duplicate_does_not_fetch_or_parse(self) -> None:
         store = _Store(

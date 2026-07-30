@@ -23,7 +23,12 @@ from tests.test_earnings_navitas_parser import _DETECTED, _source
 
 class EarningsSourceTelemetryTests(unittest.TestCase):
     def test_migration_is_additive_and_backfills_legacy_rows(self) -> None:
-        migration = _MIGRATION_PATHS[-1]
+        migration = next(
+            path
+            for path in _MIGRATION_PATHS
+            if path.name
+            == "016_add_earnings_source_telemetry.sql"
+        )
         sql = migration.read_text(encoding="utf-8").casefold()
 
         self.assertEqual(
@@ -43,6 +48,28 @@ class EarningsSourceTelemetryTests(unittest.TestCase):
             sql,
         )
         self.assertIn("'legacy_unknown'", sql)
+
+    def test_observation_migration_adds_non_tradable_race_view(
+        self,
+    ) -> None:
+        migration = next(
+            path
+            for path in _MIGRATION_PATHS
+            if path.name
+            == "018_add_observation_only_earnings_facts.sql"
+        )
+        sql = migration.read_text(encoding="utf-8").casefold()
+
+        self.assertNotIn("drop table", sql)
+        self.assertNotIn("drop column", sql)
+        self.assertIn("'observed'", sql)
+        self.assertIn(
+            "create or replace view "
+            "earnings_source_race_observations",
+            sql,
+        )
+        self.assertIn("source_race_lag_ms", sql)
+        self.assertIn("agrees_with_winner", sql)
 
     def test_event_params_persist_exact_transport(self) -> None:
         candidate = replace(

@@ -87,6 +87,14 @@ fair-access ceiling. A new initial `8-K` must contain Item 2.02, fall inside
 the bounded release lookback, and expose exactly one `EX-99.1` on the official
 filing-detail page before it enters the existing SEC router and parser.
 
+Both profile-gated earnings HTTP paths retain a bounded 15-minute
+observation-only tail after an `ACTIVE` schedule becomes terminal. Tail
+documents are still fetched and parsed for source-race telemetry, but their
+facts use status `OBSERVED`; they cannot enter the resolution source or
+trigger trading/Telegram. The tail is reconstructed from append-only
+lifecycle events after a worker restart. Production and staging set
+`EARNINGS_SOURCE_OBSERVATION_TAIL_SEC=900`.
+
 The resolution worker also owns the checked-in July 2026 FOMC decision
 source. It makes no Federal Reserve request unless at least one in-window
 `fed_fomc` profile is enabled. While active, it races the Board statement,

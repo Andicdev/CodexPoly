@@ -24,7 +24,8 @@ These priorities imply several architectural defaults:
 - official delivery routes for one event race independently; a slow or failed
   route cannot delay another route;
 - WebSocket feeds may stay connected, while HTTP polling is profile-gated and
-  runs only inside a reviewed preparation window;
+  runs only inside a reviewed preparation window plus a bounded,
+  observation-only tail;
 - the first valid provider wins, but all providers emit the same canonical
   fact and stable event scope;
 - both outcome alternatives and every static dependency are prepared before
@@ -454,7 +455,8 @@ and never cancels an already submitted order. Terminal source-contract,
 strategy, or execution failures instead move the schedule to `BLOCKED` with a
 safe reason code. An unresolved window ends as `EXPIRED`. All transitions are
 append-only audited; notification delivery remains outside the trading hot
-path.
+path. `BLOCKED` is terminal and retains its cause; the expiry sweep never
+rewrites it to `EXPIRED`.
 
 Earnings schedules are grouped into independent `PRE_MARKET` and
 `POST_MARKET` live blocks through the schedule metadata keys `live_block` and
@@ -491,3 +493,13 @@ duplicate worker loses the claim race and cannot call the order endpoint. If
 the process stops before a signal, there is no claim to clean up. A crash
 after reservation remains deliberately fail-closed because submission may be
 ambiguous.
+
+After an `ACTIVE` earnings schedule becomes `COMPLETED`, `BLOCKED`, or
+`EXPIRED`, public and SEC-current polling may continue for a configured
+observation tail (production: 15 minutes). Tail documents are fully fetched
+and parsed, but their facts are stored as `OBSERVED`, never `VALIDATED`.
+They therefore cannot enter `EarningsResolutionSource`, create a resolution
+signal, enqueue a trade notification, or reach strategy/execution. The
+`earnings_source_race_observations` view ranks every valid/observed provider
+by first transport observation and exposes `source_race_lag_ms` plus
+cross-provider value agreement.

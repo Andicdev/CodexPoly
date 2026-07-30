@@ -251,7 +251,7 @@ SELECT
 FROM resolution_profile_schedules AS schedule
 JOIN resolution_execution_profiles AS profile
   ON profile.profile_key = schedule.profile_key
-WHERE schedule.state NOT IN ('COMPLETED', 'EXPIRED')
+WHERE schedule.state NOT IN ('BLOCKED', 'COMPLETED', 'EXPIRED')
   AND schedule.automation_mode IN ('AUTO_PREFLIGHT', 'AUTO_LIVE')
   AND schedule.deactivate_at <= :now
 ORDER BY schedule.deactivate_at, schedule.id

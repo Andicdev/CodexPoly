@@ -163,6 +163,24 @@ WHERE status = 'ENABLED'
 ORDER BY source_name, scope_id, id
 """.strip()
 
+_LOAD_OBSERVATION_TAIL_SCOPES_SQL = """
+SELECT DISTINCT profile.scope_id
+FROM resolution_execution_profiles AS profile
+JOIN resolution_profile_schedules AS schedule
+  ON schedule.profile_key = profile.profile_key
+JOIN resolution_profile_schedule_events AS event
+  ON event.schedule_id = schedule.id
+WHERE lower(profile.source_name) = lower(CAST(:source_name AS text))
+  AND event.previous_state = 'ACTIVE'
+  AND event.next_state IN ('COMPLETED', 'BLOCKED', 'EXPIRED')
+  AND event.created_at >=
+      now() - (
+          CAST(:tail_seconds AS double precision)
+          * interval '1 second'
+      )
+ORDER BY profile.scope_id
+""".strip()
+
 _LOAD_BY_KEY_SQL = """
 SELECT
     profile_key,
@@ -437,6 +455,41 @@ class SqlAlchemyResolutionProfileStore:
                 f"{type(exc).__name__}"
             ) from None
         return tuple(_profile_from_row(row) for row in rows)
+
+    def load_observation_tail_scope_ids(
+        self,
+        *,
+        source_name: str,
+        tail_seconds: float,
+    ) -> tuple[str, ...]:
+        normalized_source = str(source_name or "").strip()
+        duration = float(tail_seconds)
+        if not normalized_source:
+            raise ValueError("source_name is required")
+        if duration <= 0:
+            return ()
+        if duration > 86_400:
+            raise ValueError(
+                "tail_seconds cannot exceed one day"
+            )
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                rows = session.execute(
+                    text_factory(
+                        _LOAD_OBSERVATION_TAIL_SCOPES_SQL
+                    ),
+                    {
+                        "source_name": normalized_source,
+                        "tail_seconds": duration,
+                    },
+                ).mappings().all()
+        except Exception as exc:
+            raise ResolutionProfileStoreError(
+                "Failed to load observation-tail scopes: "
+                f"{type(exc).__name__}"
+            ) from None
+        return tuple(str(row["scope_id"]) for row in rows)
 
     def load(
         self,

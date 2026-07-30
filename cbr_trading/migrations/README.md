@@ -129,6 +129,14 @@ values, columns, profile definitions, claims, or order supervision records.
 Fresh databases receive the same state from migration 012; existing databases
 apply migration 017 before starting a completion-aware resolution worker.
 
+`018_add_observation_only_earnings_facts.sql` expands the existing earnings
+fact-status constraint with `OBSERVED` and creates
+`earnings_source_race_observations`. `OBSERVED` rows retain parsed official
+values and source timing for post-resolution comparison but are excluded from
+the existing `VALIDATED` source query, so they cannot authorize trading. The
+view derives provider rank, `source_race_lag_ms`, and value agreement without
+rewriting historical facts.
+
 The migrations do not alter or drop legacy tables, columns, constraints, or
 data.
 `SqlAlchemyOrderGroupRepository.migrate()` applies migrations 001 and 002 in

@@ -64,11 +64,20 @@ class _EnvelopeTransport:
 
 
 class _ProfileStore:
-    def __init__(self, profiles):
+    def __init__(self, profiles, *, tail_scopes=()):
         self.profiles = tuple(profiles)
+        self.tail_scopes = tuple(tail_scopes)
 
     def load_enabled(self, *, source_name=None):
         return self.profiles
+
+    def load_observation_tail_scope_ids(
+        self,
+        *,
+        source_name,
+        tail_seconds,
+    ):
+        return self.tail_scopes
 
 
 class _PublicClient:
@@ -401,6 +410,43 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(processed, 0)
         self.assertEqual(public_client.watches, [])
 
+    async def test_public_polling_keeps_terminal_scope_in_tail(
+        self,
+    ) -> None:
+        public_client = _PublicClient()
+        scope_id = "earnings:NVTS:2026Q2"
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (),
+                tail_scopes=(scope_id,),
+            ),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=replace(
+                _settings(),
+                source_observation_tail_seconds=900,
+            ),
+            store=_Store(checked_in_shadow_rules()),
+            public_release_client=public_client,
+            public_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_public_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(
+            {
+                watch.scope_id
+                for feed_watches in public_client.watches
+                for watch in feed_watches
+            },
+            {scope_id},
+        )
+        self.assertEqual(worker._public_active_scope_count, 0)
+        self.assertEqual(worker._public_tail_scope_count, 1)
+
     async def test_sec_current_polling_is_profile_scope_gated(
         self,
     ) -> None:
@@ -452,6 +498,43 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(processed, 0)
         self.assertEqual(client.watches, [])
+
+    async def test_sec_current_polling_keeps_terminal_scope_in_tail(
+        self,
+    ) -> None:
+        client = _SecCurrentClient()
+        scope_id = "earnings:NVTS:2026Q2"
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (),
+                tail_scopes=(scope_id,),
+            ),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=replace(
+                _settings(),
+                source_observation_tail_seconds=900,
+            ),
+            store=_Store(checked_in_shadow_rules()),
+            sec_current_client=client,
+            sec_current_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_sec_current_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(
+            {
+                watch.routing_watch.scope_id
+                for watches in client.watches
+                for watch in watches
+            },
+            {scope_id},
+        )
+        self.assertEqual(worker._sec_current_active_scope_count, 0)
+        self.assertEqual(worker._sec_current_tail_scope_count, 1)
 
     async def test_public_feeds_are_polled_concurrently(self) -> None:
         public_client = _ConcurrentPublicClient()
@@ -675,6 +758,7 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 "EARNINGS_SEC_CURRENT_POLL_ENABLED": "true",
                 "EARNINGS_SEC_CURRENT_POLL_SEC": "0.25",
                 "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC": "5",
+                "EARNINGS_SOURCE_OBSERVATION_TAIL_SEC": "900",
             }
         )
 
@@ -684,6 +768,10 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
             enabled.sec_current_max_requests_per_second,
             5,
         )
+        self.assertEqual(
+            enabled.source_observation_tail_seconds,
+            900,
+        )
         with self.assertRaisesRegex(
             ValueError,
             "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC",
@@ -692,6 +780,16 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 {
                     **base,
                     "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC": "6",
+                }
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "EARNINGS_SOURCE_OBSERVATION_TAIL_SEC",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    **base,
+                    "EARNINGS_SOURCE_OBSERVATION_TAIL_SEC": "90000",
                 }
             )
 

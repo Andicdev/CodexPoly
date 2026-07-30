@@ -23,6 +23,7 @@ from cbr_trading.sources.earnings import EarningsResolutionSource
 
 class ShadowProcessingStatus(str, Enum):
     SIGNAL = "signal"
+    OBSERVED = "observed"
     DUPLICATE = "duplicate"
     NO_MATCH = "no_match"
     QUARANTINED = "quarantined"
@@ -66,6 +67,7 @@ class EarningsStore(Protocol):
         source_event_id: int,
         candidate: EarningsFactCandidate,
         reason: str,
+        status: str = "VALIDATED",
     ) -> StoredEarningsRecord: ...
 
     def load_validated_facts(
@@ -114,6 +116,7 @@ class EarningsShadowProcessor:
         document_fetcher: DocumentFetcher,
         max_fetch_attempts: int = 3,
         fetch_retry_delay: float = 0.5,
+        observation_only: bool = False,
         clock: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ):
@@ -132,6 +135,7 @@ class EarningsShadowProcessor:
         self._document_fetcher = document_fetcher
         self._max_fetch_attempts = int(max_fetch_attempts)
         self._fetch_retry_delay = float(fetch_retry_delay)
+        self._observation_only = bool(observation_only)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep
         if self._max_fetch_attempts < 1:
@@ -267,15 +271,36 @@ class EarningsShadowProcessor:
             )
         fact = replace(fact, detected_at=parse_completed_at)
 
-        stored_fact = self._store.record_fact(
-            source_event_id=stored_event.row_id,
-            candidate=fact,
-            reason=parsed.reason,
-        )
+        if self._observation_only:
+            stored_fact = self._store.record_fact(
+                source_event_id=stored_event.row_id,
+                candidate=fact,
+                reason=parsed.reason,
+                status="OBSERVED",
+            )
+        else:
+            stored_fact = self._store.record_fact(
+                source_event_id=stored_event.row_id,
+                candidate=fact,
+                reason=parsed.reason,
+            )
         timing = replace(
             timing,
             fact_persisted_at=self._clock(),
         )
+        if self._observation_only:
+            self._store.update_source_event_status(
+                stored_event.row_id,
+                status="PARSED",
+                timing=timing,
+            )
+            return ShadowProcessingResult(
+                status=ShadowProcessingStatus.OBSERVED,
+                reason="observation_tail_fact",
+                scope_id=candidate.scope_id,
+                event_id=stored_event.row_id,
+                fact_id=stored_fact.row_id,
+            )
         resolver = EarningsResolutionSource(
             candidate_provider=lambda: tuple(
                 self._store.load_validated_facts(

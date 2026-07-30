@@ -34,6 +34,11 @@ _MIGRATION_PATHS = (
         / "migrations"
         / "016_add_earnings_source_telemetry.sql"
     ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "018_add_observation_only_earnings_facts.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
@@ -47,6 +52,9 @@ SELECT
     to_regclass(
         'earnings_source_transport_observations'
     ) IS NOT NULL AS transport_observations_table,
+    to_regclass(
+        'earnings_source_race_observations'
+    ) IS NOT NULL AS source_race_view,
     (
         SELECT count(*) = 23
         FROM information_schema.columns
@@ -111,6 +119,16 @@ SELECT
         )
           AND indisunique
     ) AS transport_observations_key_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = to_regclass(
+            'earnings_fact_candidates'
+        )
+          AND conname =
+              'earnings_fact_candidates_status_check'
+          AND pg_get_constraintdef(oid) LIKE '%OBSERVED%'
+    ) AS observed_fact_status,
     EXISTS (
         SELECT 1
         FROM pg_index
@@ -412,6 +430,7 @@ INSERT INTO earnings_fact_candidates (
     confidence,
     document_fingerprint,
     evidence,
+    status,
     reason,
     published_at,
     detected_at
@@ -435,6 +454,7 @@ VALUES (
     :confidence,
     :document_fingerprint,
     CAST(:evidence AS jsonb),
+    :status,
     :reason,
     :published_at,
     :detected_at
@@ -521,6 +541,8 @@ _EVENT_STATUSES = frozenset(
     }
 )
 
+_FACT_STATUSES = frozenset({"VALIDATED", "OBSERVED"})
+
 
 class EarningsStoreError(RuntimeError):
     """Sanitized failure in additive earnings shadow persistence."""
@@ -583,6 +605,7 @@ class SqlAlchemyEarningsStore:
             "facts_table",
             "processing_telemetry_table",
             "transport_observations_table",
+            "source_race_view",
             "rules_columns",
             "events_columns",
             "facts_columns",
@@ -592,6 +615,7 @@ class SqlAlchemyEarningsStore:
             "events_key_index",
             "facts_key_index",
             "transport_observations_key_index",
+            "observed_fact_status",
             "processing_telemetry_transport_index",
         )
         if not all(bool(row.get(name)) for name in expected):
@@ -720,13 +744,20 @@ class SqlAlchemyEarningsStore:
         source_event_id: int,
         candidate: EarningsFactCandidate,
         reason: str,
+        status: str = "VALIDATED",
     ) -> StoredEarningsRecord:
+        normalized_status = str(status or "").strip().upper()
+        if normalized_status not in _FACT_STATUSES:
+            raise ValueError(
+                "unsupported earnings fact persistence status"
+            )
         idempotency_key = _fact_key(candidate)
         params = _fact_params(
             source_event_id=source_event_id,
             candidate=candidate,
             reason=reason,
             idempotency_key=idempotency_key,
+            status=normalized_status,
         )
         session_factory, text_factory = self._resolve_dependencies()
         try:
@@ -972,6 +1003,7 @@ def _fact_params(
     candidate: EarningsFactCandidate,
     reason: str,
     idempotency_key: str,
+    status: str,
 ) -> dict[str, Any]:
     normalized_reason = str(reason or "").strip()
     if not normalized_reason:
@@ -1002,6 +1034,7 @@ def _fact_params(
         "confidence": candidate.confidence,
         "document_fingerprint": candidate.document_fingerprint,
         "evidence": _json_dumps(evidence),
+        "status": status,
         "reason": normalized_reason,
         "published_at": candidate.published_at,
         "detected_at": candidate.detected_at,

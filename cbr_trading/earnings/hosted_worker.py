@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Protocol
 
@@ -330,21 +330,25 @@ class EarningsHostedShadowWorker:
         self._ledger_last_fingerprint: str | None = None
         self._public_polling_active = False
         self._public_active_scope_count = 0
+        self._public_tail_scope_count = 0
         self._public_watch_count = 0
         self._public_poll_count = 0
         self._public_feed_success_count = 0
         self._public_candidate_count = 0
         self._public_signal_count = 0
+        self._public_observed_count = 0
         self._public_completed_events: set[
             tuple[str, str, str, str]
         ] = set()
         self._sec_current_polling_active = False
         self._sec_current_active_scope_count = 0
+        self._sec_current_tail_scope_count = 0
         self._sec_current_watch_count = 0
         self._sec_current_poll_count = 0
         self._sec_current_success_count = 0
         self._sec_current_candidate_count = 0
         self._sec_current_signal_count = 0
+        self._sec_current_observed_count = 0
         self._sec_current_completed_events: set[
             tuple[str, str, str, str]
         ] = set()
@@ -696,12 +700,21 @@ class EarningsHostedShadowWorker:
 
         if self._sec_current_client is None:
             return 0
-        active_scopes = await asyncio.to_thread(
-            self._sec_current_polling_gate.active_scope_ids
+        selection = await asyncio.to_thread(
+            self._sec_current_polling_gate.polling_scope_selection,
+            observation_tail_seconds=(
+                self._settings.source_observation_tail_seconds
+            ),
         )
-        self._sec_current_active_scope_count = len(active_scopes)
-        self._sec_current_polling_active = bool(active_scopes)
-        if not active_scopes:
+        polling_scopes = selection.scope_ids
+        self._sec_current_active_scope_count = len(
+            selection.active_scope_ids
+        )
+        self._sec_current_tail_scope_count = len(
+            selection.tail_scope_ids
+        )
+        self._sec_current_polling_active = bool(polling_scopes)
+        if not polling_scopes:
             self._sec_current_watch_count = 0
             return 0
 
@@ -713,7 +726,7 @@ class EarningsHostedShadowWorker:
         active_rules = tuple(
             rule
             for rule in rules
-            if rule.scope_id in active_scopes
+            if rule.scope_id in polling_scopes
         )
         rules_by_scope = {
             rule.scope_id: rule
@@ -756,6 +769,15 @@ class EarningsHostedShadowWorker:
             max_fetch_attempts=self._settings.max_fetch_attempts,
             fetch_retry_delay=self._settings.fetch_retry_delay,
         )
+        observation_processor = EarningsShadowProcessor(
+            store=self._store,
+            rules=active_rules,
+            parsers=self._parsers,
+            document_fetcher=fetcher,
+            max_fetch_attempts=self._settings.max_fetch_attempts,
+            fetch_retry_delay=self._settings.fetch_retry_delay,
+            observation_only=True,
+        )
         processed = 0
         for envelope in poll_result.envelopes:
             for decision in router.route(envelope):
@@ -770,10 +792,26 @@ class EarningsHostedShadowWorker:
                 )
                 if event_key in self._sec_current_completed_events:
                     continue
+                tail_only = (
+                    candidate.scope_id
+                    in selection.tail_scope_ids
+                )
+                if tail_only:
+                    candidate = replace(
+                        candidate,
+                        metadata={
+                            **dict(candidate.metadata),
+                            "source_observation_mode": "tail",
+                        },
+                    )
                 processed += 1
                 self._sec_current_candidate_count += 1
                 result = await asyncio.to_thread(
-                    processor.process,
+                    (
+                        observation_processor.process
+                        if tail_only
+                        else processor.process
+                    ),
                     candidate,
                 )
                 if result.status is ShadowProcessingStatus.SIGNAL:
@@ -787,6 +825,8 @@ class EarningsHostedShadowWorker:
                             ],
                         )
                     )
+                if result.status is ShadowProcessingStatus.OBSERVED:
+                    self._sec_current_observed_count += 1
                 if result.status is ShadowProcessingStatus.ERROR:
                     self._error_count += 1
                 else:
@@ -820,9 +860,10 @@ class EarningsHostedShadowWorker:
                 ):
                     self._logger.info(
                         "SEC current polling state active=%s "
-                        "scopes=%s watches=%s",
+                        "scopes=%s tail_scopes=%s watches=%s",
                         self._sec_current_polling_active,
                         self._sec_current_active_scope_count,
+                        self._sec_current_tail_scope_count,
                         self._sec_current_watch_count,
                     )
                     previous_active = (
@@ -856,12 +897,21 @@ class EarningsHostedShadowWorker:
 
         if self._public_release_client is None:
             return 0
-        active_scopes = await asyncio.to_thread(
-            self._public_polling_gate.active_scope_ids
+        selection = await asyncio.to_thread(
+            self._public_polling_gate.polling_scope_selection,
+            observation_tail_seconds=(
+                self._settings.source_observation_tail_seconds
+            ),
         )
-        self._public_active_scope_count = len(active_scopes)
-        self._public_polling_active = bool(active_scopes)
-        if not active_scopes:
+        polling_scopes = selection.scope_ids
+        self._public_active_scope_count = len(
+            selection.active_scope_ids
+        )
+        self._public_tail_scope_count = len(
+            selection.tail_scope_ids
+        )
+        self._public_polling_active = bool(polling_scopes)
+        if not polling_scopes:
             self._public_watch_count = 0
             return 0
 
@@ -873,7 +923,7 @@ class EarningsHostedShadowWorker:
         active_rules = tuple(
             rule
             for rule in rules
-            if rule.scope_id in active_scopes
+            if rule.scope_id in polling_scopes
         )
         rules_by_scope = {
             rule.scope_id: rule
@@ -910,6 +960,15 @@ class EarningsHostedShadowWorker:
             max_fetch_attempts=1,
             fetch_retry_delay=0,
         )
+        observation_processor = EarningsShadowProcessor(
+            store=self._store,
+            rules=active_rules,
+            parsers=self._parsers,
+            document_fetcher=fetcher,
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            observation_only=True,
+        )
         processed = 0
         poll_tasks = tuple(
             asyncio.create_task(
@@ -935,10 +994,26 @@ class EarningsHostedShadowWorker:
                 )
                 if event_key in self._public_completed_events:
                     continue
+                tail_only = (
+                    candidate.scope_id
+                    in selection.tail_scope_ids
+                )
+                if tail_only:
+                    candidate = replace(
+                        candidate,
+                        metadata={
+                            **dict(candidate.metadata),
+                            "source_observation_mode": "tail",
+                        },
+                    )
                 processed += 1
                 self._public_candidate_count += 1
                 result = await asyncio.to_thread(
-                    processor.process,
+                    (
+                        observation_processor.process
+                        if tail_only
+                        else processor.process
+                    ),
                     candidate,
                 )
                 if result.status is ShadowProcessingStatus.SIGNAL:
@@ -950,6 +1025,8 @@ class EarningsHostedShadowWorker:
                             rule=rules_by_scope[candidate.scope_id],
                         )
                     )
+                if result.status is ShadowProcessingStatus.OBSERVED:
+                    self._public_observed_count += 1
                 if result.status is ShadowProcessingStatus.ERROR:
                     self._error_count += 1
                 else:
@@ -981,9 +1058,10 @@ class EarningsHostedShadowWorker:
                 if previous_active is not self._public_polling_active:
                     self._logger.info(
                         "Public earnings polling state active=%s "
-                        "scopes=%s watches=%s",
+                        "scopes=%s tail_scopes=%s watches=%s",
                         self._public_polling_active,
                         self._public_active_scope_count,
+                        self._public_tail_scope_count,
                         self._public_watch_count,
                     )
                     previous_active = self._public_polling_active
@@ -1116,13 +1194,15 @@ class EarningsHostedShadowWorker:
                 "SEC shadow heartbeat connected=%s watches=%s "
                 "processed=%s signals=%s mstr_accepted=%s "
                 "public_active=%s public_scopes=%s "
+                "public_tail_scopes=%s "
                 "public_watches=%s public_polls=%s "
                 "public_feed_success=%s public_candidates=%s "
-                "public_signals=%s "
+                "public_signals=%s public_observed=%s "
                 "sec_current_active=%s sec_current_scopes=%s "
+                "sec_current_tail_scopes=%s "
                 "sec_current_watches=%s sec_current_polls=%s "
                 "sec_current_success=%s sec_current_candidates=%s "
-                "sec_current_signals=%s "
+                "sec_current_signals=%s sec_current_observed=%s "
                 "ledger_active=%s ledger_profiles=%s "
                 "ledger_connected=%s ledger_polls=%s "
                 "ledger_accepted=%s errors=%s",
@@ -1133,18 +1213,22 @@ class EarningsHostedShadowWorker:
                 self._mstr_accepted_count,
                 self._public_polling_active,
                 self._public_active_scope_count,
+                self._public_tail_scope_count,
                 self._public_watch_count,
                 self._public_poll_count,
                 self._public_feed_success_count,
                 self._public_candidate_count,
                 self._public_signal_count,
+                self._public_observed_count,
                 self._sec_current_polling_active,
                 self._sec_current_active_scope_count,
+                self._sec_current_tail_scope_count,
                 self._sec_current_watch_count,
                 self._sec_current_poll_count,
                 self._sec_current_success_count,
                 self._sec_current_candidate_count,
                 self._sec_current_signal_count,
+                self._sec_current_observed_count,
                 self._ledger_polling_active,
                 self._ledger_active_profile_count,
                 self._ledger_connected,

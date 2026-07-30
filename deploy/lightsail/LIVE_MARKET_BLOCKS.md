@@ -47,9 +47,11 @@ Telegram lifecycle messages attributable to one release session.
 
 The SEC-API WebSocket remains connected continuously and may persist source
 events for disabled profiles. Profile-driven HTTP/RSS polling runs only while
-a corresponding execution profile is active. Persisting a source event does
-not authorize trading: only an enabled profile in the selected block can
-reach the strategy and executor.
+a corresponding execution profile is active, followed by a bounded
+observation-only tail. Tail facts use `OBSERVED`, not `VALIDATED`, and cannot
+reach the source, strategy, executor, or Telegram. Persisting a source event
+does not authorize trading: only an enabled profile in the selected block and
+a `VALIDATED` fact can reach the strategy and executor.
 
 ## Completion
 
@@ -62,6 +64,9 @@ to replay an old fact after a profile is enabled. Close it explicitly:
 - unresolved window: schedule `EXPIRED`;
 - execution profile: `DISABLED`;
 - retain source events and facts for audit.
+
+`BLOCKED` is a terminal operator-visible state. Window expiry must not replace
+it with `EXPIRED` or clear its reason.
 
 The runtime completes each profile independently immediately after its
 coordinator consumes the signal. Historical operator-run completions that used

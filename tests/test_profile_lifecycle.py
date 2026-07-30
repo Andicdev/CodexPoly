@@ -314,7 +314,8 @@ class ProfileLifecycleContractTests(unittest.TestCase):
 
     def test_expiry_never_overwrites_completed_state(self) -> None:
         self.assertIn(
-            "schedule.state NOT IN ('COMPLETED', 'EXPIRED')",
+            "schedule.state NOT IN "
+            "('BLOCKED', 'COMPLETED', 'EXPIRED')",
             _SELECT_DUE_EXPIRY_SQL,
         )
 
