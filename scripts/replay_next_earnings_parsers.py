@@ -17,6 +17,11 @@ from cbr_trading.earnings.parsers.amazon import (
     AmazonGaapDilutedEpsParser,
     amzn_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.apple import (
+    APPLE_CIK,
+    AppleGaapDilutedEpsParser,
+    aapl_q3_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.boeing import (
     BOEING_CIK,
     BoeingCoreEpsParser,
@@ -87,6 +92,22 @@ from cbr_trading.secret_guard import redact_exception
 
 
 _REPLAYS = {
+    "AAPL": (
+        AppleGaapDilutedEpsParser(),
+        replace(
+            aapl_q3_2026_shadow_rule(),
+            scope_id=earnings_scope_id("AAPL", 2025, 3),
+            fiscal_year=2025,
+            fiscal_quarter=3,
+            period_end=date(2025, 6, 28),
+        ),
+        APPLE_CIK,
+        (
+            "https://www.apple.com/newsroom/2025/07/"
+            "apple-reports-third-quarter-results/"
+        ),
+        "1.57",
+    ),
     "AMZN": (
         AmazonGaapDilutedEpsParser(),
         replace(

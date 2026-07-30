@@ -1,6 +1,10 @@
 """Company-specific earnings document parsers."""
 
 from cbr_trading.earnings.contracts import EarningsMarketRule
+from cbr_trading.earnings.parsers.apple import (
+    AppleGaapDilutedEpsParser,
+    aapl_q3_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.amazon import (
     AmazonGaapDilutedEpsParser,
     amzn_q2_2026_shadow_rule,
@@ -109,6 +113,7 @@ from cbr_trading.earnings.parsers.woodward import (
 
 def earnings_parser_registry() -> dict[str, object]:
     return {
+        "AAPL": AppleGaapDilutedEpsParser(),
         "AMZN": AmazonGaapDilutedEpsParser(),
         "ARCC": AresCapitalCoreEpsParser(),
         "BA": BoeingCoreEpsParser(),
@@ -154,6 +159,7 @@ def earnings_parser_registry() -> dict[str, object]:
 
 def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
     return (
+        aapl_q3_2026_shadow_rule(),
         amzn_q2_2026_shadow_rule(),
         arcc_q2_2026_shadow_rule(),
         ba_q2_2026_shadow_rule(),
@@ -197,6 +203,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
     )
 
 __all__ = [
+    "AppleGaapDilutedEpsParser",
     "AmazonGaapDilutedEpsParser",
     "AresCapitalCoreEpsParser",
     "BedBathBeyondNonGaapEpsParser",
@@ -238,6 +245,7 @@ __all__ = [
     "WoodwardGaapEpsParser",
     "YumEpsExcludingSpecialItemsParser",
     "ba_q2_2026_shadow_rule",
+    "aapl_q3_2026_shadow_rule",
     "arcc_q2_2026_shadow_rule",
     "amzn_q2_2026_shadow_rule",
     "bbby_q2_2026_shadow_rule",
