@@ -93,6 +93,11 @@ from cbr_trading.earnings.parsers.royal_caribbean import (
     RoyalCaribbeanAdjustedEpsParser,
     rcl_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.reddit import (
+    REDDIT_CIK,
+    RedditGaapDilutedEpsParser,
+    rddt_q2_2026_shadow_rule,
+)
 from cbr_trading.secret_guard import redact_exception
 
 
@@ -359,6 +364,23 @@ _REPLAYS = {
             "release/?id=1832"
         ),
         "3.60",
+    ),
+    "RDDT": (
+        RedditGaapDilutedEpsParser(),
+        replace(
+            rddt_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("RDDT", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        REDDIT_CIK,
+        (
+            "https://investor.redditinc.com/news-events/"
+            "news-releases/news-details/2026/"
+            "Reddit-Reports-First-Quarter-2026-Results/"
+            "default.aspx"
+        ),
+        "1.01",
     ),
     "SBUX": (
         StarbucksGaapEpsParser(),
