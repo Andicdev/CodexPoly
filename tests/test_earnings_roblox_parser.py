@@ -114,6 +114,34 @@ class RobloxGaapDilutedEpsParserTests(unittest.TestCase):
             "roblox_gaap_diluted_eps_row_not_found",
         )
 
+    def test_parses_sec_row_with_zero_width_formatting_marks(
+        self,
+    ) -> None:
+        rule = rblx_q2_2026_shadow_rule()
+        document = """
+        <h1>Roblox Second Quarter 2026 Shareholder Letter</h1>
+        <p>Three months ended June 30, 2026.</p>
+        <table>
+          <tr>
+            <td>Net\u200b loss\u200b per\u200b share\u200b attributable
+                \u200bto\u200b common\u200b stockholders,\u200b basic
+                \u200band\u200b diluted</td>
+            <td>$\u200b (0.26)</td><td>$\u200b (0.41)</td>
+          </tr>
+        </table>
+        """
+
+        result = RobloxGaapDilutedEpsParser().parse(
+            document,
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        assert result.candidate is not None
+        self.assertEqual(result.candidate.value, Decimal("-0.26"))
+
     def test_conflicting_duplicate_rows_quarantine(self) -> None:
         rule = rblx_q2_2026_shadow_rule()
         document = """

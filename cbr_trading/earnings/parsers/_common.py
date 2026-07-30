@@ -105,7 +105,18 @@ def parse_accounting_decimal(value: str) -> Decimal:
 
 
 def normalize_whitespace(value: str) -> str:
-    return " ".join(value.replace("\xa0", " ").split())
+    without_formatting_marks = value.translate(
+        {
+            ord("\u200b"): None,
+            ord("\u200c"): None,
+            ord("\u200d"): None,
+            ord("\u2060"): None,
+            ord("\ufeff"): None,
+        }
+    )
+    return " ".join(
+        without_formatting_marks.replace("\xa0", " ").split()
+    )
 
 
 class _VisibleTextParser(HTMLParser):
