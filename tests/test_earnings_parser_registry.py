@@ -47,6 +47,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "VIRT",
                 "WAY",
                 "WING",
                 "WWD",
@@ -86,6 +87,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "SPGI",
                 "UPS",
                 "V",
+                "VIRT",
                 "WAY",
                 "WING",
                 "WWD",
@@ -96,7 +98,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            34,
+            35,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(
