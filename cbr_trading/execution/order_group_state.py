@@ -386,6 +386,7 @@ def registration_from_handle(
     policy: OrderLifecyclePolicy,
     metadata: Mapping[str, Any] | None = None,
 ) -> OrderGroupRegistration:
+    registration_metadata = dict(metadata or {})
     if isinstance(policy, KeepOpenPolicy):
         policy_kind = policy.kind
         old_tick = None
@@ -396,6 +397,8 @@ def registration_from_handle(
         old_tick = policy.old_tick
         new_tick = policy.new_tick
         max_reprices = policy.max_reprices
+        if not policy.submit_first:
+            registration_metadata["submit_first_repricing"] = False
     else:
         raise TypeError("unsupported order lifecycle policy")
 
@@ -418,5 +421,5 @@ def registration_from_handle(
         trigger_new_tick=new_tick,
         max_reprices=max_reprices,
         initial_order_ids=handle.live_order_ids,
-        metadata=metadata or {},
+        metadata=registration_metadata,
     )

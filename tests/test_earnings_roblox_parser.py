@@ -75,6 +75,10 @@ class RobloxGaapDilutedEpsParserTests(unittest.TestCase):
         <table>
           <tr><th></th><th>2026</th><th>2025</th></tr>
           <tr>
+            <th></th><th>Three Months Ended March 31</th>
+          </tr>
+          <tr><th></th><th>2026</th><th>2025</th></tr>
+          <tr>
             <td>Net loss per share attributable to common
                 stockholders, basic and diluted</td>
             <td>$ (0.35)</td><td>$ (0.32)</td>
@@ -123,6 +127,10 @@ class RobloxGaapDilutedEpsParserTests(unittest.TestCase):
         <p>Three months ended June 30, 2026.</p>
         <table>
           <tr>
+            <th></th><th>Three Months Ended June 30</th>
+          </tr>
+          <tr><th></th><th>2026</th><th>2025</th></tr>
+          <tr>
             <td>Net\u200b loss\u200b per\u200b share\u200b attributable
                 \u200bto\u200b common\u200b stockholders,\u200b basic
                 \u200band\u200b diluted</td>
@@ -141,13 +149,67 @@ class RobloxGaapDilutedEpsParserTests(unittest.TestCase):
         self.assertEqual(result.status, ParseStatus.ACCEPTED)
         assert result.candidate is not None
         self.assertEqual(result.candidate.value, Decimal("-0.26"))
-        self.assertEqual(result.candidate.parser_version, "2")
+        self.assertEqual(result.candidate.parser_version, "3")
+
+    def test_q2_selects_quarter_from_explicit_quarter_and_ytd_layout(
+        self,
+    ) -> None:
+        rule = rblx_q2_2026_shadow_rule()
+        document = """
+        <p>Three months ended June 30, 2026.</p>
+        <table>
+          <tr><th colspan="2">Three Months Ended June 30</th>
+          <th colspan="2">Six Months Ended June 30</th></tr>
+          <tr><th>2026</th><th>2025</th>
+          <th>2026</th><th>2025</th></tr>
+          <tr><td>Net loss per share attributable to common
+          stockholders, basic and diluted</td>
+          <td>$(0.26)</td><td>$(0.41)</td>
+          <td>$(0.58)</td><td>$(0.73)</td></tr>
+        </table>
+        """
+
+        result = RobloxGaapDilutedEpsParser().parse(
+            document,
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        assert result.candidate is not None
+        self.assertEqual(result.candidate.value, Decimal("-0.26"))
+
+    def test_reversed_year_columns_fail_closed(self) -> None:
+        rule = rblx_q2_2026_shadow_rule()
+        document = """
+        <p>Three months ended June 30, 2026.</p>
+        <table>
+          <tr><th>Three Months Ended June 30</th></tr>
+          <tr><th>2025</th><th>2026</th></tr>
+          <tr><td>Net loss per share attributable to common
+          stockholders, basic and diluted</td>
+          <td>$(0.41)</td><td>$(0.26)</td></tr>
+        </table>
+        """
+
+        result = RobloxGaapDilutedEpsParser().parse(
+            document,
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.NO_MATCH)
+        self.assertIsNone(result.candidate)
 
     def test_conflicting_duplicate_rows_quarantine(self) -> None:
         rule = rblx_q2_2026_shadow_rule()
         document = """
         <p>Quarter ended June 30, 2026.</p>
         <table>
+          <tr><th>Three Months Ended June 30</th></tr>
+          <tr><th>2026</th><th>2025</th></tr>
           <tr><td>Net loss per share attributable to common stockholders,
           basic and diluted</td><td>$(0.30)</td><td>$(0.40)</td></tr>
           <tr><td>Net loss per share attributable to common stockholders,

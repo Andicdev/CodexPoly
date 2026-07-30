@@ -123,6 +123,7 @@ class OrderIntentTests(unittest.TestCase):
         self.assertIsNone(intent.quantity)
         self.assertEqual(intent.lifecycle_policy.cancel_scope, "order_group")
         self.assertEqual(intent.lifecycle_policy.max_reprices, 1)
+        self.assertTrue(intent.lifecycle_policy.submit_first)
 
     def test_requires_exactly_one_positive_sizing_mode(self) -> None:
         base = {
@@ -151,6 +152,12 @@ class OrderIntentTests(unittest.TestCase):
             RepriceOnTickChange(
                 old_tick=Decimal("0.01"),
                 new_tick=Decimal("0.01"),
+            )
+        with self.assertRaisesRegex(TypeError, "submit_first"):
+            RepriceOnTickChange(
+                old_tick=Decimal("0.01"),
+                new_tick=Decimal("0.001"),
+                submit_first="false",
             )
 
 

@@ -38,6 +38,11 @@ _MIGRATION_PATHS = (
         / "migrations"
         / "002_add_order_observations.sql"
     ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "022_add_order_group_terminal_audits.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
@@ -99,7 +104,17 @@ SELECT
               'remaining_quantity', 'limit_price', 'observed_at',
               'created_at'
           ])
-    ) AS observations_columns
+    ) AS observations_columns,
+    to_regclass(
+        'resolution_order_group_terminal_audits'
+    ) IS NOT NULL AS terminal_audits_table,
+    EXISTS (
+        SELECT 1
+        FROM pg_index
+        WHERE indexrelid = to_regclass(
+            'ix_resolution_order_group_terminal_audits_kind'
+        )
+    ) AS terminal_audits_kind_index
 """.strip()
 
 _INSERT_GROUP_SQL = """
@@ -460,6 +475,25 @@ WHERE order_group_id = :order_group_id
 RETURNING revision
 """.strip()
 
+_COMPLETE_OVERFILL_GROUP_SQL = """
+UPDATE resolution_order_groups
+SET
+    reprice_count = reprice_count + 1,
+    status = 'COMPLETED',
+    revision = revision + 1,
+    last_error = NULL,
+    metadata = metadata || jsonb_build_object(
+        'terminal_audit_kind',
+        'OVERFILLED'
+    ),
+    updated_at = now()
+WHERE order_group_id = :order_group_id
+  AND status = 'REPRICING'
+  AND revision = :revision
+  AND reprice_count + 1 <= max_reprices
+RETURNING revision
+""".strip()
+
 _CLOSE_OWNED_ORDERS_SQL = """
 UPDATE resolution_order_group_orders
 SET
@@ -611,6 +645,57 @@ WHERE event_id = :event_id
   AND claimed_revision = :revision
 """.strip()
 
+_COMPLETE_OVERFILL_EVENT_SQL = """
+UPDATE resolution_supervision_events
+SET
+    status = 'COMPLETED',
+    error = :audit_reason,
+    updated_at = now()
+WHERE event_id = :event_id
+  AND order_group_id = :order_group_id
+  AND status = 'CLAIMED'
+  AND claimed_revision = :revision
+""".strip()
+
+_UPSERT_TERMINAL_OVERFILL_AUDIT_SQL = """
+INSERT INTO resolution_order_group_terminal_audits (
+    order_group_id,
+    event_id,
+    terminal_kind,
+    target_quantity,
+    filled_quantity,
+    excess_quantity,
+    detected_at,
+    metadata
+)
+VALUES (
+    :order_group_id,
+    :event_id,
+    'OVERFILLED',
+    :target_quantity,
+    :filled_quantity,
+    :excess_quantity,
+    :detected_at,
+    jsonb_build_object(
+        'source',
+        'order_supervision_reconciliation'
+    )
+)
+ON CONFLICT (order_group_id) DO UPDATE
+SET
+    event_id = EXCLUDED.event_id,
+    terminal_kind = EXCLUDED.terminal_kind,
+    target_quantity = EXCLUDED.target_quantity,
+    filled_quantity = EXCLUDED.filled_quantity,
+    excess_quantity = EXCLUDED.excess_quantity,
+    detected_at = EXCLUDED.detected_at,
+    metadata = (
+        resolution_order_group_terminal_audits.metadata
+        || EXCLUDED.metadata
+    ),
+    updated_at = now()
+""".strip()
+
 _FAIL_GROUP_SQL = """
 UPDATE resolution_order_groups
 SET
@@ -716,6 +801,8 @@ class SqlAlchemyOrderGroupRepository:
                 "events_columns",
                 "observations_table",
                 "observations_columns",
+                "terminal_audits_table",
+                "terminal_audits_kind_index",
             )
         ):
             raise OrderGroupRepositoryError(
@@ -1560,6 +1647,119 @@ class SqlAlchemyOrderGroupRepository:
                 f"{type(exc).__name__}"
             ) from exc
 
+    def complete_overfill_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        order_statuses: Mapping[str, TrackedOrderStatus],
+        target_quantity: Decimal,
+        filled_quantity: Decimal,
+        excess_quantity: Decimal,
+        detected_at: datetime,
+        observations: Sequence[OrderObservation] = (),
+    ) -> None:
+        if not claim.acquired or claim.revision is None:
+            raise ValueError(
+                "only an acquired reconciliation claim can complete"
+            )
+        statuses = _validated_order_statuses(
+            order_statuses,
+            required=True,
+        )
+        if any(
+            status in {
+                TrackedOrderStatus.LIVE,
+                TrackedOrderStatus.UNKNOWN,
+            }
+            for status in statuses.values()
+        ):
+            raise ValueError(
+                "terminal overfill cannot contain live or unknown orders"
+            )
+        target = _positive_decimal(
+            target_quantity,
+            name="target_quantity",
+        )
+        filled = _positive_decimal(
+            filled_quantity,
+            name="filled_quantity",
+        )
+        excess = _positive_decimal(
+            excess_quantity,
+            name="excess_quantity",
+        )
+        if filled != target + excess:
+            raise ValueError(
+                "filled quantity must equal target plus excess"
+            )
+        normalized_detected_at = _aware_utc(
+            detected_at,
+            name="detected_at",
+        )
+        inspected = _validated_observations(observations)
+        audit_reason = (
+            "overfill_detected:"
+            f"target={target};filled={filled};excess={excess}"
+        )
+        params = {
+            "event_id": claim.event_id,
+            "order_group_id": claim.order_group_id,
+            "revision": claim.revision,
+            "target_quantity": target,
+            "filled_quantity": filled,
+            "excess_quantity": excess,
+            "detected_at": normalized_detected_at,
+            "audit_reason": audit_reason,
+        }
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                completed = session.execute(
+                    text_factory(_COMPLETE_OVERFILL_GROUP_SQL),
+                    params,
+                ).mappings().one_or_none()
+                if completed is None:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation claim is no longer current"
+                    )
+                _persist_observations(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    observations=inspected,
+                )
+                _set_owned_order_statuses(
+                    session,
+                    text_factory=text_factory,
+                    claim=claim,
+                    statuses=statuses,
+                )
+                session.execute(
+                    text_factory(
+                        _UPSERT_TERMINAL_OVERFILL_AUDIT_SQL
+                    ),
+                    params,
+                )
+                completed_event = session.execute(
+                    text_factory(_COMPLETE_OVERFILL_EVENT_SQL),
+                    params,
+                )
+                if int(completed_event.rowcount or 0) != 1:
+                    session.rollback()
+                    raise OrderGroupRepositoryError(
+                        "Reconciliation event completion was not "
+                        "persisted"
+                    )
+                session.commit()
+        except OrderGroupRepositoryError:
+            raise
+        except Exception as exc:
+            raise OrderGroupRepositoryError(
+                "Failed to complete overfill reconciliation: "
+                f"{type(exc).__name__}"
+            ) from exc
+
     def fail_reconciliation(
         self,
         claim: SupervisionClaim,
@@ -1734,6 +1934,23 @@ def _registration_params(
             default=str,
         ),
     }
+
+
+def _positive_decimal(value: object, *, name: str) -> Decimal:
+    normalized = Decimal(str(value))
+    if not normalized.is_finite() or normalized <= 0:
+        raise ValueError(f"{name} must be positive")
+    return normalized
+
+
+def _aware_utc(value: datetime, *, name: str) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(timezone.utc)
 
 
 def _event_params(

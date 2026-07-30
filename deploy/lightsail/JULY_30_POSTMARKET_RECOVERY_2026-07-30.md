@@ -183,15 +183,23 @@ fact and wrong-direction execution; they are not correctness assertions.
 
 ## Follow-up
 
-1. Require period-aware fixtures for earnings tables that contain both
+Implementation status as of July 31:
+
+1. **Implemented locally, pending production deployment.** Require
+   period-aware fixtures for earnings tables that contain both
    quarterly and year-to-date columns. Parser review must identify the exact
    header/value mapping rather than selecting a value by row position alone.
-2. Change submit-first repricing to cap the replacement at the confirmed
-   remaining quantity whenever the initial order can be inspected without
-   delaying first submission.
-3. Treat a fully filled source/replacement pair as a terminal overfill audit
-   state rather than a generic failed group.
-4. Add parser-version-aware retry semantics for terminal `NO_MATCH` events,
+   RIVN v4, RBLX v3, WWD v2, and EA v2 now fail closed on unknown/reversed
+   layouts.
+2. **Implemented locally, pending production deployment.** The policy now
+   explicitly selects latency-first `submit_first=True` or strict
+   inspect-first `submit_first=False`; stale groups always inspect and size
+   only the confirmed remainder.
+3. **Implemented locally, pending production deployment.** A fully terminal
+   source/replacement pair is recorded as an additive `OVERFILLED` terminal
+   audit and the legacy group closes as `COMPLETED`, not generic `FAILED`.
+4. **Implemented locally, pending production deployment.** Add
+   parser-version-aware retry semantics for terminal `NO_MATCH` events,
    removing the need for a one-shot guarded SQL retry after future parser
    corrections.
 5. Keep SEC Latest observation-only until source-race telemetry is reviewed;

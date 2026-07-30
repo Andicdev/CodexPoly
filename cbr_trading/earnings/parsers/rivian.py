@@ -13,6 +13,7 @@ from cbr_trading.earnings.contracts import (
 from cbr_trading.earnings.parsers._common import (
     ROW_SEPARATOR,
     accounting_values,
+    ordered_year_columns,
 )
 from cbr_trading.earnings.parsers._labelled_eps import (
     LabelledEpsParser,
@@ -67,7 +68,7 @@ class RivianGaapDilutedEpsParser(LabelledEpsParser):
                 basis=EpsBasis.DILUTED,
                 label_patterns=(),
                 parser_name="rivian_gaap_diluted_eps",
-                parser_version="3",
+                parser_version="4",
                 accepted_reason="official_rivian_gaap_diluted_eps",
                 missing_reason="rivian_gaap_diluted_eps_row_not_found",
                 conflicting_reason=(
@@ -148,7 +149,12 @@ class RivianGaapDilutedEpsParser(LabelledEpsParser):
             return False
         if _QUARTER_HEADER.search(header_context) is None:
             return False
-        if str(rule.fiscal_year) not in header_context:
+        if not ordered_year_columns(
+            header_context,
+            fiscal_year=rule.fiscal_year,
+            value_count=value_count,
+            current_year_first=False,
+        ):
             return False
         if value_count == 2:
             return True

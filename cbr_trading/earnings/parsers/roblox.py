@@ -13,6 +13,7 @@ from cbr_trading.earnings.contracts import (
 from cbr_trading.earnings.parsers._common import (
     ROW_SEPARATOR,
     accounting_values,
+    ordered_year_columns,
 )
 from cbr_trading.earnings.parsers._labelled_eps import (
     LabelledEpsParser,
@@ -38,6 +39,23 @@ _GAAP_EPS_ROW = re.compile(
     r"basic\s+and\s+diluted\b",
     re.IGNORECASE,
 )
+_QUARTER_HEADER = re.compile(
+    r"\bthree\s+months\s+ended\b",
+    re.IGNORECASE,
+)
+_CUMULATIVE_HEADER_BY_QUARTER = {
+    2: re.compile(r"\bsix\s+months\s+ended\b", re.IGNORECASE),
+    3: re.compile(r"\bnine\s+months\s+ended\b", re.IGNORECASE),
+    4: re.compile(
+        r"\b(?:twelve\s+months|year)\s+ended\b",
+        re.IGNORECASE,
+    ),
+}
+_STATEMENT_TITLE = re.compile(
+    r"\b(?:condensed\s+)?consolidated\s+statements?\b",
+    re.IGNORECASE,
+)
+_HEADER_LOOKBACK_ROWS = 64
 
 
 class RobloxGaapDilutedEpsParser(LabelledEpsParser):
@@ -52,7 +70,7 @@ class RobloxGaapDilutedEpsParser(LabelledEpsParser):
                 basis=EpsBasis.DILUTED,
                 label_patterns=(),
                 parser_name="roblox_gaap_diluted_eps",
-                parser_version="2",
+                parser_version="3",
                 accepted_reason="official_roblox_gaap_diluted_eps",
                 missing_reason=(
                     "roblox_gaap_diluted_eps_row_not_found"
@@ -73,19 +91,80 @@ class RobloxGaapDilutedEpsParser(LabelledEpsParser):
         *,
         rule: EarningsMarketRule,
     ) -> tuple[tuple[Decimal, str], ...]:
-        del rule
         found: list[tuple[Decimal, str]] = []
-        for row in value.split(ROW_SEPARATOR):
+        rows = value.split(ROW_SEPARATOR)
+        for row_index, row in enumerate(rows):
             label = _GAAP_EPS_ROW.search(row)
             if label is None:
                 continue
             values = accounting_values(row[label.end():])
-            if len(values) < 2:
+            if len(values) not in {2, 4}:
+                continue
+            header_context = self._nearest_header_context(
+                rows,
+                row_index=row_index,
+            )
+            if not self._has_safe_column_layout(
+                header_context,
+                value_count=len(values),
+                rule=rule,
+            ):
                 continue
             # Roblox presents the current-year quarter first and the
-            # prior-year comparator second.
+            # prior-year comparator second. A cumulative pair, when
+            # present, follows the same order.
             found.append((values[0], row.strip()[:400]))
         return tuple(found)
+
+    @staticmethod
+    def _nearest_header_context(
+        rows: list[str],
+        *,
+        row_index: int,
+    ) -> str:
+        lower_bound = max(0, row_index - _HEADER_LOOKBACK_ROWS)
+        for candidate_index in range(row_index - 1, lower_bound - 1, -1):
+            candidate = rows[candidate_index].strip()
+            if not candidate:
+                continue
+            if _QUARTER_HEADER.search(candidate):
+                return " ".join(
+                    row.strip()
+                    for row in rows[
+                        candidate_index:
+                        min(row_index, candidate_index + 3)
+                    ]
+                    if row.strip()
+                )
+            if _STATEMENT_TITLE.search(candidate):
+                break
+        return ""
+
+    @staticmethod
+    def _has_safe_column_layout(
+        header_context: str,
+        *,
+        value_count: int,
+        rule: EarningsMarketRule,
+    ) -> bool:
+        if _QUARTER_HEADER.search(header_context) is None:
+            return False
+        if not ordered_year_columns(
+            header_context,
+            fiscal_year=rule.fiscal_year,
+            value_count=value_count,
+            current_year_first=True,
+        ):
+            return False
+        if value_count == 2:
+            return True
+        cumulative_header = _CUMULATIVE_HEADER_BY_QUARTER.get(
+            rule.fiscal_quarter
+        )
+        return bool(
+            cumulative_header
+            and cumulative_header.search(header_context)
+        )
 
 
 def rblx_q2_2026_shadow_rule() -> EarningsMarketRule:

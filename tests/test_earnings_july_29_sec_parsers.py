@@ -486,6 +486,36 @@ class July29SecParserTests(unittest.TestCase):
                 )
                 self.assertEqual(result.status, ParseStatus.NO_MATCH)
 
+    def test_ea_unlabelled_or_ambiguous_column_layout_fails_closed(
+        self,
+    ) -> None:
+        rule = ea_q1_2027_shadow_rule()
+        parser = ElectronicArtsGaapEpsParser()
+        documents = (
+            (
+                "<p>Three months ended June 30, 2026.</p>"
+                "<table><tr><th>Diluted earnings per share</th>"
+                "<td>$0.84</td><td>$1.04</td></tr></table>"
+            ),
+            (
+                "<p>Quarterly Financial Highlights for the "
+                "three months ended June 30, 2026.</p>"
+                "<table><tr><th>Diluted earnings per share</th>"
+                "<td>$0.84</td><td>$1.04</td><td>$0.79</td>"
+                "</tr></table>"
+            ),
+        )
+
+        for document in documents:
+            with self.subTest(document=document):
+                result = parser.parse(
+                    document,
+                    source=_source(rule),
+                    rule=rule,
+                    detected_at=_DETECTED,
+                )
+                self.assertEqual(result.status, ParseStatus.NO_MATCH)
+
     def test_rules_match_gamma_market_and_sec_policy(self) -> None:
         rules = (
             sofi_q2_2026_shadow_rule(),

@@ -490,6 +490,16 @@ inspection fails closed. This prevents a delayed tick signal from duplicating
 an order that filled minutes earlier without adding a lookup to the immediate
 submit-first path.
 
+`RepriceOnTickChange.submit_first` is the explicit policy boundary. `True`
+keeps the latency-first path and accepts bounded temporal overlap;
+`False` inspects the exact source orders before any replacement submission.
+There is no claimed hard exposure guarantee on the submit-first path because
+the exchange may fill the source order while the replacement is in flight.
+If reconciliation later proves that all generations are terminal and their
+combined matched quantity exceeds the source target, the order group closes
+as backward-compatible `COMPLETED` and an additive `OVERFILLED` terminal audit
+stores target, filled, and excess quantities.
+
 Only `VALIDATED` official facts enter the source. Facts for all scopes are
 loaded in one polling snapshot, then each prepared event coordinator consumes
 only its own scope. Warm preparation does not create a claim, so a process can
@@ -513,6 +523,14 @@ New transports enter production with a transport-specific observation-only
 guard. While that guard is set, active-window candidates are fully measured
 but remain `OBSERVED`; removing it is a separate reviewed promotion into the
 live source race.
+
+Earnings source-event idempotency is independent from parser-version
+idempotency. Migration 021 records each
+`source_event_id/parser_name/parser_version` attempt. A new version may
+atomically claim a terminal `NO_MATCH` only while the scope has no
+validated/emitted fact; the same version cannot retry. This preserves the
+document identity and prevents a parser hotfix from requiring a manual event
+status rewrite.
 
 After an `ACTIVE` earnings schedule becomes `COMPLETED`, `BLOCKED`, or
 `EXPIRED`, public, SEC-current, and SEC-Latest polling may continue for a configured

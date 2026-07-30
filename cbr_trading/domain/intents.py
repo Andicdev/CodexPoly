@@ -35,6 +35,7 @@ class RepriceOnTickChange:
     old_tick: Decimal
     new_tick: Decimal
     max_reprices: int = 1
+    submit_first: bool = True
     kind: str = field(default="reprice_on_tick_change", init=False)
     cancel_scope: str = field(default="order_group", init=False)
 
@@ -47,6 +48,8 @@ class RepriceOnTickChange:
             raise ValueError("new_tick must be finer than old_tick")
         if self.max_reprices < 1:
             raise ValueError("max_reprices must be positive")
+        if not isinstance(self.submit_first, bool):
+            raise TypeError("submit_first must be a bool")
         object.__setattr__(self, "old_tick", old_tick)
         object.__setattr__(self, "new_tick", new_tick)
 

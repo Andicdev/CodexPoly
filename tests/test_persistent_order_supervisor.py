@@ -54,11 +54,12 @@ def _handle(
     )
 
 
-def _policy() -> RepriceOnTickChange:
+def _policy(*, submit_first: bool = True) -> RepriceOnTickChange:
     return RepriceOnTickChange(
         old_tick=Decimal("0.01"),
         new_tick=Decimal("0.001"),
         max_reprices=1,
+        submit_first=submit_first,
     )
 
 
@@ -69,6 +70,7 @@ def _record(
     revision: int = 0,
     reprice_count: int = 0,
     created_at: datetime | None = None,
+    submit_first: bool = True,
 ) -> OrderGroupRecord:
     return OrderGroupRecord(
         registration=registration_from_handle(
@@ -77,7 +79,7 @@ def _record(
                     live_order_ids or ("order-1",)
                 )
             ),
-            policy=_policy(),
+            policy=_policy(submit_first=submit_first),
         ),
         status=status,
         revision=revision,
@@ -281,6 +283,7 @@ class _Repository:
         self.load_reconciliation_calls = []
         self.claim_reconciliation_calls = []
         self.complete_reconciliation_calls = []
+        self.complete_overfill_reconciliation_calls = []
         self.fail_reconciliation_calls = []
         self.close_calls = 0
         self.complete_error: Exception | None = None
@@ -417,6 +420,31 @@ class _Repository:
                 dict(order_statuses),
                 recovered_reprice,
                 keep_active,
+                tuple(observations),
+            )
+        )
+        if self.complete_error is not None:
+            raise self.complete_error
+
+    def complete_overfill_reconciliation(
+        self,
+        claim,
+        *,
+        order_statuses,
+        target_quantity,
+        filled_quantity,
+        excess_quantity,
+        detected_at,
+        observations=(),
+    ):
+        self.complete_overfill_reconciliation_calls.append(
+            (
+                claim,
+                dict(order_statuses),
+                target_quantity,
+                filled_quantity,
+                excess_quantity,
+                detected_at,
                 tuple(observations),
             )
         )
@@ -822,6 +850,44 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
         self.assertEqual(
             repository.complete_calls[0][2],
             (replacement,),
+        )
+
+    def test_inspect_first_policy_checks_fill_before_replacement(
+        self,
+    ) -> None:
+        repository = _Repository(
+            groups=(_record(submit_first=False),)
+        )
+        gateway = _Gateway(
+            inspections=(
+                _inspection(
+                    ("order-1",),
+                    state=RemoteOrderState.FILLED,
+                    original=Decimal("25"),
+                    matched=Decimal("25"),
+                ),
+            ),
+            replacements=(_replacement(),),
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+        )
+
+        results = supervisor.on_tick_size_change(_event())
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.COMPLETED,
+        )
+        self.assertEqual(
+            gateway.inspect_calls,
+            [("primary", ("order-1",))],
+        )
+        self.assertEqual(gateway.place_calls, [])
+        self.assertEqual(
+            repository.complete_without_calls[0][1],
+            ("order-1",),
         )
 
     def test_replacement_is_recorded_before_cleanup_completes(
@@ -1255,6 +1321,78 @@ class PersistentOrderSupervisorTests(unittest.TestCase):
                 "order-2"
             ],
             TrackedOrderStatus.FILLED,
+        )
+
+    def test_reconcile_classifies_terminal_double_fill_as_overfill(
+        self,
+    ) -> None:
+        repository = _Repository(
+            reconciliation_candidates=(
+                _reconciliation_candidate(
+                    source_status=TrackedOrderStatus.FILLED,
+                    replacement_status=TrackedOrderStatus.FILLED,
+                ),
+            )
+        )
+        gateway = _Gateway(
+            inspections=(
+                OrderInspectionResult(
+                    requested_order_ids=("order-1", "order-2"),
+                    snapshots=(
+                        _snapshot(
+                            "order-1",
+                            state=RemoteOrderState.FILLED,
+                            original=Decimal("25"),
+                            matched=Decimal("25"),
+                        ),
+                        _snapshot(
+                            "order-2",
+                            state=RemoteOrderState.FILLED,
+                            original=Decimal("25"),
+                            matched=Decimal("25"),
+                            limit_price=Decimal("0.999"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        detected_at = datetime(
+            2026,
+            7,
+            24,
+            14,
+            0,
+            tzinfo=timezone.utc,
+        )
+        supervisor = PersistentOrderSupervisor(
+            repository=repository,
+            gateway=gateway,
+            clock=lambda: detected_at,
+        )
+
+        results = supervisor.reconcile()
+
+        self.assertEqual(
+            results[0].status,
+            SupervisionStatus.COMPLETED,
+        )
+        self.assertIn("overfill_detected", results[0].error)
+        self.assertEqual(
+            repository.complete_reconciliation_calls,
+            [],
+        )
+        completed = (
+            repository.complete_overfill_reconciliation_calls[0]
+        )
+        self.assertEqual(completed[2], Decimal("25"))
+        self.assertEqual(completed[3], Decimal("50"))
+        self.assertEqual(completed[4], Decimal("25"))
+        self.assertEqual(
+            completed[1],
+            {
+                "order-1": TrackedOrderStatus.FILLED,
+                "order-2": TrackedOrderStatus.FILLED,
+            },
         )
 
     def test_reconcile_validates_notional_replacement_remainder(

@@ -39,6 +39,8 @@ class _Store:
         self.recorded_facts = 0
         self.recorded_fact_statuses = []
         self.observed_facts = {}
+        self.parse_attempts = {}
+        self.parse_attempt_records = []
 
     def record_source_event(self, _candidate):
         self.recorded_events += 1
@@ -54,6 +56,40 @@ class _Store:
     ) -> None:
         self.statuses.append((event_id, status, error))
         self.timings.append(timing)
+
+    def claim_no_match_retry(
+        self,
+        *,
+        source_event_id,
+        parser_name,
+        parser_version,
+    ):
+        key = (source_event_id, parser_name, parser_version)
+        existing = self.parse_attempts.get(key)
+        if existing not in {None, "ERROR"}:
+            return False
+        if any(
+            fact.scope_id == nvts_q2_2026_shadow_rule().scope_id
+            for fact in self.facts
+        ):
+            return False
+        self.parse_attempts[key] = "CLAIMED"
+        return True
+
+    def record_parse_attempt(
+        self,
+        *,
+        source_event_id,
+        parser_name,
+        parser_version,
+        status,
+        reason=None,
+    ):
+        key = (source_event_id, parser_name, parser_version)
+        self.parse_attempts[key] = status
+        self.parse_attempt_records.append(
+            (key, status, reason)
+        )
 
     def record_fact(
         self,
@@ -128,6 +164,10 @@ def _processor(store: _Store, fetcher: _Fetcher):
     )
 
 
+class _NavitasParserV2(NavitasEpsParser):
+    parser_version = "2"
+
+
 def _accepted_fact(value: str):
     rule = nvts_q2_2026_shadow_rule()
     result = NavitasEpsParser().parse(
@@ -167,6 +207,10 @@ class EarningsShadowProcessorTests(unittest.TestCase):
         self.assertEqual(
             store.recorded_fact_statuses,
             ["VALIDATED"],
+        )
+        self.assertEqual(
+            store.parse_attempt_records[-1][1],
+            "ACCEPTED",
         )
         final_timing = store.timings[-1]
         assert final_timing is not None
@@ -232,6 +276,105 @@ class EarningsShadowProcessorTests(unittest.TestCase):
         self.assertEqual(result.status, ShadowProcessingStatus.DUPLICATE)
         self.assertEqual(fetcher.calls, 0)
         self.assertEqual(store.recorded_facts, 0)
+
+    def test_same_parser_version_does_not_retry_terminal_no_match(
+        self,
+    ) -> None:
+        store = _Store(
+            event=StoredEarningsRecord(
+                row_id=11,
+                created=False,
+                status="NO_MATCH",
+            )
+        )
+        store.parse_attempts[
+            (11, NavitasEpsParser.parser_name, "1")
+        ] = "NO_MATCH"
+        fetcher = _Fetcher(AssertionError("must not fetch"))
+
+        result = _processor(store, fetcher).process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(result.status, ShadowProcessingStatus.DUPLICATE)
+        self.assertEqual(
+            result.reason,
+            "parser_version_already_attempted",
+        )
+        self.assertEqual(fetcher.calls, 0)
+
+    def test_new_parser_version_retries_terminal_no_match_once(
+        self,
+    ) -> None:
+        store = _Store(
+            event=StoredEarningsRecord(
+                row_id=11,
+                created=False,
+                status="NO_MATCH",
+            )
+        )
+        store.parse_attempts[
+            (11, NavitasEpsParser.parser_name, "1")
+        ] = "NO_MATCH"
+        fetcher = _Fetcher(
+            _document("June 30, 2026", "(0.03)").encode()
+        )
+        parser = _NavitasParserV2()
+        processor = EarningsShadowProcessor(
+            store=store,
+            rules=[nvts_q2_2026_shadow_rule()],
+            parsers={"NVTS": parser},
+            document_fetcher=fetcher,
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            clock=lambda: _NOW,
+            sleep=lambda _seconds: None,
+        )
+
+        result = processor.process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(result.status, ShadowProcessingStatus.SIGNAL)
+        self.assertEqual(fetcher.calls, 1)
+        self.assertEqual(
+            store.parse_attempts[
+                (11, NavitasEpsParser.parser_name, "2")
+            ],
+            "ACCEPTED",
+        )
+        assert result.signal is not None
+        self.assertEqual(str(result.signal.value), "-0.03")
+
+    def test_no_match_retry_is_blocked_after_validated_fact(
+        self,
+    ) -> None:
+        store = _Store(
+            event=StoredEarningsRecord(
+                row_id=11,
+                created=False,
+                status="NO_MATCH",
+            ),
+            existing_facts=[_accepted_fact("(0.04)")],
+        )
+        fetcher = _Fetcher(AssertionError("must not fetch"))
+        processor = EarningsShadowProcessor(
+            store=store,
+            rules=[nvts_q2_2026_shadow_rule()],
+            parsers={"NVTS": _NavitasParserV2()},
+            document_fetcher=fetcher,
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            clock=lambda: _NOW,
+            sleep=lambda _seconds: None,
+        )
+
+        result = processor.process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(result.status, ShadowProcessingStatus.DUPLICATE)
+        self.assertEqual(fetcher.calls, 0)
 
     def test_executable_transport_promotes_terminal_observation(self) -> None:
         store = _Store()
@@ -358,6 +501,10 @@ class EarningsShadowProcessorTests(unittest.TestCase):
 
         self.assertEqual(result.status, ShadowProcessingStatus.NO_MATCH)
         self.assertEqual(store.statuses[-1][1], "NO_MATCH")
+        self.assertEqual(
+            store.parse_attempt_records[-1][1],
+            "NO_MATCH",
+        )
         self.assertIsNone(result.signal)
 
     def test_conflicting_official_fact_is_quarantined(self) -> None:

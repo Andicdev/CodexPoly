@@ -476,11 +476,9 @@ class ElectronicArtsGaapEpsParser(LabelledEpsParser):
                 ticker="EA",
                 cik=ELECTRONIC_ARTS_CIK,
                 metric=EarningsMetric.GAAP_EPS,
-                labels=(
-                    r"\bdiluted\s+earnings\s+per\s+share\b",
-                ),
+                labels=(),
                 parser_name="electronic_arts_gaap_eps",
-                parser_version="1",
+                parser_version="2",
                 accepted_reason=(
                     "official_electronic_arts_gaap_diluted_eps"
                 ),
@@ -505,21 +503,35 @@ class ElectronicArtsGaapEpsParser(LabelledEpsParser):
         rule: EarningsMarketRule,
     ) -> tuple[tuple[Decimal, str], ...]:
         pattern = re.compile(
-            r"\bdiluted\s+earnings\s+per\s+share\b"
-            rf"(?P<tail>(?:(?!{re.escape(ROW_SEPARATOR)}).){{0,180}})",
+            r"\bdiluted\s+earnings\s+per\s+share\b",
             re.IGNORECASE,
         )
         matches: list[tuple[Decimal, str]] = []
-        for match in pattern.finditer(value):
-            tail = match.group("tail")
-            values = accounting_values(tail)
-            if not values:
+        rows = value.split(ROW_SEPARATOR)
+        for row_index, row in enumerate(rows):
+            match = pattern.search(row)
+            if match is None:
                 continue
-            excerpt = match.group(0).strip()[:400]
+            tail = row[match.end():]
+            values = accounting_values(tail)
+            if len(values) != 2:
+                continue
+            header_context = " ".join(
+                candidate.strip()
+                for candidate in rows[
+                    max(0, row_index - 8):row_index
+                ]
+                if candidate.strip()
+            )
+            if re.search(
+                r"\bquarterly\s+financial\s+highlights\b",
+                header_context,
+                re.IGNORECASE,
+            ) is None:
+                continue
+            excerpt = row[match.start():].strip()[:400]
             matches.append((values[0], excerpt))
-        # EA repeats the label in a later five-quarter comparison table.
-        # Its primary quarterly highlights table is the first occurrence.
-        return tuple(matches[:1])
+        return tuple(matches)
 
 
 class EbayNonGaapEpsParser(LabelledEpsParser):

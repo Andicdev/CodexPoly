@@ -61,6 +61,24 @@ class EarningsStore(Protocol):
         timing: EarningsSourceTiming | None = None,
     ) -> None: ...
 
+    def claim_no_match_retry(
+        self,
+        *,
+        source_event_id: int,
+        parser_name: str,
+        parser_version: str,
+    ) -> bool: ...
+
+    def record_parse_attempt(
+        self,
+        *,
+        source_event_id: int,
+        parser_name: str,
+        parser_version: str,
+        status: str,
+        reason: str | None = None,
+    ) -> None: ...
+
     def record_fact(
         self,
         *,
@@ -88,6 +106,9 @@ class DocumentFetcher(Protocol):
 
 
 class EarningsParser(Protocol):
+    parser_name: str
+    parser_version: str
+
     def parse(
         self,
         document: str | bytes,
@@ -193,12 +214,44 @@ class EarningsShadowProcessor:
                         fact_id=promoted.row_id,
                         signal=signal,
                     )
-            return ShadowProcessingResult(
-                status=ShadowProcessingStatus.DUPLICATE,
-                reason=f"already_{existing_status.lower()}",
-                scope_id=candidate.scope_id,
-                event_id=stored_event.row_id,
-            )
+            if existing_status == "NO_MATCH":
+                rule = self._rules.get(candidate.scope_id)
+                parser = (
+                    self._parsers.get(rule.ticker)
+                    if rule is not None
+                    else None
+                )
+                if parser is not None:
+                    parser_name, parser_version = _parser_identity(
+                        parser
+                    )
+                    if self._store.claim_no_match_retry(
+                        source_event_id=stored_event.row_id,
+                        parser_name=parser_name,
+                        parser_version=parser_version,
+                    ):
+                        existing_status = "RECEIVED"
+                    else:
+                        return ShadowProcessingResult(
+                            status=ShadowProcessingStatus.DUPLICATE,
+                            reason="parser_version_already_attempted",
+                            scope_id=candidate.scope_id,
+                            event_id=stored_event.row_id,
+                        )
+                else:
+                    return ShadowProcessingResult(
+                        status=ShadowProcessingStatus.DUPLICATE,
+                        reason="already_no_match",
+                        scope_id=candidate.scope_id,
+                        event_id=stored_event.row_id,
+                    )
+            else:
+                return ShadowProcessingResult(
+                    status=ShadowProcessingStatus.DUPLICATE,
+                    reason=f"already_{existing_status.lower()}",
+                    scope_id=candidate.scope_id,
+                    event_id=stored_event.row_id,
+                )
 
         rule = self._rules.get(candidate.scope_id)
         if rule is None:
@@ -218,6 +271,7 @@ class EarningsShadowProcessor:
                 reason="company_parser_not_configured",
                 timing=timing,
             )
+        parser_name, parser_version = _parser_identity(parser)
 
         fetch_started_at = self._clock()
         fetched = self._fetch_document(candidate)
@@ -261,6 +315,13 @@ class EarningsShadowProcessor:
                 parse_completed_at=self._clock(),
             )
             error = f"parser_failed:{type(exc).__name__}"
+            self._store.record_parse_attempt(
+                source_event_id=stored_event.row_id,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                status="ERROR",
+                reason=error,
+            )
             self._store.update_source_event_status(
                 stored_event.row_id,
                 status="ERROR",
@@ -287,6 +348,8 @@ class EarningsShadowProcessor:
                 status=ShadowProcessingStatus.NO_MATCH,
                 reason=parsed.reason,
                 timing=timing,
+                parser_name=parser_name,
+                parser_version=parser_version,
             )
         if parsed.status is ParseStatus.QUARANTINED:
             return self._finish_without_signal(
@@ -295,6 +358,8 @@ class EarningsShadowProcessor:
                 status=ShadowProcessingStatus.QUARANTINED,
                 reason=parsed.reason,
                 timing=timing,
+                parser_name=parser_name,
+                parser_version=parser_version,
             )
         fact = parsed.candidate
         if fact is None:
@@ -304,8 +369,17 @@ class EarningsShadowProcessor:
                 status=ShadowProcessingStatus.ERROR,
                 reason="accepted_parse_without_fact",
                 timing=timing,
+                parser_name=parser_name,
+                parser_version=parser_version,
             )
         fact = replace(fact, detected_at=parse_completed_at)
+        self._store.record_parse_attempt(
+            source_event_id=stored_event.row_id,
+            parser_name=parser_name,
+            parser_version=parser_version,
+            status="ACCEPTED",
+            reason=parsed.reason,
+        )
 
         if self._observation_only:
             stored_fact = self._store.record_fact(
@@ -436,6 +510,8 @@ class EarningsShadowProcessor:
         reason: str,
         fact_id: int | None = None,
         timing: EarningsSourceTiming | None = None,
+        parser_name: str | None = None,
+        parser_version: str | None = None,
     ) -> ShadowProcessingResult:
         database_status = {
             ShadowProcessingStatus.NO_MATCH: "NO_MATCH",
@@ -444,6 +520,16 @@ class EarningsShadowProcessor:
         }.get(status)
         if database_status is None:
             raise ValueError("unsupported non-signal status")
+        if parser_name is not None or parser_version is not None:
+            if parser_name is None or parser_version is None:
+                raise ValueError("partial parser identity")
+            self._store.record_parse_attempt(
+                source_event_id=event_id,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                status=database_status,
+                reason=reason,
+            )
         self._store.update_source_event_status(
             event_id,
             status=database_status,
@@ -457,3 +543,13 @@ class EarningsShadowProcessor:
             event_id=event_id,
             fact_id=fact_id,
         )
+
+
+def _parser_identity(parser: EarningsParser) -> tuple[str, str]:
+    parser_name = str(getattr(parser, "parser_name", "") or "").strip()
+    parser_version = str(
+        getattr(parser, "parser_version", "") or ""
+    ).strip()
+    if not parser_name or not parser_version:
+        raise ValueError("earnings parser identity is required")
+    return parser_name, parser_version

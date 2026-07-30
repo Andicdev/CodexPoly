@@ -96,9 +96,23 @@ The source-neutral persistent supervisor and
 disabled-by-default `RESOLUTION_SUPERVISION_ENABLED` gate. The gateway uses
 only exact order-ID batch cancellation and rechecks the authenticated account,
 order book, target tick, minimum size, and live safety caps before a
-replacement. It reads each exact order both before and after cancellation.
-Replacement uses only the final unfilled quantity; a full fill creates no
-replacement, and an unconfirmed post-cancel state fails closed.
+replacement. Exact order inspection is mandatory for stale or inspect-first
+groups; it skips a fully filled source and sizes a replacement to the observed
+remainder. Unknown inspection state fails closed.
+
+The lifecycle policy now makes the latency/safety choice explicit.
+`RepriceOnTickChange(submit_first=True)` is the backward-compatible default:
+for a fresh tick event it submits and persists the target-tick replacement
+before cancelling the source order. This preserves the hot path but can
+briefly overlap both generations. `submit_first=False` performs the exact
+order inspection first and replaces only the confirmed remainder. Groups
+older than five seconds always use inspect-first regardless of policy.
+
+Recovery classifies a fully terminal source/replacement pair whose combined
+matched quantity exceeds the original target as `OVERFILLED` in
+`resolution_order_group_terminal_audits`. The group becomes `COMPLETED`, not
+a generic `FAILED`, its exact observations remain durable, and the runtime
+emits a sanitized warning containing target, filled, and excess quantities.
 
 The supervisor also has a bounded background recovery scan for stale
 `REPRICING` and `FAILED` groups. It only reads exact persisted order IDs and
@@ -141,7 +155,8 @@ RESOLUTION_SUPERVISION_BATCH_SIZE=100
 ```
 
 The existing live-trading account and safety configuration is still required.
-The runner never applies database migrations. Apply migrations 001 and 002
+The runner never applies database migrations. Apply migrations 001, 002, and
+022
 through the controlled deployment process before enabling the gate;
 `ensure_ready()` blocks live preparation if any required table or column is
 missing. For the configured primary database, both migrations were applied and

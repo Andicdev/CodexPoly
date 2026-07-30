@@ -216,7 +216,7 @@ class PersistentOrderSupervisor:
             if not group.live_order_ids:
                 raise RuntimeError("order_group_has_no_live_orders")
 
-            if self._requires_stale_preinspection(group, event=event):
+            if self._requires_preinspection(group, event=event):
                 inspection = self._gateway.inspect_orders(
                     account_name=group.registration.account_name,
                     order_ids=group.live_order_ids,
@@ -390,12 +390,22 @@ class PersistentOrderSupervisor:
                 ),
             )
 
-    def _requires_stale_preinspection(
+    def _requires_preinspection(
         self,
         group: OrderGroupRecord,
         *,
         event: TickSizeChange,
     ) -> bool:
+        submit_first = group.registration.metadata.get(
+            "submit_first_repricing",
+            True,
+        )
+        if not isinstance(submit_first, bool):
+            raise ValueError(
+                "submit_first_repricing metadata must be a bool"
+            )
+        if not submit_first:
+            return True
         created_at = group.created_at
         if created_at is None:
             return False
@@ -529,6 +539,53 @@ class PersistentOrderSupervisor:
                     ),
                     order_statuses=order_statuses,
                     observations=observations,
+                )
+
+            terminal_overfill = _terminal_overfill(
+                source_snapshots=source_snapshots,
+                replacement_snapshots=replacement_snapshots,
+            )
+            if terminal_overfill is not None:
+                target_quantity, filled_quantity, excess_quantity = (
+                    terminal_overfill
+                )
+                for snapshot in source_snapshots:
+                    order_statuses[snapshot.order_id] = (
+                        TrackedOrderStatus.FILLED
+                        if snapshot.state == RemoteOrderState.FILLED
+                        else TrackedOrderStatus.REPLACED
+                    )
+                self._repository.complete_overfill_reconciliation(
+                    claim,
+                    order_statuses=order_statuses,
+                    target_quantity=target_quantity,
+                    filled_quantity=filled_quantity,
+                    excess_quantity=excess_quantity,
+                    detected_at=observed_at,
+                    observations=observations,
+                )
+                return _reconciliation_result(
+                    event_id,
+                    group,
+                    status=SupervisionStatus.COMPLETED,
+                    cancelled_order_ids=tuple(
+                        snapshot.order_id
+                        for snapshot in source_snapshots
+                        if (
+                            snapshot.state
+                            == RemoteOrderState.CANCELLED
+                        )
+                    ),
+                    replacement_order_ids=tuple(
+                        order.order_id
+                        for order in replacement_orders
+                    ),
+                    error=(
+                        "overfill_detected:"
+                        f"target={target_quantity};"
+                        f"filled={filled_quantity};"
+                        f"excess={excess_quantity}"
+                    ),
                 )
 
             try:
@@ -1093,6 +1150,48 @@ def _tracked_status_for_snapshot(
         RemoteOrderState.FILLED: TrackedOrderStatus.FILLED,
         RemoteOrderState.UNKNOWN: TrackedOrderStatus.UNKNOWN,
     }[snapshot.state]
+
+
+def _terminal_overfill(
+    *,
+    source_snapshots: Sequence[RemoteOrderSnapshot],
+    replacement_snapshots: Sequence[RemoteOrderSnapshot],
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    snapshots = tuple(source_snapshots) + tuple(
+        replacement_snapshots
+    )
+    if not source_snapshots or not replacement_snapshots:
+        return None
+    if any(
+        snapshot.state
+        not in {
+            RemoteOrderState.CANCELLED,
+            RemoteOrderState.FILLED,
+        }
+        for snapshot in snapshots
+    ):
+        return None
+    target_quantity = sum(
+        (
+            snapshot.original_quantity
+            for snapshot in source_snapshots
+        ),
+        Decimal("0"),
+    )
+    filled_quantity = sum(
+        (
+            snapshot.matched_quantity
+            for snapshot in snapshots
+        ),
+        Decimal("0"),
+    )
+    if filled_quantity <= target_quantity:
+        return None
+    return (
+        target_quantity,
+        filled_quantity,
+        filled_quantity - target_quantity,
+    )
 
 
 def _reconciliation_event_id(

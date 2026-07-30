@@ -39,6 +39,11 @@ _MIGRATION_PATHS = (
         / "migrations"
         / "018_add_observation_only_earnings_facts.sql"
     ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "021_add_earnings_parser_attempts.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
@@ -55,6 +60,9 @@ SELECT
     to_regclass(
         'earnings_source_race_observations'
     ) IS NOT NULL AS source_race_view,
+    to_regclass(
+        'earnings_source_parse_attempts'
+    ) IS NOT NULL AS parse_attempts_table,
     (
         SELECT count(*) = 23
         FROM information_schema.columns
@@ -135,7 +143,15 @@ SELECT
         WHERE indexrelid = to_regclass(
             'ix_earnings_source_processing_telemetry_transport'
         )
-    ) AS processing_telemetry_transport_index
+    ) AS processing_telemetry_transport_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_index
+        WHERE indexrelid = to_regclass(
+            'ux_earnings_source_parse_attempts_version'
+        )
+          AND indisunique
+    ) AS parse_attempts_version_index
 """.strip()
 
 _UPSERT_RULE_SQL = """
@@ -410,6 +426,87 @@ SET
 RETURNING source_event_id AS id
 """.strip()
 
+_CLAIM_NO_MATCH_RETRY_SQL = """
+WITH eligible_event AS (
+    SELECT event.id
+    FROM earnings_source_events AS event
+    WHERE event.id = :source_event_id
+      AND event.status = 'NO_MATCH'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM earnings_fact_candidates AS fact
+          WHERE fact.scope_id = event.scope_id
+            AND fact.status IN ('VALIDATED', 'EMITTED')
+      )
+),
+claimed_attempt AS (
+    INSERT INTO earnings_source_parse_attempts (
+        source_event_id,
+        parser_name,
+        parser_version,
+        status
+    )
+    SELECT
+        id,
+        :parser_name,
+        :parser_version,
+        'CLAIMED'
+    FROM eligible_event
+    ON CONFLICT (
+        source_event_id,
+        parser_name,
+        parser_version
+    ) DO UPDATE
+    SET
+        status = 'CLAIMED',
+        attempt_count =
+            earnings_source_parse_attempts.attempt_count + 1,
+        reason = NULL,
+        claimed_at = now(),
+        completed_at = NULL,
+        updated_at = now()
+    WHERE earnings_source_parse_attempts.status = 'ERROR'
+       OR (
+            earnings_source_parse_attempts.status = 'CLAIMED'
+            AND earnings_source_parse_attempts.claimed_at
+                < now() - interval '5 minutes'
+       )
+    RETURNING id, source_event_id
+)
+SELECT id
+FROM claimed_attempt
+""".strip()
+
+_RECORD_PARSE_ATTEMPT_SQL = """
+INSERT INTO earnings_source_parse_attempts (
+    source_event_id,
+    parser_name,
+    parser_version,
+    status,
+    reason,
+    completed_at
+)
+VALUES (
+    :source_event_id,
+    :parser_name,
+    :parser_version,
+    :status,
+    :reason,
+    CASE WHEN :status = 'CLAIMED' THEN NULL ELSE now() END
+)
+ON CONFLICT (
+    source_event_id,
+    parser_name,
+    parser_version
+) DO UPDATE
+SET
+    status = EXCLUDED.status,
+    reason = EXCLUDED.reason,
+    completed_at = EXCLUDED.completed_at,
+    updated_at = now()
+RETURNING id
+""".strip()
+
 _INSERT_FACT_SQL = """
 INSERT INTO earnings_fact_candidates (
     idempotency_key,
@@ -626,6 +723,7 @@ class SqlAlchemyEarningsStore:
             "processing_telemetry_table",
             "transport_observations_table",
             "source_race_view",
+            "parse_attempts_table",
             "rules_columns",
             "events_columns",
             "facts_columns",
@@ -637,6 +735,7 @@ class SqlAlchemyEarningsStore:
             "transport_observations_key_index",
             "observed_fact_status",
             "processing_telemetry_transport_index",
+            "parse_attempts_version_index",
         )
         if not all(bool(row.get(name)) for name in expected):
             raise EarningsStoreError(
@@ -755,6 +854,86 @@ class SqlAlchemyEarningsStore:
         except Exception as exc:
             raise EarningsStoreError(
                 "Failed to update earnings source event: "
+                f"{type(exc).__name__}"
+            ) from None
+
+    def claim_no_match_retry(
+        self,
+        *,
+        source_event_id: int,
+        parser_name: str,
+        parser_version: str,
+    ) -> bool:
+        normalized_name = str(parser_name or "").strip()
+        normalized_version = str(parser_version or "").strip()
+        if not normalized_name or not normalized_version:
+            raise ValueError("parser identity is required")
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                claimed = session.execute(
+                    text_factory(_CLAIM_NO_MATCH_RETRY_SQL),
+                    {
+                        "source_event_id": int(source_event_id),
+                        "parser_name": normalized_name,
+                        "parser_version": normalized_version,
+                    },
+                ).mappings().one_or_none()
+                if claimed is None:
+                    session.rollback()
+                    return False
+                session.commit()
+        except Exception as exc:
+            raise EarningsStoreError(
+                "Failed to claim earnings parser retry: "
+                f"{type(exc).__name__}"
+            ) from None
+        return True
+
+    def record_parse_attempt(
+        self,
+        *,
+        source_event_id: int,
+        parser_name: str,
+        parser_version: str,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        normalized_name = str(parser_name or "").strip()
+        normalized_version = str(parser_version or "").strip()
+        normalized_status = str(status or "").strip().upper()
+        if not normalized_name or not normalized_version:
+            raise ValueError("parser identity is required")
+        if normalized_status not in {
+            "CLAIMED",
+            "ACCEPTED",
+            "NO_MATCH",
+            "QUARANTINED",
+            "ERROR",
+        }:
+            raise ValueError("unsupported earnings parse attempt status")
+        safe_reason = (
+            redact_sensitive_text(reason, max_length=240)
+            if reason is not None
+            else None
+        )
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                session.execute(
+                    text_factory(_RECORD_PARSE_ATTEMPT_SQL),
+                    {
+                        "source_event_id": int(source_event_id),
+                        "parser_name": normalized_name,
+                        "parser_version": normalized_version,
+                        "status": normalized_status,
+                        "reason": safe_reason,
+                    },
+                ).mappings().one()
+                session.commit()
+        except Exception as exc:
+            raise EarningsStoreError(
+                "Failed to record earnings parser attempt: "
                 f"{type(exc).__name__}"
             ) from None
 

@@ -281,6 +281,12 @@ class OrderGroupStateTests(unittest.TestCase):
             "reprice_on_tick_change",
         )
         self.assertEqual(registration.desired_price, Decimal("0.999"))
+        self.assertTrue(
+            registration.metadata.get(
+                "submit_first_repricing",
+                True,
+            )
+        )
 
     def test_repricing_requires_replacement_order_parameters(self) -> None:
         incomplete = ExecutionHandle(
@@ -304,7 +310,7 @@ class AdditiveMigrationTests(unittest.TestCase):
     def test_migration_only_creates_new_objects(self) -> None:
         sql = order_supervision_migration_sql().upper()
 
-        self.assertEqual(sql.count("CREATE TABLE IF NOT EXISTS"), 4)
+        self.assertEqual(sql.count("CREATE TABLE IF NOT EXISTS"), 5)
         self.assertNotIn("ALTER TABLE", sql)
         self.assertNotIn("DROP TABLE", sql)
         self.assertNotIn("DROP COLUMN", sql)
@@ -316,7 +322,7 @@ class AdditiveMigrationTests(unittest.TestCase):
         self.assertIn("RESOLUTION_ORDER_OBSERVATIONS", sql)
 
     def test_migrate_executes_additive_script_in_one_transaction(self) -> None:
-        session = _Session([_Result(), _Result()])
+        session = _Session([_Result(), _Result(), _Result()])
         repository = SqlAlchemyOrderGroupRepository(
             session_factory=lambda: session,
             text_factory=lambda value: value,
@@ -325,7 +331,7 @@ class AdditiveMigrationTests(unittest.TestCase):
         repository.migrate()
 
         self.assertEqual(session.commits, 1)
-        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(len(session.calls), 3)
         self.assertIn(
             "CREATE TABLE IF NOT EXISTS resolution_order_groups",
             session.calls[0][0],
@@ -334,8 +340,13 @@ class AdditiveMigrationTests(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS resolution_order_observations",
             session.calls[1][0],
         )
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS "
+            "resolution_order_group_terminal_audits",
+            session.calls[2][0],
+        )
 
-    def test_ready_check_requires_all_four_new_tables(self) -> None:
+    def test_ready_check_requires_all_additive_tables(self) -> None:
         session = _Session(
             [
                 _Result(
@@ -348,6 +359,8 @@ class AdditiveMigrationTests(unittest.TestCase):
                         "events_columns": True,
                         "observations_table": True,
                         "observations_columns": True,
+                        "terminal_audits_table": True,
+                        "terminal_audits_kind_index": True,
                     }
                 )
             ]
@@ -983,6 +996,65 @@ class SqlAlchemyOrderGroupRepositoryTests(unittest.TestCase):
         self.assertEqual(
             session.calls[2][1]["status"],
             "LIVE",
+        )
+
+    def test_complete_overfill_reconciliation_is_terminal_audit(
+        self,
+    ) -> None:
+        session = _Session(
+            [
+                _Result(one_or_none={"revision": 4}),
+                _Result(one_or_none={"order_id": "order-1"}),
+                _Result(one_or_none={"order_id": "order-2"}),
+                _Result(),
+                _Result(rowcount=1),
+            ]
+        )
+        repository = SqlAlchemyOrderGroupRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+        claim = SupervisionClaim(
+            event_id="reconcile:group-1:2",
+            order_group_id="group-1",
+            acquired=True,
+            revision=3,
+        )
+        detected_at = datetime(
+            2026,
+            7,
+            30,
+            21,
+            15,
+            tzinfo=timezone.utc,
+        )
+
+        repository.complete_overfill_reconciliation(
+            claim,
+            order_statuses={
+                "order-1": TrackedOrderStatus.FILLED,
+                "order-2": TrackedOrderStatus.FILLED,
+            },
+            target_quantity=Decimal("100"),
+            filled_quantity=Decimal("200"),
+            excess_quantity=Decimal("100"),
+            detected_at=detected_at,
+        )
+
+        self.assertEqual(session.commits, 1)
+        self.assertIn(
+            "terminal_audit_kind",
+            session.calls[0][0],
+        )
+        self.assertEqual(session.calls[1][1]["status"], "FILLED")
+        self.assertEqual(session.calls[2][1]["status"], "FILLED")
+        self.assertIn(
+            "resolution_order_group_terminal_audits",
+            session.calls[3][0],
+        )
+        self.assertIn(
+            "overfill_detected",
+            session.calls[4][1]["audit_reason"],
         )
 
     def test_fail_reconciliation_quarantines_manual_review(

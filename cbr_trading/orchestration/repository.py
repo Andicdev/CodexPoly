@@ -585,6 +585,10 @@ def _profile_params(
         old_tick = None
         new_tick = None
         max_reprices = None
+    metadata = _metadata_with_lifecycle_policy(
+        profile.metadata,
+        policy=policy,
+    )
     return {
         "profile_key": profile.profile_key,
         "scope_id": profile.scope_id,
@@ -601,7 +605,7 @@ def _profile_params(
         "max_reprices": max_reprices,
         "prepare_from": profile.prepare_from,
         "expires_at": profile.expires_at,
-        "metadata": _json_dumps(profile.metadata),
+        "metadata": _json_dumps(metadata),
         "status": status,
     }
 
@@ -620,6 +624,10 @@ def _template_params(
         old_tick = None
         new_tick = None
         max_reprices = None
+    metadata = _metadata_with_lifecycle_policy(
+        template.metadata,
+        policy=policy,
+    )
     return {
         "template_key": template.template_key,
         "yes_desired_price": template.yes_desired_price,
@@ -629,11 +637,12 @@ def _template_params(
         "old_tick": old_tick,
         "new_tick": new_tick,
         "max_reprices": max_reprices,
-        "metadata": _json_dumps(template.metadata),
+        "metadata": _json_dumps(metadata),
     }
 
 
 def _profile_from_row(row: Mapping[str, Any]) -> ResolutionExecutionProfile:
+    metadata = _json_mapping(row.get("metadata"))
     kind = str(row["lifecycle_kind"])
     if kind == "keep_open":
         policy = KeepOpenPolicy()
@@ -642,6 +651,7 @@ def _profile_from_row(row: Mapping[str, Any]) -> ResolutionExecutionProfile:
             old_tick=Decimal(str(row["old_tick"])),
             new_tick=Decimal(str(row["new_tick"])),
             max_reprices=int(row["max_reprices"]),
+            submit_first=_submit_first_from_metadata(metadata),
         )
     else:
         raise ResolutionProfileStoreError(
@@ -660,25 +670,31 @@ def _profile_from_row(row: Mapping[str, Any]) -> ResolutionExecutionProfile:
         prepare_from=row["prepare_from"],
         expires_at=row["expires_at"],
         lifecycle_policy=policy,
-        metadata=_json_mapping(row.get("metadata")),
+        metadata=metadata,
     )
 
 
 def _template_from_row(
     row: Mapping[str, Any],
 ) -> ResolutionProfileTemplate:
+    metadata = _json_mapping(row.get("metadata"))
     return ResolutionProfileTemplate(
         template_key=str(row["template_key"]),
         yes_desired_price=Decimal(str(row["yes_desired_price"])),
         no_desired_price=Decimal(str(row["no_desired_price"])),
         quantity=Decimal(str(row["quantity"])),
-        lifecycle_policy=_lifecycle_policy_from_row(row),
-        metadata=_json_mapping(row.get("metadata")),
+        lifecycle_policy=_lifecycle_policy_from_row(
+            row,
+            metadata=metadata,
+        ),
+        metadata=metadata,
     )
 
 
 def _lifecycle_policy_from_row(
     row: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any] | None = None,
 ) -> KeepOpenPolicy | RepriceOnTickChange:
     kind = str(row["lifecycle_kind"])
     if kind == "keep_open":
@@ -688,10 +704,42 @@ def _lifecycle_policy_from_row(
             old_tick=Decimal(str(row["old_tick"])),
             new_tick=Decimal(str(row["new_tick"])),
             max_reprices=int(row["max_reprices"]),
+            submit_first=_submit_first_from_metadata(
+                metadata
+                if metadata is not None
+                else _json_mapping(row.get("metadata"))
+            ),
         )
     raise ResolutionProfileStoreError(
         "Stored resolution profile has unsupported lifecycle policy"
     )
+
+
+def _metadata_with_lifecycle_policy(
+    value: Mapping[str, Any],
+    *,
+    policy: KeepOpenPolicy | RepriceOnTickChange,
+) -> dict[str, Any]:
+    metadata = dict(value)
+    if isinstance(policy, RepriceOnTickChange):
+        if policy.submit_first:
+            metadata.pop("submit_first_repricing", None)
+        else:
+            metadata["submit_first_repricing"] = False
+    else:
+        metadata.pop("submit_first_repricing", None)
+    return metadata
+
+
+def _submit_first_from_metadata(
+    metadata: Mapping[str, Any],
+) -> bool:
+    value = metadata.get("submit_first_repricing", True)
+    if not isinstance(value, bool):
+        raise ResolutionProfileStoreError(
+            "submit_first_repricing metadata must be a bool"
+        )
+    return value
 
 
 def _json_dumps(value: Any) -> str:

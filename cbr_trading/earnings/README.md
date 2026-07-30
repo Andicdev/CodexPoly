@@ -81,6 +81,23 @@ current-period reconciliation from diluted GAAP loss per share to
 `Adjusted Diluted EPS`. It does not substitute the GAAP loss or a prior-period
 column.
 
+Parser revisions are tracked independently from immutable source events by
+migration 021. A terminal earnings `NO_MATCH` may be claimed once by a new
+`parser_name`/`parser_version` pair. The same version cannot retry, and a
+retry is refused after the scope already has a `VALIDATED` or `EMITTED` fact.
+The source event stays `NO_MATCH` while that attempt is in flight, allowing
+a crashed `CLAIMED` attempt to be reclaimed after its TTL without admitting a
+second concurrent parser run.
+This makes a reviewed parser rollout sufficient to recover a still-active
+filing through SEC/public polling; it does not require changing the old event
+row by hand. `PARSED` and `QUARANTINED` remain terminal.
+
+Table parsers must prove the header-to-value mapping before selecting a
+positional value. Rivian and Roblox verify current/prior year order for both
+quarter-only and quarter-plus-YTD layouts; Woodward verifies quarter before
+YTD; Electronic Arts accepts only its reviewed two-column Quarterly Financial
+Highlights shape. Unknown or reversed layouts fail closed as `NO_MATCH`.
+
 ## Explicit database setup
 
 Normal runners never apply migration 004. Check readiness with:

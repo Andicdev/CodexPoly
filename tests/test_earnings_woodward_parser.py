@@ -85,6 +85,7 @@ class WoodwardGaapEpsParserTests(unittest.TestCase):
             result.candidate.basis,
             rule.primary_basis,
         )
+        self.assertEqual(result.candidate.parser_version, "2")
 
     def test_rounds_standard_half_up(self) -> None:
         result = WoodwardGaapEpsParser().parse(
@@ -140,6 +141,22 @@ class WoodwardGaapEpsParserTests(unittest.TestCase):
             result.reason,
             "woodward_gaap_eps_row_not_found",
         )
+
+    def test_reversed_quarter_and_ytd_columns_fail_closed(self) -> None:
+        document = _document().replace(
+            "<th>Third Quarter 2026</th><th>YTD 2026</th>",
+            "<th>YTD 2026</th><th>Third Quarter 2026</th>",
+        )
+
+        result = WoodwardGaapEpsParser().parse(
+            document,
+            source=_source(),
+            rule=wwd_q3_2026_shadow_rule(),
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.NO_MATCH)
+        self.assertIsNone(result.candidate)
 
 
 if __name__ == "__main__":

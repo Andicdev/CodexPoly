@@ -152,7 +152,7 @@ class RivianGaapDilutedEpsParserTests(unittest.TestCase):
         self.assertEqual(result.status, ParseStatus.ACCEPTED)
         assert result.candidate is not None
         self.assertEqual(result.candidate.value, Decimal("-0.63"))
-        self.assertEqual(result.candidate.parser_version, "3")
+        self.assertEqual(result.candidate.parser_version, "4")
 
     def test_q2_unknown_four_column_layout_fails_closed(self) -> None:
         rule = rivn_q2_2026_shadow_rule()

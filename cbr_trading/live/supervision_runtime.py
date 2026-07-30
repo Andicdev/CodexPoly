@@ -345,6 +345,15 @@ class OrderSupervisionRuntime:
                 "order supervision recovery processed count=%s",
                 len(results),
             )
+        for result in results:
+            if result.error:
+                self._logger.warning(
+                    "order supervision terminal alert "
+                    "group=%s status=%s reason=%s",
+                    result.order_group_id,
+                    result.status.value,
+                    result.error,
+                )
 
     async def _stop_channel(
         self,

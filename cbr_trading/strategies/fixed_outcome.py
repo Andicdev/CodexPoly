@@ -189,11 +189,29 @@ def _lifecycle_policy(
                 rule=rule,
             ),
             max_reprices=int(raw.get("max_reprices") or 1),
+            submit_first=_optional_bool(
+                raw.get("submit_first"),
+                default=True,
+                name="submit_first",
+            ),
         )
     except (TypeError, ValueError) as exc:
         raise FixedOutcomeConfigurationError(
             f"Rule {_rule_identity(rule)} has invalid tick lifecycle"
         ) from exc
+
+
+def _optional_bool(
+    value: object,
+    *,
+    default: bool,
+    name: str,
+) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool")
+    return value
 
 
 def _matches_signal(

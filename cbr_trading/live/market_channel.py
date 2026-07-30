@@ -266,6 +266,15 @@ class PolymarketMarketChannel:
                 continue
             if dispatch is not None:
                 dispatches.append(dispatch)
+                for result in dispatch.results:
+                    if result.error:
+                        self._logger.warning(
+                            "tick supervision alert group=%s "
+                            "status=%s reason=%s",
+                            result.order_group_id,
+                            result.status.value,
+                            result.error,
+                        )
         return tuple(dispatches)
 
     async def close(self) -> None:

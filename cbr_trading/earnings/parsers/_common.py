@@ -95,6 +95,36 @@ def accounting_values(value: str) -> tuple[Decimal, ...]:
     )
 
 
+def ordered_year_columns(
+    header_context: str,
+    *,
+    fiscal_year: int,
+    value_count: int,
+    current_year_first: bool,
+) -> bool:
+    """Confirm an explicit current/prior year pair for every value pair."""
+
+    if value_count < 2 or value_count % 2:
+        return False
+    current_year = str(int(fiscal_year))
+    prior_year = str(int(fiscal_year) - 1)
+    years = tuple(
+        match.group(0)
+        for match in re.finditer(
+            r"\b(?:19|20)\d{2}\b",
+            header_context,
+        )
+    )
+    if len(years) < value_count:
+        return False
+    pair = (
+        (current_year, prior_year)
+        if current_year_first
+        else (prior_year, current_year)
+    )
+    return years[-value_count:] == pair * (value_count // 2)
+
+
 def parse_accounting_decimal(value: str) -> Decimal:
     normalized = "".join(str(value or "").split()).replace("$", "")
     negative = normalized.startswith("(") and normalized.endswith(")")

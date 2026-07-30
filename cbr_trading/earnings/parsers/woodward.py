@@ -32,7 +32,7 @@ WOODWARD_Q3_2026_CONDITION_ID = (
     "9c758117d9d47382f3bfc5fb0df157ff"
 )
 WOODWARD_PARSER_NAME = "woodward_gaap_diluted_eps"
-WOODWARD_PARSER_VERSION = "1"
+WOODWARD_PARSER_VERSION = "2"
 
 _EPS_LABEL_PATTERN = re.compile(
     r"\bearnings\s+per\s+share\s*\(\s*eps\s*\)",
@@ -94,7 +94,7 @@ class WoodwardGaapEpsParser:
                 reason="diluted_basis_not_confirmed",
             )
 
-        matches = _extract_gaap_eps(normalized_text)
+        matches = _extract_gaap_eps(normalized_text, rule=rule)
         if not matches:
             return EarningsParseResult(
                 status=ParseStatus.NO_MATCH,
@@ -265,10 +265,12 @@ def _validate_context(
 
 def _extract_gaap_eps(
     value: str,
+    *,
+    rule: EarningsMarketRule,
 ) -> tuple[tuple[Decimal, str], ...]:
     found: list[tuple[Decimal, str]] = []
     rows = value.split(ROW_SEPARATOR)
-    for row in rows:
+    for row_index, row in enumerate(rows):
         label = _EPS_LABEL_PATTERN.search(row)
         if label is None:
             continue
@@ -280,5 +282,54 @@ def _extract_gaap_eps(
         values = accounting_values(row[label.end():])
         if not values:
             continue
+        if len(values) > 1 and not _has_safe_woodward_layout(
+            rows,
+            row_index=row_index,
+            value_count=len(values),
+            rule=rule,
+        ):
+            continue
         found.append((values[0], row.strip()[:400]))
     return tuple(found)
+
+
+def _has_safe_woodward_layout(
+    rows: list[str],
+    *,
+    row_index: int,
+    value_count: int,
+    rule: EarningsMarketRule,
+) -> bool:
+    if value_count != 2:
+        return False
+    quarter_names = {
+        1: "first",
+        2: "second",
+        3: "third",
+        4: "fourth",
+    }
+    quarter_name = quarter_names.get(rule.fiscal_quarter)
+    if quarter_name is None:
+        return False
+    header_context = " ".join(
+        row.strip()
+        for row in rows[max(0, row_index - 8):row_index]
+        if row.strip()
+    )
+    quarter_header = re.search(
+        rf"\b{quarter_name}\s+quarter\s+{rule.fiscal_year}\b",
+        header_context,
+        re.IGNORECASE,
+    )
+    cumulative_header = re.search(
+        rf"\b(?:ytd|year[\s-]*to[\s-]*date|"
+        rf"{3 * rule.fiscal_quarter}\s+months\s+ended)\b"
+        rf".{{0,80}}\b{rule.fiscal_year}\b",
+        header_context,
+        re.IGNORECASE,
+    )
+    return bool(
+        quarter_header
+        and cumulative_header
+        and quarter_header.start() < cumulative_header.start()
+    )

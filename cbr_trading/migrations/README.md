@@ -140,6 +140,19 @@ New `AUTO_LIVE` inserts/transitions and `activate_at` changes are rejected
 unless version 1 proves that activation precedes the earliest plausible
 signal by the configured safety lead.
 
+`021_add_earnings_parser_attempts.sql` creates only
+`earnings_source_parse_attempts`. Its unique event/parser/version key permits
+one reviewed parser version to retry a terminal earnings `NO_MATCH` without
+rewriting the immutable source event. The claim is refused when the scope
+already has a validated/emitted fact; transient attempt errors and abandoned
+five-minute claims remain recoverable.
+
+`022_add_order_group_terminal_audits.sql` creates only
+`resolution_order_group_terminal_audits`. Reconciliation records a terminal
+`OVERFILLED` classification, target quantity, total matched quantity, and
+excess quantity when submit-first source and replacement orders both finish.
+The existing order-group status remains backward-compatible `COMPLETED`.
+
 `018_add_observation_only_earnings_facts.sql` expands the existing earnings
 fact-status constraint with `OBSERVED` and creates
 `earnings_source_race_observations`. `OBSERVED` rows retain parsed official

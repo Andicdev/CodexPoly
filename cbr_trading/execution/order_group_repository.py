@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Mapping, Protocol, Sequence
 
 from cbr_trading.domain.intents import OrderLifecyclePolicy
@@ -109,6 +110,18 @@ class OrderGroupRepository(Protocol):
         order_statuses: Mapping[str, TrackedOrderStatus],
         recovered_reprice: bool,
         keep_active: bool,
+        observations: Sequence[OrderObservation] = (),
+    ) -> None: ...
+
+    def complete_overfill_reconciliation(
+        self,
+        claim: SupervisionClaim,
+        *,
+        order_statuses: Mapping[str, TrackedOrderStatus],
+        target_quantity: Decimal,
+        filled_quantity: Decimal,
+        excess_quantity: Decimal,
+        detected_at: datetime,
         observations: Sequence[OrderObservation] = (),
     ) -> None: ...
 
