@@ -331,6 +331,10 @@ class LocalBookRegistry:
         return self._status
 
     @property
+    def event(self) -> NegRiskEvent:
+        return self._event
+
+    @property
     def reason_code(self) -> str | None:
         return self._reason_code
 

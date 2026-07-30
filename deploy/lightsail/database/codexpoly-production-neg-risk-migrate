@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 0 ]]; then
+    printf 'MIGRATION_RESULT=rejected\nMIGRATION_REASON=arguments-not-allowed\n' >&2
+    exit 2
+fi
+
+exec /opt/codexpoly/config/run-postgres-migration.sh \
+    production \
+    codexpoly_neg_risk

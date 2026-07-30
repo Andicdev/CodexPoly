@@ -1,0 +1,69 @@
+name: codexpoly-staging-neg-risk
+
+services:
+  neg-risk-recorder:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command:
+      - python
+      - -u
+      - -m
+      - neg_risk_trading.recorder_main
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly_neg_risk
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      NEG_RISK_RECORDER_MODE: shadow
+      NEG_RISK_EVENT_SLUG: fed-decision-in-september-762
+      NEG_RISK_QUANTITIES: "200"
+      NEG_RISK_QUEUE_CAPACITY: "5000"
+      NEG_RISK_DB_BATCH_SIZE: "100"
+      NEG_RISK_DB_FLUSH_SEC: "0.25"
+      NEG_RISK_ROUTE_SAMPLE_INTERVAL_MS: "250"
+      NEG_RISK_RECONNECT_INITIAL_SEC: "1"
+      NEG_RISK_RECONNECT_MAX_SEC: "30"
+      NEG_RISK_HEARTBEAT_SEC: "10"
+      NEG_RISK_BOOTSTRAP_TIMEOUT_SEC: "15"
+    secrets:
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+    networks:
+      - backend
+      - egress
+    dns:
+      - 169.254.169.253
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.50
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  backend:
+    name: codexpoly-staging-backend
+    external: true
+  egress:
+    name: codexpoly-staging-neg-risk-egress
+    driver: bridge
+
+secrets:
+  database_app_password:
+    file: /home/codexdeploy/.config/codexpoly/secrets/staging/DATABASE_APP_PASSWORD

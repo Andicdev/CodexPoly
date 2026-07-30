@@ -3,12 +3,23 @@ set -euo pipefail
 
 readonly max_sql_bytes=5242880
 
-if [[ "$#" -ne 1 ]]; then
+if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
     printf 'MIGRATION_RESULT=rejected\nMIGRATION_REASON=invalid-runner-arguments\n' >&2
     exit 2
 fi
 
 environment="$1"
+database_name="${2:-codexpoly}"
+case "${database_name}" in
+    codexpoly|codexpoly_neg_risk)
+        ;;
+    *)
+        printf 'MIGRATION_RESULT=rejected\nMIGRATION_REASON=invalid-database\n' >&2
+        exit 2
+        ;;
+esac
+readonly database_name
+
 case "${environment}" in
     staging)
         if [[ "$(id -un)" != "codexdeploy" ]]; then
@@ -81,7 +92,7 @@ if ! "${docker_command[@]}" exec \
     psql \
     --no-psqlrc \
     --username codexpoly_admin \
-    --dbname codexpoly \
+    --dbname "${database_name}" \
     --set=ON_ERROR_STOP=1 \
     --set=VERBOSITY=terse \
     --file - \
@@ -93,5 +104,5 @@ then
     exit 1
 fi
 
-printf 'MIGRATION_ENVIRONMENT=%s\nMIGRATION_RESULT=applied\n' \
-    "${environment}"
+printf 'MIGRATION_ENVIRONMENT=%s\nMIGRATION_DATABASE=%s\nMIGRATION_RESULT=applied\n' \
+    "${environment}" "${database_name}"

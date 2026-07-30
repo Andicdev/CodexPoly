@@ -62,6 +62,17 @@ python -m neg_risk_trading.stream_probe `
   --event fed-decision-in-september-762
 ```
 
+The continuous recorder runs only with the isolated database configured:
+
+```powershell
+python -m neg_risk_trading.recorder_main
+```
+
+It never migrates the schema at startup. Apply the checked-in migration
+explicitly first. Public stream messages enter a bounded in-memory queue and
+are written in batches by a separate task; database I/O is not performed by
+the WebSocket event callback.
+
 ## Resting-order retention
 
 Queue position is treated as an asset. A temporary edge reduction, a long
@@ -81,9 +92,9 @@ depth, and time spent in queue.
    evaluation.
 2. Completed foundation: all-asset WebSocket initial dump, local L2 updates,
    tick changes, readiness epochs, resync states, and queue-ahead bounds.
-3. Persist normalized stream observations and route evaluations in the isolated
-   `codexpoly_neg_risk` staging database.
-4. Run the continuous shadow recorder and derive fill probability, trade flow,
+3. Completed locally: append-only PostgreSQL persistence and a bounded
+   continuous shadow recorder for the isolated `codexpoly_neg_risk` database.
+4. Deploy the recorder to staging and derive fill probability, trade flow,
    and post-fill markouts.
 5. Implement prepared full-basket inventory and a paper executor.
 6. Add authenticated preflight, persistent idempotency, exact-order

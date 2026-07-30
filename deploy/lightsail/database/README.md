@@ -58,6 +58,20 @@ environments through fixed stdin-only commands:
 sudo /usr/local/sbin/codexpoly-production-migrate < migration.sql
 ```
 
+The isolated `codexpoly_neg_risk` database has separate fixed runners:
+
+```bash
+# staging
+/opt/codexpoly/config/codexpoly-staging-neg-risk-migrate < migration.sql
+
+# production
+sudo /usr/local/sbin/codexpoly-production-neg-risk-migrate < migration.sql
+```
+
+Both variants use the same stdin size and psql meta-command guards. The
+database name is selected only by the installed wrapper and cannot be supplied
+by the remote caller.
+
 From the local CodexPoly workspace, use the SSH helper's SQL-only stdin mode:
 
 ```powershell

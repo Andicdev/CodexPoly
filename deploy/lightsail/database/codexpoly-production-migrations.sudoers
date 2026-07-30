@@ -1,1 +1,2 @@
 codexdeploy ALL=(root) NOPASSWD: /usr/local/sbin/codexpoly-production-migrate
+codexdeploy ALL=(root) NOPASSWD: /usr/local/sbin/codexpoly-production-neg-risk-migrate

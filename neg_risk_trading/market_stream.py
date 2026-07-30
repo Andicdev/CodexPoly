@@ -43,6 +43,10 @@ UpdateHandler = Callable[
     [StreamUpdate],
     None | Awaitable[None],
 ]
+MessageHandler = Callable[
+    [object, tuple[StreamUpdate, ...]],
+    None | Awaitable[None],
+]
 
 
 class PolymarketMarketStream:
@@ -82,6 +86,7 @@ class PolymarketMarketStream:
         registry: LocalBookRegistry,
         *,
         on_update: UpdateHandler | None = None,
+        on_message: MessageHandler | None = None,
         maximum_messages: int | None = None,
         stop_when_ready: bool = False,
     ) -> MarketStreamRun:
@@ -158,6 +163,13 @@ class PolymarketMarketStream:
                         ),
                     )
                     updates = registry.apply_message(payload)
+                    if on_message is not None:
+                        message_result = on_message(
+                            payload,
+                            updates,
+                        )
+                        if inspect.isawaitable(message_result):
+                            await message_result
                     message_count += 1
                     update_count += len(updates)
                     reached_ready = (
