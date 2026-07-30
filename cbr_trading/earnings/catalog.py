@@ -11,17 +11,24 @@ from types import MappingProxyType
 from typing import Any
 
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "migrations"
-    / "011_add_earnings_release_catalog.sql"
+_MIGRATION_PATHS = (
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "011_add_earnings_release_catalog.sql"
+    ),
+    (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "019_add_earnings_release_timing.sql"
+    ),
 )
 
 _SCHEMA_READY_SQL = """
 SELECT
     to_regclass('earnings_release_catalog') IS NOT NULL AS catalog_table,
     (
-        SELECT count(*) = 17
+        SELECT count(*) = 22
         FROM information_schema.columns
         WHERE table_schema = current_schema()
           AND table_name = 'earnings_release_catalog'
@@ -45,7 +52,15 @@ SELECT
     to_regclass('ix_earnings_release_catalog_schedule') IS NOT NULL
         AS catalog_schedule_index,
     to_regclass('ix_earnings_release_catalog_readiness') IS NOT NULL
-        AS catalog_readiness_index
+        AS catalog_readiness_index,
+    to_regclass('ix_earnings_release_catalog_earliest') IS NOT NULL
+        AS catalog_earliest_index,
+    EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = to_regclass('earnings_release_catalog')
+          AND conname = 'earnings_release_catalog_timing_contract_check'
+    ) AS catalog_timing_contract
 """.strip()
 
 _UPSERT_SQL = """
@@ -56,6 +71,11 @@ INSERT INTO earnings_release_catalog (
     market_session,
     scheduled_release_at,
     conference_call_at,
+    earliest_expected_release_at,
+    timing_basis,
+    timing_confidence,
+    activation_safety_lead_seconds,
+    timing_source_url,
     schedule_status,
     schedule_source_url,
     integration_status,
@@ -72,6 +92,11 @@ VALUES (
     :market_session,
     :scheduled_release_at,
     :conference_call_at,
+    :earliest_expected_release_at,
+    :timing_basis,
+    :timing_confidence,
+    :activation_safety_lead_seconds,
+    :timing_source_url,
     :schedule_status,
     :schedule_source_url,
     :integration_status,
@@ -88,6 +113,13 @@ SET
     market_session = EXCLUDED.market_session,
     scheduled_release_at = EXCLUDED.scheduled_release_at,
     conference_call_at = EXCLUDED.conference_call_at,
+    earliest_expected_release_at =
+        EXCLUDED.earliest_expected_release_at,
+    timing_basis = EXCLUDED.timing_basis,
+    timing_confidence = EXCLUDED.timing_confidence,
+    activation_safety_lead_seconds =
+        EXCLUDED.activation_safety_lead_seconds,
+    timing_source_url = EXCLUDED.timing_source_url,
     schedule_status = EXCLUDED.schedule_status,
     schedule_source_url = EXCLUDED.schedule_source_url,
     integration_status = EXCLUDED.integration_status,
@@ -108,6 +140,11 @@ SELECT
     market_session,
     scheduled_release_at,
     conference_call_at,
+    earliest_expected_release_at,
+    timing_basis,
+    timing_confidence,
+    activation_safety_lead_seconds,
+    timing_source_url,
     schedule_status,
     schedule_source_url,
     integration_status,
@@ -145,6 +182,19 @@ class EarningsScheduleStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class EarningsTimingBasis(str, Enum):
+    OFFICIAL_EXACT = "OFFICIAL_EXACT"
+    OFFICIAL_WINDOW = "OFFICIAL_WINDOW"
+    HISTORICAL_PATTERN = "HISTORICAL_PATTERN"
+    SESSION_FLOOR = "SESSION_FLOOR"
+
+
+class EarningsTimingConfidence(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
 class EarningsIntegrationStatus(str, Enum):
     PARSER_ONLY = "PARSER_ONLY"
     NEEDS_DOCUMENT_RESOLVER = "NEEDS_DOCUMENT_RESOLVER"
@@ -175,6 +225,11 @@ class EarningsReleaseCatalogEntry:
     verified_at: datetime
     scheduled_release_at: datetime | None = None
     conference_call_at: datetime | None = None
+    earliest_expected_release_at: datetime | None = None
+    timing_basis: EarningsTimingBasis | None = None
+    timing_confidence: EarningsTimingConfidence | None = None
+    activation_safety_lead_seconds: int | None = None
+    timing_source_url: str | None = None
     schedule_status: EarningsScheduleStatus = (
         EarningsScheduleStatus.CONFIRMED
     )
@@ -243,6 +298,60 @@ class EarningsReleaseCatalogEntry:
                 "conference_call_at",
             ),
         )
+        earliest = _optional_utc(
+            self.earliest_expected_release_at,
+            "earliest_expected_release_at",
+        )
+        object.__setattr__(
+            self,
+            "earliest_expected_release_at",
+            earliest,
+        )
+        timing_values = (
+            self.timing_basis,
+            self.timing_confidence,
+            self.activation_safety_lead_seconds,
+            self.timing_source_url,
+        )
+        if earliest is None:
+            if any(value is not None for value in timing_values):
+                raise ValueError(
+                    "timing evidence requires earliest_expected_release_at"
+                )
+        else:
+            if not isinstance(self.timing_basis, EarningsTimingBasis):
+                raise TypeError(
+                    "timing_basis must be EarningsTimingBasis"
+                )
+            if not isinstance(
+                self.timing_confidence,
+                EarningsTimingConfidence,
+            ):
+                raise TypeError(
+                    "timing_confidence must be EarningsTimingConfidence"
+                )
+            lead = self.activation_safety_lead_seconds
+            if (
+                isinstance(lead, bool)
+                or not isinstance(lead, int)
+                or not 0 <= lead <= 86400
+            ):
+                raise ValueError(
+                    "activation_safety_lead_seconds must be 0..86400"
+                )
+            timing_url = str(self.timing_source_url or "").strip()
+            if not timing_url.startswith("https://"):
+                raise ValueError("timing_source_url must use https")
+            object.__setattr__(self, "timing_source_url", timing_url)
+            for name, later in (
+                ("scheduled_release_at", self.scheduled_release_at),
+                ("conference_call_at", self.conference_call_at),
+            ):
+                if later is not None and earliest > later:
+                    raise ValueError(
+                        "earliest_expected_release_at cannot follow "
+                        f"{name}"
+                    )
         object.__setattr__(
             self,
             "verified_at",
@@ -288,11 +397,12 @@ class SqlAlchemyEarningsReleaseCatalog:
         session_factory, text_factory = self._resolve_dependencies()
         try:
             with session_factory() as session:
-                session.execute(
-                    text_factory(
-                        _MIGRATION_PATH.read_text(encoding="utf-8")
+                for migration_path in _MIGRATION_PATHS:
+                    session.execute(
+                        text_factory(
+                            migration_path.read_text(encoding="utf-8")
+                        )
                     )
-                )
                 session.commit()
         except Exception as exc:
             raise EarningsReleaseCatalogError(
@@ -319,6 +429,8 @@ class SqlAlchemyEarningsReleaseCatalog:
             "catalog_ticker_date_index",
             "catalog_schedule_index",
             "catalog_readiness_index",
+            "catalog_earliest_index",
+            "catalog_timing_contract",
         )
         if not all(bool(row.get(name)) for name in expected):
             raise EarningsReleaseCatalogError(
@@ -429,6 +541,23 @@ def _entry_params(
         "market_session": entry.market_session.value,
         "scheduled_release_at": entry.scheduled_release_at,
         "conference_call_at": entry.conference_call_at,
+        "earliest_expected_release_at": (
+            entry.earliest_expected_release_at
+        ),
+        "timing_basis": (
+            entry.timing_basis.value
+            if entry.timing_basis is not None
+            else None
+        ),
+        "timing_confidence": (
+            entry.timing_confidence.value
+            if entry.timing_confidence is not None
+            else None
+        ),
+        "activation_safety_lead_seconds": (
+            entry.activation_safety_lead_seconds
+        ),
+        "timing_source_url": entry.timing_source_url,
         "schedule_status": entry.schedule_status.value,
         "schedule_source_url": entry.schedule_source_url,
         "integration_status": entry.integration_status.value,
@@ -466,6 +595,23 @@ def _entry_from_row(row: Any) -> EarningsReleaseCatalogEntry:
         ),
         scheduled_release_at=row.get("scheduled_release_at"),
         conference_call_at=row.get("conference_call_at"),
+        earliest_expected_release_at=row.get(
+            "earliest_expected_release_at"
+        ),
+        timing_basis=(
+            EarningsTimingBasis(str(row["timing_basis"]))
+            if row.get("timing_basis")
+            else None
+        ),
+        timing_confidence=(
+            EarningsTimingConfidence(str(row["timing_confidence"]))
+            if row.get("timing_confidence")
+            else None
+        ),
+        activation_safety_lead_seconds=row.get(
+            "activation_safety_lead_seconds"
+        ),
+        timing_source_url=row.get("timing_source_url"),
         schedule_status=EarningsScheduleStatus(
             str(row["schedule_status"])
         ),

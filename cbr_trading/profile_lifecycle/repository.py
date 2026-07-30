@@ -25,6 +25,9 @@ _MIGRATION_PATHS = (
     Path(__file__).resolve().parents[1]
     / "migrations"
     / "017_add_completed_profile_schedule_state.sql",
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "020_add_resolution_timing_contract.sql",
 )
 _ACTIVE_PROFILE_BLOCK_REASONS = frozenset(
     {
@@ -40,7 +43,7 @@ SELECT
     to_regclass('resolution_profile_schedules') IS NOT NULL
         AS schedules_table,
     (
-        SELECT count(*) = 18
+        SELECT count(*) = 23
         FROM information_schema.columns
         WHERE table_schema = current_schema()
           AND table_name = 'resolution_profile_schedules'
@@ -91,7 +94,21 @@ SELECT
               'resolution_profile_schedule_events_next_state_check'
           )
           AND pg_get_constraintdef(oid) LIKE '%COMPLETED%'
-    ) AS completed_event_states
+    ) AS completed_event_states,
+    EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = to_regclass('resolution_profile_schedules')
+          AND conname =
+              'resolution_profile_schedules_timing_contract_check'
+    ) AS schedule_timing_contract,
+    EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgrelid = to_regclass('resolution_profile_schedules')
+          AND tgname = 'trg_resolution_schedule_timing_contract'
+          AND NOT tgisinternal
+    ) AS schedule_timing_trigger
 """.strip()
 
 _UPSERT_SQL = """
@@ -102,6 +119,11 @@ INSERT INTO resolution_profile_schedules (
     preflight_at,
     activate_at,
     deactivate_at,
+    earliest_signal_at,
+    activation_safety_lead_seconds,
+    timing_basis,
+    timing_source_url,
+    timing_contract_version,
     metadata,
     state
 )
@@ -112,6 +134,11 @@ VALUES (
     :preflight_at,
     :activate_at,
     :deactivate_at,
+    :earliest_signal_at,
+    :activation_safety_lead_seconds,
+    :timing_basis,
+    :timing_source_url,
+    :timing_contract_version,
     CAST(:metadata AS jsonb),
     'PENDING'
 )
@@ -122,6 +149,12 @@ SET
     preflight_at = EXCLUDED.preflight_at,
     activate_at = EXCLUDED.activate_at,
     deactivate_at = EXCLUDED.deactivate_at,
+    earliest_signal_at = EXCLUDED.earliest_signal_at,
+    activation_safety_lead_seconds =
+        EXCLUDED.activation_safety_lead_seconds,
+    timing_basis = EXCLUDED.timing_basis,
+    timing_source_url = EXCLUDED.timing_source_url,
+    timing_contract_version = EXCLUDED.timing_contract_version,
     metadata = EXCLUDED.metadata,
     updated_at = now()
 WHERE resolution_profile_schedules.state = 'PENDING'
@@ -401,6 +434,17 @@ class SqlAlchemyProfileLifecycleStore:
             "preflight_at": schedule.preflight_at,
             "activate_at": schedule.activate_at,
             "deactivate_at": schedule.deactivate_at,
+            "earliest_signal_at": schedule.earliest_signal_at,
+            "activation_safety_lead_seconds": (
+                schedule.activation_safety_lead_seconds
+            ),
+            "timing_basis": (
+                schedule.timing_basis.value
+                if schedule.timing_basis is not None
+                else None
+            ),
+            "timing_source_url": schedule.timing_source_url,
+            "timing_contract_version": schedule.timing_contract_version,
             "metadata": json.dumps(
                 dict(schedule.metadata),
                 sort_keys=True,

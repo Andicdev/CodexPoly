@@ -25,6 +25,7 @@ from cbr_trading.profile_lifecycle.contracts import (
     ProfilePreflightClaim,
     ProfileScheduleState,
     ProfileScheduleTransition,
+    ProfileTimingBasis,
     ResolutionProfileSchedule,
 )
 from cbr_trading.profile_lifecycle.controller import (
@@ -120,6 +121,54 @@ class ProfileLifecycleContractTests(unittest.TestCase):
                     "CBR_DATABASE_URL": "postgresql://configured",
                     "PROFILE_SCHEDULER_AUTO_LIVE_ENABLED": "1",
                 }
+            )
+
+    def test_auto_live_requires_earliest_signal_safety_boundary(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "AUTO_LIVE requires",
+        ):
+            ResolutionProfileSchedule(
+                schedule_key="schedule:unsafe",
+                profile_key="profile:unsafe",
+                automation_mode=ProfileAutomationMode.AUTO_LIVE,
+                preflight_at=_NOW,
+                activate_at=_NOW + timedelta(minutes=15),
+                deactivate_at=_NOW + timedelta(hours=1),
+            )
+
+        schedule = ResolutionProfileSchedule(
+            schedule_key="schedule:safe",
+            profile_key="profile:safe",
+            automation_mode=ProfileAutomationMode.AUTO_LIVE,
+            preflight_at=_NOW,
+            activate_at=_NOW + timedelta(minutes=15),
+            deactivate_at=_NOW + timedelta(hours=1),
+            earliest_signal_at=_NOW + timedelta(minutes=30),
+            activation_safety_lead_seconds=600,
+            timing_basis=ProfileTimingBasis.SESSION_FLOOR,
+            timing_source_url="https://issuer.example/events",
+            timing_contract_version=1,
+        )
+
+        self.assertEqual(schedule.timing_contract_version, 1)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "safety boundary",
+        ):
+            ResolutionProfileSchedule(
+                schedule_key="schedule:late",
+                profile_key="profile:late",
+                automation_mode=ProfileAutomationMode.AUTO_LIVE,
+                preflight_at=_NOW,
+                activate_at=_NOW + timedelta(minutes=25),
+                deactivate_at=_NOW + timedelta(hours=1),
+                earliest_signal_at=_NOW + timedelta(minutes=30),
+                activation_safety_lead_seconds=600,
+                timing_basis=ProfileTimingBasis.SESSION_FLOOR,
+                timing_source_url="https://issuer.example/events",
+                timing_contract_version=1,
             )
 
     def test_migration_is_additive_and_keeps_profile_table_unchanged(

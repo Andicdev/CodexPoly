@@ -5,6 +5,7 @@ from cbr_trading.profile_lifecycle.contracts import (
     ProfilePreflightClaim,
     ProfileScheduleState,
     ProfileScheduleTransition,
+    ProfileTimingBasis,
     ResolutionProfileSchedule,
 )
 from cbr_trading.profile_lifecycle.settings import (
@@ -24,6 +25,7 @@ __all__ = [
     "ProfileReadinessSettings",
     "ProfileScheduleState",
     "ProfileScheduleTransition",
+    "ProfileTimingBasis",
     "ResolutionProfileSchedule",
     "SqlAlchemyProfileLifecycleStore",
 ]

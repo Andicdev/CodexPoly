@@ -459,6 +459,13 @@ append-only audited; notification delivery remains outside the trading hot
 path. `BLOCKED` is terminal and retains its cause; the expiry sweep never
 rewrites it to `EXPIRED`.
 
+Release-driven schedules also carry a versioned earliest-signal contract.
+`earliest_signal_at` is the first plausible publication time across every
+source, not the issuer's later call or webcast. `activate_at` must be no later
+than that floor minus `activation_safety_lead_seconds`. PostgreSQL rejects new
+`AUTO_LIVE` inserts/transitions and activation-time changes without this
+contract, while legacy version-0 rows remain compatible.
+
 Earnings schedules are grouped into independent `PRE_MARKET` and
 `POST_MARKET` live blocks through the schedule metadata keys `live_block` and
 `block_id`. A block is a lifecycle, preparation-capacity, observability, and

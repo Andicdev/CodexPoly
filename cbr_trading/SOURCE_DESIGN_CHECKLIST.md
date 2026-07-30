@@ -142,6 +142,11 @@ adequate latency diagnosis.
 
 - Store the reviewed parser version, source routes, market bindings, schedule,
   caps, and profile template in version control or additive database rows.
+- Record the earliest possible tradable signal separately from any webcast
+  or conference call. `activate_at` must precede `earliest_signal_at` by the
+  reviewed safety lead; an unknown exact publication time requires a
+  conservative session floor or prior-quarter minimum, never the call time.
+- Require `timing_contract_version=1` before an `AUTO_LIVE` transition.
 - Run authenticated preflight without submitting orders.
 - Confirm preparation freshness, runtime heartbeat, route telemetry, and
   supervision readiness.

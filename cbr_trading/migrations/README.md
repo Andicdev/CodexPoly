@@ -129,6 +129,17 @@ values, columns, profile definitions, claims, or order supervision records.
 Fresh databases receive the same state from migration 012; existing databases
 apply migration 017 before starting a completion-aware resolution worker.
 
+`019_add_earnings_release_timing.sql` adds optional research fields that
+separate the earliest expected publication from the scheduled point estimate
+and conference call. Legacy catalog rows remain valid with all timing fields
+null.
+
+`020_add_resolution_timing_contract.sql` adds an optional versioned
+earliest-signal boundary to schedules. Existing schedules remain version 0.
+New `AUTO_LIVE` inserts/transitions and `activate_at` changes are rejected
+unless version 1 proves that activation precedes the earliest plausible
+signal by the configured safety lead.
+
 `018_add_observation_only_earnings_facts.sql` expands the existing earnings
 fact-status constraint with `OBSERVED` and creates
 `earnings_source_race_observations`. `OBSERVED` rows retain parsed official

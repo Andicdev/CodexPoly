@@ -23,6 +23,34 @@ The canonical block ID is
 `<US release date>-<lowercase session name>`. The date is the company's
 announced US release date, not the local date of the deployment host.
 
+## Earliest-signal timing contract
+
+Conference-call and webcast times are not release times. An earnings release
+may appear on the issuer site, a press wire, or SEC before the call. Every new
+schedule therefore stores a versioned timing contract in first-class columns:
+
+- `earliest_signal_at`: conservative floor for any tradable publication;
+- `activation_safety_lead_seconds`: required live lead before that floor;
+- `timing_basis`: `OFFICIAL_EXACT`, `OFFICIAL_WINDOW`,
+  `HISTORICAL_PATTERN`, or `SESSION_FLOOR`;
+- `timing_source_url`: reviewed HTTPS evidence;
+- `timing_contract_version=1`.
+
+The invariant is:
+
+```text
+activate_at <= earliest_signal_at - activation_safety_lead
+preflight_at < activate_at
+conference_call_at is informational only
+```
+
+If the issuer confirms only a call, use a conservative session floor or the
+earliest observed publication across prior quarters. Never derive
+`activate_at` by subtracting an arbitrary offset from the call. New
+`AUTO_LIVE` inserts, transitions, and activation-time changes fail closed in
+PostgreSQL without a valid versioned contract. Existing version-0 schedules
+remain readable for backward compatibility.
+
 ## Lifecycle boundary
 
 Only schedules in the selected block are changed together:
@@ -82,6 +110,9 @@ an explicit operator action requires it.
 
 Before arming a block, verify:
 
+- every member has a version-1 earliest-signal timing contract;
+- activation precedes the earliest signal by the reviewed safety lead;
+- release evidence is distinct from call/webcast evidence;
 - every member has a successful current authenticated preflight;
 - no member already has a validated fact or execution claim unless it is an
   explicitly resumed incident;

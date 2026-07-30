@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -23,6 +23,13 @@ class ProfileScheduleState(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class ProfileTimingBasis(str, Enum):
+    OFFICIAL_EXACT = "OFFICIAL_EXACT"
+    OFFICIAL_WINDOW = "OFFICIAL_WINDOW"
+    HISTORICAL_PATTERN = "HISTORICAL_PATTERN"
+    SESSION_FLOOR = "SESSION_FLOOR"
+
+
 @dataclass(frozen=True)
 class ResolutionProfileSchedule:
     schedule_key: str
@@ -32,6 +39,11 @@ class ResolutionProfileSchedule:
     activate_at: datetime
     deactivate_at: datetime
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    earliest_signal_at: datetime | None = None
+    activation_safety_lead_seconds: int | None = None
+    timing_basis: ProfileTimingBasis | None = None
+    timing_source_url: str | None = None
+    timing_contract_version: int = 0
 
     def __post_init__(self) -> None:
         for name in ("schedule_key", "profile_key"):
@@ -55,6 +67,68 @@ class ResolutionProfileSchedule:
         object.__setattr__(self, "preflight_at", preflight_at)
         object.__setattr__(self, "activate_at", activate_at)
         object.__setattr__(self, "deactivate_at", deactivate_at)
+        version = self.timing_contract_version
+        if isinstance(version, bool) or version not in (0, 1):
+            raise ValueError("timing_contract_version must be 0 or 1")
+        object.__setattr__(self, "timing_contract_version", int(version))
+        if version == 0:
+            if any(
+                value is not None
+                for value in (
+                    self.earliest_signal_at,
+                    self.activation_safety_lead_seconds,
+                    self.timing_basis,
+                    self.timing_source_url,
+                )
+            ):
+                raise ValueError(
+                    "timing fields require timing_contract_version=1"
+                )
+            if self.automation_mode is ProfileAutomationMode.AUTO_LIVE:
+                raise ValueError(
+                    "AUTO_LIVE requires a versioned timing contract"
+                )
+        else:
+            earliest_signal_at = _as_utc(
+                self.earliest_signal_at,
+                "earliest_signal_at",
+            )
+            lead = self.activation_safety_lead_seconds
+            if (
+                isinstance(lead, bool)
+                or not isinstance(lead, int)
+                or not 0 <= lead <= 86400
+            ):
+                raise ValueError(
+                    "activation_safety_lead_seconds must be 0..86400"
+                )
+            if not isinstance(self.timing_basis, ProfileTimingBasis):
+                raise TypeError(
+                    "timing_basis must be ProfileTimingBasis"
+                )
+            timing_source_url = str(
+                self.timing_source_url or ""
+            ).strip()
+            if not timing_source_url.startswith("https://"):
+                raise ValueError("timing_source_url must use HTTPS")
+            latest_activation = earliest_signal_at - timedelta(
+                seconds=lead
+            )
+            if activate_at > latest_activation:
+                raise ValueError(
+                    "activate_at is later than the earliest-signal "
+                    "safety boundary"
+                )
+            object.__setattr__(
+                self,
+                "earliest_signal_at",
+                earliest_signal_at,
+            )
+            object.__setattr__(
+                self,
+                "timing_source_url",
+                timing_source_url,
+            )
         object.__setattr__(
             self,
             "metadata",

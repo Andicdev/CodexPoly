@@ -9,6 +9,8 @@ from cbr_trading.earnings.catalog import (
     EarningsIntegrationStatus,
     EarningsMarketSession,
     EarningsReleaseCatalogEntry,
+    EarningsTimingBasis,
+    EarningsTimingConfidence,
 )
 
 
@@ -83,6 +85,45 @@ class EarningsReleaseCatalogTests(unittest.TestCase):
                 ),
                 document_format=EarningsDocumentFormat.FULL_HTML,
                 verified_at=datetime.now(timezone.utc),
+            )
+
+    def test_entry_requires_complete_earliest_release_evidence(self) -> None:
+        earliest = datetime(2026, 7, 30, 9, 30, tzinfo=timezone.utc)
+        entry = EarningsReleaseCatalogEntry(
+            event_key="VIRT:2026-07-30",
+            ticker="VIRT",
+            release_date=date(2026, 7, 30),
+            market_session=EarningsMarketSession.PRE_MARKET,
+            schedule_source_url="https://ir.virtu.com/events",
+            integration_status=EarningsIntegrationStatus.PARSER_ONLY,
+            document_format=EarningsDocumentFormat.FULL_HTML,
+            verified_at=earliest,
+            scheduled_release_at=earliest + timedelta(hours=1),
+            conference_call_at=earliest + timedelta(hours=1, minutes=30),
+            earliest_expected_release_at=earliest,
+            timing_basis=EarningsTimingBasis.SESSION_FLOOR,
+            timing_confidence=EarningsTimingConfidence.LOW,
+            activation_safety_lead_seconds=1800,
+            timing_source_url="https://ir.virtu.com/events",
+        )
+
+        self.assertEqual(entry.earliest_expected_release_at, earliest)
+        self.assertEqual(entry.activation_safety_lead_seconds, 1800)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "timing evidence requires",
+        ):
+            EarningsReleaseCatalogEntry(
+                event_key="MA:2026-07-30",
+                ticker="MA",
+                release_date=date(2026, 7, 30),
+                market_session=EarningsMarketSession.PRE_MARKET,
+                schedule_source_url="https://investor.mastercard.com",
+                integration_status=EarningsIntegrationStatus.PARSER_ONLY,
+                document_format=EarningsDocumentFormat.MIXED,
+                verified_at=earliest,
+                timing_basis=EarningsTimingBasis.OFFICIAL_WINDOW,
             )
 
     def test_migration_is_additive_and_non_executable(self) -> None:
