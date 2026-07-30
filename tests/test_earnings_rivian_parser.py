@@ -118,6 +118,42 @@ class RivianGaapDilutedEpsParserTests(unittest.TestCase):
             "rivian_gaap_diluted_eps_row_not_found",
         )
 
+    def test_q2_selects_current_quarter_not_current_ytd(self) -> None:
+        rule = rivn_q2_2026_shadow_rule()
+        document = """
+        <h1>Rivian Releases Second Quarter 2026 Financial Results</h1>
+        <p>Three months ended June 30, 2026.</p>
+        <table>
+          <tr>
+            <th></th>
+            <th colspan="2">Three Months Ended June 30</th>
+            <th colspan="2">Six Months Ended June 30</th>
+          </tr>
+          <tr>
+            <th></th><th>2025</th><th>2026</th>
+            <th>2025</th><th>2026</th>
+          </tr>
+          <tr>
+            <td>Net loss per share attributable to Class A and Class B
+            common stockholders, basic and diluted</td>
+            <td>$(0.97)</td><td>$(0.63)</td>
+            <td>$(1.45)</td><td>$(0.97)</td>
+          </tr>
+        </table>
+        """
+
+        result = RivianGaapDilutedEpsParser().parse(
+            document,
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.ACCEPTED)
+        assert result.candidate is not None
+        self.assertEqual(result.candidate.value, Decimal("-0.63"))
+        self.assertEqual(result.candidate.parser_version, "2")
+
     def test_conflicting_duplicate_rows_quarantine(self) -> None:
         rule = rivn_q2_2026_shadow_rule()
         document = """

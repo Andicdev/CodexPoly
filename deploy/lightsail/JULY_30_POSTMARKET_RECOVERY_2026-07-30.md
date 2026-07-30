@@ -1,7 +1,9 @@
 # July 30 post-market earnings recovery — 2026-07-30
 
-Status: production hotfix deployed; AMZN/AAPL/DLB remained completed; RIVN,
-RDDT, and RBLX were recovered through the normal live resolution path.
+Status: production hotfix deployed; AMZN/AAPL/DLB remained completed; RDDT
+and RBLX were recovered correctly through the normal live resolution path.
+RIVN reached execution, but parser version `1` selected a year-to-date column
+and produced an incorrect `NO` decision.
 
 ## Incident
 
@@ -20,6 +22,19 @@ Unicode zero-width formatting marks inside the exact diluted-EPS label. The
 old normalizer retained those marks and returned
 `roblox_gaap_diluted_eps_row_not_found`.
 
+RIVN exposed another independent parser defect. Its Q2 statement presents
+four GAAP EPS values in this order:
+
+1. prior-year three-month EPS;
+2. current-year three-month EPS;
+3. prior-year six-month EPS;
+4. current-year six-month EPS.
+
+Parser version `1` selected the last value, `-0.97`, which is the current
+six-month year-to-date result. The market requires the current quarter,
+which is the second value, `-0.63`. The correct rule result is therefore
+`-0.63 > -0.78`, or `YES`.
+
 ## Fix
 
 - An executable transport encountering a terminal `PARSED` event now
@@ -30,6 +45,11 @@ old normalizer retained those marks and returned
 - Unicode format marks used by the RBLX exhibit are removed during common
   text normalization.
 - The RBLX parser audit version is `2`.
+- A subsequent local RIVN correction selects the second value from the exact
+  basic-and-diluted GAAP EPS row. Its audit version is `2`, and a four-column
+  Q2 regression fixture prevents the quarterly/YTD confusion from recurring.
+  This correction was not part of the immutable production image documented
+  below and requires a separate deployment.
 - A one-shot guarded production retry changed only the reviewed RBLX SEC
   event from `NO_MATCH` to retryable `ERROR`. It refused to run if a fact,
   execution claim, inactive profile, different accession, different source
@@ -47,6 +67,9 @@ Verification:
 - local suite: `968` tests passed, `1` skipped;
 - immutable-image secret scan passed;
 - immutable-image suite: `968` tests passed.
+
+The later, not-yet-deployed RIVN parser-v2 correction passes the local secret
+scan and the complete suite of `969` tests with `1` skipped.
 
 ## Immutable deployment
 
@@ -85,17 +108,20 @@ The earlier successful paths were preserved:
 | AAPL | official source | `2.02` | `> 1.89` | YES | initial order plus reviewed tick repricing |
 | DLB | PRNewswire | `0.69` | `> 0.67` | YES | live execution completed |
 
-Recovered SEC paths:
+Recovered SEC paths and the RIVN parser incident:
 
-| Ticker | First stored SEC result | Recovery signal | Fact | Rule | Outcome |
-|---|---|---|---:|---:|---|
-| RIVN | SEC Latest `OBSERVED` | `2026-07-30T21:11:14.564Z` | `-0.97` | `> -0.78` | NO |
-| RDDT | SEC Latest `OBSERVED` | `2026-07-30T21:11:14.581Z` | `1.25` | `> 0.97` | YES |
-| RBLX | SEC `NO_MATCH` | `2026-07-30T21:12:38.673Z` | `-0.26` | `> -0.33` | YES |
+| Ticker | First stored SEC result | Recovery signal | Persisted fact | Correct fact | Persisted outcome | Correct outcome |
+|---|---|---|---:|---:|---|---|
+| RIVN | SEC Latest `OBSERVED` | `2026-07-30T21:11:14.564Z` | `-0.97` (six-month YTD) | `-0.63` (quarter) | NO | YES |
+| RDDT | SEC Latest `OBSERVED` | `2026-07-30T21:11:14.581Z` | `1.25` | `1.25` | YES | YES |
+| RBLX | SEC `NO_MATCH` | `2026-07-30T21:12:38.673Z` | `-0.26` | `-0.26` | YES | YES |
 
-All three scopes have exactly one validated fact, the expected executed
-outcome claim, and one expired opposite-outcome claim. The live resolution
-worker detached all three profiles after execution.
+All three scopes have exactly one persisted validated fact, one executed
+outcome claim, and one expired opposite-outcome claim. For RDDT and RBLX
+those directions are correct. For RIVN these records preserve the incorrect
+parser-version-`1` decision and must not be interpreted as a correct market
+outcome. The live resolution worker detached all three profiles after
+execution.
 
 Order audit:
 
@@ -105,25 +131,31 @@ Order audit:
   overlap risk materialized: both the original `100 NO` order (claim
   effective price `0.99`) and the `100 NO @ 0.999` replacement are recorded
   filled. The effective filled quantity is therefore `200`, not the target
-  `100`.
+  `100`. Both fills are in the wrong direction because the correct market
+  outcome is `YES`.
 - The RIVN order group is `FAILED` after late reconciliation even though both
   fills are persisted and no live order remains. This is a lifecycle/audit
   anomaly and a separate follow-up item; it is not a lost or open order.
 
 The guarded verifier
 `checks/verify_july_30_postmarket_hotfix_results.sql` confirms the exact
-facts, directions, claim pairs, RDDT/RBLX live orders, RIVN double fill, the
-absence of a live RIVN order, and the fresh supervised live heartbeat.
+persisted incident state, claim pairs, RDDT/RBLX live orders, RIVN double
+fill, the absence of a live RIVN order, and the fresh supervised live
+heartbeat. Its RIVN predicates intentionally describe the historical wrong
+fact and wrong-direction execution; they are not correctness assertions.
 
 ## Follow-up
 
-1. Change submit-first repricing to cap the replacement at the confirmed
+1. Require period-aware fixtures for earnings tables that contain both
+   quarterly and year-to-date columns. Parser review must identify the exact
+   header/value mapping rather than selecting a value by row position alone.
+2. Change submit-first repricing to cap the replacement at the confirmed
    remaining quantity whenever the initial order can be inspected without
    delaying first submission.
-2. Treat a fully filled source/replacement pair as a terminal overfill audit
+3. Treat a fully filled source/replacement pair as a terminal overfill audit
    state rather than a generic failed group.
-3. Add parser-version-aware retry semantics for terminal `NO_MATCH` events,
+4. Add parser-version-aware retry semantics for terminal `NO_MATCH` events,
    removing the need for a one-shot guarded SQL retry after future parser
    corrections.
-4. Keep SEC Latest observation-only until source-race telemetry is reviewed;
+5. Keep SEC Latest observation-only until source-race telemetry is reviewed;
    the promotion fix prevents it from blocking executable transports.

@@ -1,14 +1,15 @@
--- Fail-closed, read-only verification of the three recovered July 30
--- earnings executions. Sensitive account, asset, and order identifiers are
--- intentionally excluded from every predicate.
+-- Fail-closed, read-only verification of the persisted July 30 recovery
+-- state. RIVN intentionally asserts the historical parser-v1 incident
+-- (-0.97 YTD / NO), not the correct quarterly fact (-0.63 / YES). Sensitive
+-- account, asset, and order identifiers are excluded from every predicate.
 
 BEGIN TRANSACTION READ ONLY;
 
 DO $verify$
 DECLARE
-    expected record;
+    persisted record;
 BEGIN
-    FOR expected IN
+    FOR persisted IN
         SELECT *
         FROM (
             VALUES
@@ -32,20 +33,20 @@ BEGIN
         IF (
             SELECT count(*)
             FROM earnings_fact_candidates
-            WHERE scope_id = expected.scope_id
+            WHERE scope_id = persisted.scope_id
               AND status IN ('VALIDATED', 'EMITTED')
-              AND value = expected.fact_value
+              AND value = persisted.fact_value
         ) <> 1 THEN
             RAISE EXCEPTION
                 'validated fact verification failed for %',
-                expected.scope_id;
+                persisted.scope_id;
         END IF;
 
         IF (
             SELECT count(*)
             FROM resolution_execution_claims
-            WHERE scope_id = expected.scope_id
-              AND outcome = expected.outcome
+            WHERE scope_id = persisted.scope_id
+              AND outcome = persisted.outcome
               AND side = 'BUY'
               AND desired_price = 0.999
               AND effective_price IN (0.99, 0.999)
@@ -55,17 +56,17 @@ BEGIN
         ) <> 1 OR (
             SELECT count(*)
             FROM resolution_execution_claims
-            WHERE scope_id = expected.scope_id
+            WHERE scope_id = persisted.scope_id
         ) <> 2 OR (
             SELECT count(*)
             FROM resolution_execution_claims
-            WHERE scope_id = expected.scope_id
-              AND outcome <> expected.outcome
+            WHERE scope_id = persisted.scope_id
+              AND outcome <> persisted.outcome
               AND status = 'EXPIRED'
         ) <> 1 THEN
             RAISE EXCEPTION
                 'execution claim verification failed for %',
-                expected.scope_id;
+                persisted.scope_id;
         END IF;
 
         IF EXISTS (
@@ -75,21 +76,22 @@ BEGIN
               ON profile.condition_id = order_group.condition_id
             JOIN resolution_order_group_orders AS order_row
               ON order_row.order_group_id = order_group.order_group_id
-            WHERE profile.scope_id = expected.scope_id
+            WHERE profile.scope_id = persisted.scope_id
               AND order_group.created_at >=
                   TIMESTAMPTZ '2026-07-30 21:10:00+00'
               AND order_row.status IN ('REJECTED', 'UNKNOWN')
         ) THEN
             RAISE EXCEPTION
                 'order lifecycle error detected for %',
-                expected.scope_id;
+                persisted.scope_id;
         END IF;
     END LOOP;
 
     -- The accepted submit-first overlap risk materialized for RIVN: the
-    -- initial 0.99 claim and the 0.999 replacement both filled. The original
-    -- row has no persisted effective price, while its claim records 0.99.
-    -- No live RIVN order remains.
+    -- initial 0.99 claim and the 0.999 replacement both filled in the wrong
+    -- NO direction produced by parser v1. The original row has no persisted
+    -- effective price, while its claim records 0.99. No live RIVN order
+    -- remains.
     IF (
         SELECT count(*)
         FROM resolution_execution_claims

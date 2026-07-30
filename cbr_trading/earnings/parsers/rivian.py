@@ -50,7 +50,7 @@ class RivianGaapDilutedEpsParser(LabelledEpsParser):
                 basis=EpsBasis.DILUTED,
                 label_patterns=(),
                 parser_name="rivian_gaap_diluted_eps",
-                parser_version="1",
+                parser_version="2",
                 accepted_reason="official_rivian_gaap_diluted_eps",
                 missing_reason="rivian_gaap_diluted_eps_row_not_found",
                 conflicting_reason=(
@@ -78,10 +78,11 @@ class RivianGaapDilutedEpsParser(LabelledEpsParser):
             values = accounting_values(row[label.end():])
             if len(values) < 2:
                 continue
-            # Rivian's statements present the prior-year comparator first
-            # and the current-year quarter last. The exact GAAP row is
-            # basic-and-diluted because Rivian reports a net loss.
-            found.append((values[-1], row.strip()[:400]))
+            # Rivian presents the prior-year quarter first and the
+            # current-year quarter second. Q2/Q3 rows then append the
+            # prior/current year-to-date pair, so values[-1] is not the
+            # quarterly result.
+            found.append((values[1], row.strip()[:400]))
         return tuple(found)
 
 
