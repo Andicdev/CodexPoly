@@ -37,6 +37,11 @@ from cbr_trading.earnings.parsers.costar import (
     CostarGaapEpsParser,
     csgp_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.dolby import (
+    DOLBY_CIK,
+    DolbyNonGaapDilutedEpsParser,
+    dlb_q3_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.july_28_sec import (
     COCA_COLA_CIK,
     FORD_CIK,
@@ -215,6 +220,24 @@ _REPLAYS = {
         COSTAR_CIK,
         "https://investors.costargroup.com/node/16776/html",
         "0.01",
+    ),
+    "DLB": (
+        DolbyNonGaapDilutedEpsParser(),
+        replace(
+            dlb_q3_2026_shadow_rule(),
+            scope_id=earnings_scope_id("DLB", 2025, 3),
+            fiscal_year=2025,
+            fiscal_quarter=3,
+            period_end=date(2025, 6, 27),
+        ),
+        DOLBY_CIK,
+        (
+            "https://investor.dolby.com/news-events/"
+            "financial-news/news-details/2025/"
+            "Dolby-Laboratories-Reports-Third-Quarter-"
+            "2025-Financial-Results/"
+        ),
+        "0.78",
     ),
     "F": (
         FordAdjustedDilutedEpsParser(),

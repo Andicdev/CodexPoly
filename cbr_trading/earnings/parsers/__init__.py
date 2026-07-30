@@ -25,6 +25,10 @@ from cbr_trading.earnings.parsers.costar import (
     CostarGaapEpsParser,
     csgp_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.dolby import (
+    DolbyNonGaapDilutedEpsParser,
+    dlb_q3_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.july_28_sec import (
     CocaColaComparableEpsParser,
     FordAdjustedDilutedEpsParser,
@@ -122,6 +126,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "CI": CignaAdjustedIncomePerShareParser(),
         "CSGP": CostarGaapEpsParser(),
         "CZR": CaesarsGaapEpsParser(),
+        "DLB": DolbyNonGaapDilutedEpsParser(),
         "EA": ElectronicArtsGaapEpsParser(),
         "EBAY": EbayNonGaapEpsParser(),
         "F": FordAdjustedDilutedEpsParser(),
@@ -166,6 +171,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         csgp_q2_2026_shadow_rule(),
         czr_q2_2026_shadow_rule(),
         cbre_q2_2026_shadow_rule(),
+        dlb_q3_2026_shadow_rule(),
         ci_q2_2026_shadow_rule(),
         ea_q1_2027_shadow_rule(),
         ebay_q2_2026_shadow_rule(),
@@ -213,6 +219,7 @@ __all__ = [
     "CaesarsGaapEpsParser",
     "CocaColaComparableEpsParser",
     "CostarGaapEpsParser",
+    "DolbyNonGaapDilutedEpsParser",
     "ElectronicArtsGaapEpsParser",
     "EbayNonGaapEpsParser",
     "FordAdjustedDilutedEpsParser",
@@ -254,6 +261,7 @@ __all__ = [
     "cbre_q2_2026_shadow_rule",
     "ci_q2_2026_shadow_rule",
     "czr_q2_2026_shadow_rule",
+    "dlb_q3_2026_shadow_rule",
     "ea_q1_2027_shadow_rule",
     "ebay_q2_2026_shadow_rule",
     "earnings_parser_registry",
