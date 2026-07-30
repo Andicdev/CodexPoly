@@ -12,6 +12,11 @@ from cbr_trading.earnings.contracts import (
     SourceAuthority,
     earnings_scope_id,
 )
+from cbr_trading.earnings.parsers.amazon import (
+    AMAZON_CIK,
+    AmazonGaapDilutedEpsParser,
+    amzn_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.boeing import (
     BOEING_CIK,
     BoeingCoreEpsParser,
@@ -82,6 +87,24 @@ from cbr_trading.secret_guard import redact_exception
 
 
 _REPLAYS = {
+    "AMZN": (
+        AmazonGaapDilutedEpsParser(),
+        replace(
+            amzn_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("AMZN", 2025, 2),
+            fiscal_year=2025,
+            fiscal_quarter=2,
+            period_end=date(2025, 6, 30),
+        ),
+        AMAZON_CIK,
+        (
+            "https://ir.aboutamazon.com/news-release/"
+            "news-release-details/2025/"
+            "Amazon-com-Announces-Second-Quarter-Results/"
+            "default.aspx"
+        ),
+        "1.68",
+    ),
     "CI": (
         CignaAdjustedIncomePerShareParser(),
         replace(
@@ -389,7 +412,10 @@ def main() -> int:
                 if "sec.gov" in url
                 else EarningsProvider.COMPANY_IR
             ),
-            provider_event_id=f"historical-replay:{ticker}:2026Q1",
+            provider_event_id=(
+                f"historical-replay:{ticker}:"
+                f"{rule.fiscal_year}Q{rule.fiscal_quarter}"
+            ),
             ticker=ticker,
             cik=cik,
             form_type="8-K",
