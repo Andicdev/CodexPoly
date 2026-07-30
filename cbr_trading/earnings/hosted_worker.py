@@ -413,10 +413,12 @@ class EarningsHostedShadowWorker:
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
             "earnings=true public=%s sec_current=%s sec_latest=%s "
+            "sec_latest_observation_only=%s "
             "mstr=%s ledger=%s",
             self._public_release_client is not None,
             self._sec_current_client is not None,
             self._sec_latest_client is not None,
+            self._settings.sec_latest_observation_only,
             self._mstr_watch is not None,
             self._mstr_ledger_watch is not None,
         )
@@ -1039,12 +1041,20 @@ class EarningsHostedShadowWorker:
                     candidate.scope_id
                     in selection.tail_scope_ids
                 )
-                if tail_only:
+                observation_only = (
+                    tail_only
+                    or self._settings.sec_latest_observation_only
+                )
+                if observation_only:
                     candidate = replace(
                         candidate,
                         metadata={
                             **dict(candidate.metadata),
-                            "source_observation_mode": "tail",
+                            "source_observation_mode": (
+                                "tail"
+                                if tail_only
+                                else "transport_shadow"
+                            ),
                         },
                     )
                 processed += 1
@@ -1052,7 +1062,7 @@ class EarningsHostedShadowWorker:
                 result = await asyncio.to_thread(
                     (
                         observation_processor.process
-                        if tail_only
+                        if observation_only
                         else processor.process
                     ),
                     candidate,

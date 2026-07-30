@@ -42,6 +42,7 @@ services:
       # It is independent from per-issuer submissions polling and the
       # SEC-API WebSocket so source-arrival latency can be compared.
       EARNINGS_SEC_LATEST_POLL_ENABLED: "true"
+      EARNINGS_SEC_LATEST_OBSERVATION_ONLY: "true"
       EARNINGS_SEC_LATEST_POLL_SEC: "0.25"
       EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC: "4"
       EARNINGS_SOURCE_OBSERVATION_TAIL_SEC: "900"

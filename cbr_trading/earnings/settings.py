@@ -35,6 +35,7 @@ class EarningsWorkerSettings:
     sec_current_poll_interval: float = 0.25
     sec_current_max_requests_per_second: float = 5.0
     sec_latest_polling_enabled: bool = False
+    sec_latest_observation_only: bool = True
     sec_latest_poll_interval: float = 0.25
     sec_latest_max_requests_per_second: float = 5.0
     source_observation_tail_seconds: float = 0.0
@@ -160,6 +161,11 @@ class EarningsWorkerSettings:
                 env.get("EARNINGS_SEC_LATEST_POLL_ENABLED"),
                 default=False,
                 name="EARNINGS_SEC_LATEST_POLL_ENABLED",
+            ),
+            sec_latest_observation_only=_bool_value(
+                env.get("EARNINGS_SEC_LATEST_OBSERVATION_ONLY"),
+                default=True,
+                name="EARNINGS_SEC_LATEST_OBSERVATION_ONLY",
             ),
             sec_latest_poll_interval=float(
                 _clean(env.get("EARNINGS_SEC_LATEST_POLL_SEC"))

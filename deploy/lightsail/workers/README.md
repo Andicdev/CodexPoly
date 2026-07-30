@@ -97,6 +97,11 @@ timestamp is inside the bounded lookback, and the accession/index URL stays
 on the exact approved SEC archive path. The matched filing then reuses the
 same official index fetch, `EX-99.1` router, parser, deduplication, and source
 race telemetry as WebSocket and per-CIK submissions traffic.
+The initial rollout also sets
+`EARNINGS_SEC_LATEST_OBSERVATION_ONLY=true`: an in-window Atom candidate is
+fully fetched and parsed but stored as `OBSERVED`, so this transport cannot
+create a resolution signal, trade, or Telegram event until its source-arrival
+and value-agreement evidence has been reviewed.
 
 All profile-gated earnings HTTP paths retain a bounded 15-minute
 observation-only tail after an `ACTIVE` schedule becomes terminal. Tail

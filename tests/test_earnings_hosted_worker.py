@@ -4,6 +4,7 @@ import unittest
 from threading import Barrier, Lock
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from cbr_trading.earnings.hosted_worker import (
     EarningsHostedShadowWorker,
@@ -11,6 +12,7 @@ from cbr_trading.earnings.hosted_worker import (
     _RoutedSecShadowTransport,
     _watches_from_rules,
 )
+from cbr_trading.earnings.processor import ShadowProcessingStatus
 from cbr_trading.earnings.sec_stream import SecEarningsWatch
 from cbr_trading.earnings.sec_current import SecCurrentPollResult
 from cbr_trading.earnings.sec_latest import SecLatestPollResult
@@ -119,13 +121,14 @@ class _SecCurrentClient:
 
 
 class _SecLatestClient:
-    def __init__(self):
+    def __init__(self, envelopes=()):
         self.watches = []
+        self.envelopes = tuple(envelopes)
 
     def poll(self, watches):
         self.watches.append(tuple(watches))
         return SecLatestPollResult(
-            envelopes=(),
+            envelopes=self.envelopes,
             watch_count=len(watches),
             success_count=1,
             not_modified_count=0,
@@ -613,6 +616,89 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(processed, 0)
         self.assertEqual(client.watches, [])
 
+    async def test_sec_latest_starts_as_observation_only_transport(
+        self,
+    ) -> None:
+        scope_id = "earnings:NVTS:2026Q2"
+        now = nvts_q2_2026_shadow_rule().estimated_release_at
+        envelope = replace(
+            normalize_sec_filing(
+                {
+                    "ticker": "NVTS",
+                    "cik": "1821769",
+                    "accessionNo": "0001821769-26-000123",
+                    "formType": "8-K",
+                    "filedAt": now.isoformat(),
+                    "items": ["Item 2.02", "Item 9.01"],
+                    "linkToFilingDetails": (
+                        "https://www.sec.gov/Archives/edgar/data/"
+                        "1821769/000182176926000123/"
+                        "0001821769-26-000123-index.htm"
+                    ),
+                    "documentFormatFiles": [
+                        {
+                            "type": "EX-99.1",
+                            "documentUrl": (
+                                "https://www.sec.gov/Archives/edgar/"
+                                "data/1821769/000182176926000123/"
+                                "exhibit991.htm"
+                            ),
+                        }
+                    ],
+                },
+                received_at=now,
+            ),
+            metadata={"transport": "sec_latest_filings_atom"},
+        )
+        client = _SecLatestClient((envelope,))
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (SimpleNamespace(scope_id=scope_id),)
+            ),
+            source_name="earnings_resolution",
+        )
+        calls = []
+
+        class _Processor:
+            def __init__(self, **kwargs):
+                self.observation_only = bool(
+                    kwargs.get("observation_only")
+                )
+
+            def process(self, candidate):
+                calls.append(
+                    (
+                        self.observation_only,
+                        candidate.metadata.get(
+                            "source_observation_mode"
+                        ),
+                    )
+                )
+                return SimpleNamespace(
+                    status=ShadowProcessingStatus.OBSERVED,
+                    signal=None,
+                    reason="observation_only",
+                    event_id=1,
+                    fact_id=None,
+                )
+
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            sec_latest_client=client,
+            sec_latest_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+        with patch(
+            "cbr_trading.earnings.hosted_worker."
+            "EarningsShadowProcessor",
+            _Processor,
+        ):
+            processed = await worker.run_sec_latest_poll_cycle()
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(calls, [(True, "transport_shadow")])
+
     async def test_public_feeds_are_polled_concurrently(self) -> None:
         public_client = _ConcurrentPublicClient()
         scope_id = "earnings:NVTS:2026Q2"
@@ -874,12 +960,14 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
             {
                 **base,
                 "EARNINGS_SEC_LATEST_POLL_ENABLED": "true",
+                "EARNINGS_SEC_LATEST_OBSERVATION_ONLY": "true",
                 "EARNINGS_SEC_LATEST_POLL_SEC": "0.25",
                 "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC": "5",
             }
         )
 
         self.assertTrue(enabled.sec_latest_polling_enabled)
+        self.assertTrue(enabled.sec_latest_observation_only)
         self.assertEqual(enabled.sec_latest_poll_interval, 0.25)
         self.assertEqual(
             enabled.sec_latest_max_requests_per_second,

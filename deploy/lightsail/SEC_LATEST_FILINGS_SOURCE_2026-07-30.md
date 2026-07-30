@@ -1,7 +1,7 @@
 # SEC Latest Filings source — 2026-07-30
 
-Status: implementation and local verification complete; production deployment
-pending.
+Status: implementation and local verification complete; initial inactive
+staging startup passed; final observation-only image rollout pending.
 
 ## Purpose
 
@@ -31,6 +31,9 @@ The new transport:
   parallel exhibit fetcher, issuer parser, and event deduplication;
 - records `transport_observed_at` when the feed is received, before filing
   index and exhibit download;
+- starts with a transport-specific observation-only guard, so even an active
+  profile can record an `OBSERVED` fact but cannot receive a signal from this
+  route;
 - keeps a separate completed-event set so a losing transport still records
   source-race telemetry;
 - uses the existing observation-only tail after a schedule becomes terminal.
@@ -49,5 +52,15 @@ winning exhibit request.
 - Full repository suite: `928` tests passed, `1` skipped.
 - Secret scan passed.
 
-The next checkpoint is an immutable staging image and an inactive-profile
-startup check. Production must not be changed until that image is healthy.
+The first immutable staging image
+`sha256:03126e975e77e2f9deba2845cbd04f60fb4d2321f44a3a5f6dcdcdf180dcfe23`
+started with restart count `0`. Its startup and first heartbeat confirmed:
+
+- `sec_latest=True`;
+- no active or tail scopes;
+- zero Latest Filings polls;
+- SEC-API WebSocket connected with `39` watches;
+- `errors=0`.
+
+The observation-only guard was added after this inactive startup. A new exact
+image must repeat the same staging check before production changes.
