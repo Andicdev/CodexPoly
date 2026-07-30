@@ -11,6 +11,9 @@ DECLARE
     schedule_state text;
     readiness_until timestamptz;
     reviewed_notional numeric;
+    approved_order_quantity_cap numeric := 200;
+    approved_per_order_notional_cap numeric := 200;
+    approved_aggregate_notional_cap numeric := 1000;
 BEGIN
     IF now() >= TIMESTAMPTZ '2026-07-30 18:30:00+00' THEN
         RAISE EXCEPTION 'AAPL live arming deadline has passed';
@@ -120,7 +123,11 @@ BEGIN
     FROM resolution_execution_profiles
     WHERE profile_key = 'earnings-aapl-2026q3';
 
-    IF reviewed_notional <> 99.9 OR reviewed_notional > 1000 THEN
+    IF reviewed_notional <> 99.9
+       OR reviewed_notional > approved_per_order_notional_cap
+       OR 100 > approved_order_quantity_cap
+       OR reviewed_notional > approved_aggregate_notional_cap
+    THEN
         RAISE EXCEPTION 'AAPL reviewed notional is invalid';
     END IF;
 
@@ -130,7 +137,9 @@ BEGIN
         metadata = metadata || jsonb_build_object(
             'armed_for_live', true,
             'armed_by', '038_arm_aapl_july_30_postmarket',
-            'aggregate_notional_cap', 1000
+            'max_order_quantity_cap', approved_order_quantity_cap,
+            'per_order_notional_cap', approved_per_order_notional_cap,
+            'aggregate_notional_cap', approved_aggregate_notional_cap
         ),
         updated_at = now()
     WHERE schedule_key = 'schedule:earnings-aapl-2026q3';
@@ -150,6 +159,9 @@ BEGIN
           AND schedule.state IN ('PENDING', 'READY')
           AND schedule.timing_contract_version = 1
           AND schedule.metadata ->> 'armed_for_live' = 'true'
+          AND schedule.metadata ->> 'max_order_quantity_cap' = '200'
+          AND schedule.metadata ->> 'per_order_notional_cap' = '200'
+          AND schedule.metadata ->> 'aggregate_notional_cap' = '1000'
           AND profile.status = 'DISABLED'
           AND profile.quantity = 100
     ) <> 1 THEN

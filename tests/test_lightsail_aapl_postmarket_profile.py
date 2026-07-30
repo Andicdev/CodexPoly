@@ -117,6 +117,30 @@ class ApplePostmarketProfileSqlTests(unittest.TestCase):
         self.assertIn("trading_enabled", text)
         self.assertIn("reviewed_notional <> 99.9", text)
         self.assertIn("'armed_for_live', true", text)
+        self.assertIn(
+            "'max_order_quantity_cap', approved_order_quantity_cap",
+            text,
+        )
+        self.assertIn(
+            "'per_order_notional_cap', approved_per_order_notional_cap",
+            text,
+        )
+        self.assertIn(
+            "'aggregate_notional_cap', approved_aggregate_notional_cap",
+            text,
+        )
+        self.assertIn(
+            "approved_order_quantity_cap numeric := 200",
+            text,
+        )
+        self.assertIn(
+            "approved_per_order_notional_cap numeric := 200",
+            text,
+        )
+        self.assertIn(
+            "approved_aggregate_notional_cap numeric := 1000",
+            text,
+        )
         self.assertNotIn("SET STATUS = 'ENABLED'", upper)
         self.assertNotIn("DELETE FROM", upper)
         self.assertNotIn("DROP TABLE", upper)
@@ -138,6 +162,18 @@ class ApplePostmarketProfileSqlTests(unittest.TestCase):
         self.assertIn("TRADING_ENABLED", upper)
         self.assertIn("EARNINGS_FACT_CANDIDATES", upper)
         self.assertIn("RESOLUTION_EXECUTION_CLAIMS", upper)
+        self.assertIn(
+            "METADATA ->> 'MAX_ORDER_QUANTITY_CAP' = '200'",
+            upper,
+        )
+        self.assertIn(
+            "METADATA ->> 'PER_ORDER_NOTIONAL_CAP' = '200'",
+            upper,
+        )
+        self.assertIn(
+            "METADATA ->> 'AGGREGATE_NOTIONAL_CAP' = '1000'",
+            upper,
+        )
         self.assertNotIn("UPDATE ", upper)
         self.assertNotIn("DELETE FROM", upper)
 

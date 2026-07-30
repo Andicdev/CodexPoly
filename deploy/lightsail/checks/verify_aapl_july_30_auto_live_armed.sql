@@ -36,6 +36,9 @@ BEGIN
       AND schedule.activation_safety_lead_seconds = 7200
       AND schedule.timing_contract_version = 1
       AND schedule.metadata ->> 'armed_for_live' = 'true'
+      AND schedule.metadata ->> 'max_order_quantity_cap' = '200'
+      AND schedule.metadata ->> 'per_order_notional_cap' = '200'
+      AND schedule.metadata ->> 'aggregate_notional_cap' = '1000'
       AND profile.scope_id = 'earnings:AAPL:2026Q3'
       AND profile.account_name = 'abccbaq'
       AND profile.quantity = 100;
