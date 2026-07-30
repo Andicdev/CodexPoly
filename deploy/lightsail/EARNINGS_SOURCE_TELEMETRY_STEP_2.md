@@ -19,6 +19,7 @@ Every new candidate carries one of these transport values:
 
 - `sec_api_websocket`;
 - `sec_current_poll`;
+- `sec_latest_filings_atom`;
 - `company_ir_poll`;
 - `press_release_rss_poll`;
 - `globenewswire_poll`;

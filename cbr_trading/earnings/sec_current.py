@@ -64,7 +64,7 @@ class SecCurrentPollResult:
 
 
 @dataclass(frozen=True)
-class _SubmissionFiling:
+class SecFilingIndexCandidate:
     ticker: str
     cik: str
     company_name: str | None
@@ -74,11 +74,13 @@ class _SubmissionFiling:
     items: tuple[str, ...]
     description: str | None
     primary_document: str | None
+    filing_url: str | None = None
+    transport_observed_at: datetime | None = None
 
 
 @dataclass
 class _PendingFiling:
-    filing: _SubmissionFiling
+    filing: SecFilingIndexCandidate
     attempts: int = 0
     retry_after: float = 0.0
 
@@ -423,66 +425,20 @@ class SecCurrentFilingsClient:
 
     def _fetch_filing_envelope(
         self,
-        filing: _SubmissionFiling,
+        filing: SecFilingIndexCandidate,
     ) -> SecFilingEnvelope:
-        compact = filing.accession.replace("-", "")
-        url = SEC_ARCHIVE_FILING_URL.format(
-            cik=filing.cik,
-            accession_compact=compact,
-            accession=filing.accession,
-        )
-        request = Request(
-            url,
+        return fetch_sec_filing_index(
+            filing,
+            open_request=self._open,
+            clock=self._clock,
+            max_bytes=self._max_bytes,
+            transport="sec_current_poll",
             headers=self._headers(
                 accept=(
                     "text/html,application/xhtml+xml;q=0.9,"
                     "*/*;q=0.1"
                 )
             ),
-            method="GET",
-        )
-        try:
-            response_context = self._open(request)
-        except HTTPError:
-            raise SecCurrentFilingsError(
-                "SEC filing detail request failed"
-            ) from None
-        with response_context as response:
-            status = int(getattr(response, "status", 200))
-            if status != 200:
-                raise SecCurrentFilingsError(
-                    "SEC filing detail returned a non-success status"
-                )
-            final_url = _response_url(response, url)
-            _require_sec_url(
-                final_url,
-                host=_SEC_ARCHIVE_HOST,
-                path_prefix="/Archives/edgar/data/",
-            )
-            body = _read_bounded_body(
-                response,
-                max_bytes=self._max_bytes,
-            )
-        documents = _parse_filing_documents(
-            body,
-            filing_url=final_url,
-        )
-        return SecFilingEnvelope(
-            ticker=filing.ticker,
-            cik=filing.cik,
-            company_name=filing.company_name,
-            accession=filing.accession,
-            form_type=filing.form_type,
-            filed_at=filing.filed_at,
-            received_at=_as_utc(self._clock(), "clock"),
-            items=filing.items,
-            description=filing.description,
-            filing_url=final_url,
-            documents=documents,
-            metadata={
-                "transport": "sec_current_poll",
-                "primary_document": filing.primary_document,
-            },
         )
 
     def _headers(self, *, accept: str) -> dict[str, str]:
@@ -555,7 +511,7 @@ def _submission_filings(
     payload: Mapping[str, Any],
     *,
     watch: SecCurrentEarningsWatch,
-) -> tuple[_SubmissionFiling, ...]:
+) -> tuple[SecFilingIndexCandidate, ...]:
     filings = payload.get("filings")
     recent = (
         filings.get("recent")
@@ -572,7 +528,7 @@ def _submission_filings(
             "SEC submissions accession array is missing"
         )
     company_name = _optional_text(payload.get("name"))
-    rows: list[_SubmissionFiling] = []
+    rows: list[SecFilingIndexCandidate] = []
     for index, accession_value in enumerate(accessions):
         accession = str(accession_value or "").strip()
         form_type = _array_text(recent, "form", index).upper()
@@ -600,7 +556,7 @@ def _submission_filings(
                 "SEC submissions accession is invalid"
             )
         rows.append(
-            _SubmissionFiling(
+            SecFilingIndexCandidate(
                 ticker=watch.routing_watch.ticker,
                 cik=watch.routing_watch.cik,
                 company_name=company_name,
@@ -677,6 +633,93 @@ def _parse_filing_documents(
     return tuple(documents)
 
 
+def fetch_sec_filing_index(
+    filing: SecFilingIndexCandidate,
+    *,
+    open_request: Callable[[Request], Any],
+    clock: Callable[[], datetime],
+    max_bytes: int,
+    transport: str,
+    headers: Mapping[str, str],
+) -> SecFilingEnvelope:
+    """Fetch one official filing index through a caller-paced transport."""
+
+    if not isinstance(filing, SecFilingIndexCandidate):
+        raise TypeError("filing must be SecFilingIndexCandidate")
+    transport_name = str(transport or "").strip()
+    if not transport_name:
+        raise ValueError("transport is required")
+    compact = filing.accession.replace("-", "")
+    url = (
+        str(filing.filing_url or "").strip()
+        or SEC_ARCHIVE_FILING_URL.format(
+            cik=filing.cik,
+            accession_compact=compact,
+            accession=filing.accession,
+        )
+    )
+    _require_filing_index_url(
+        url,
+        cik=filing.cik,
+        accession=filing.accession,
+    )
+    request = Request(
+        url,
+        headers=dict(headers),
+        method="GET",
+    )
+    try:
+        response_context = open_request(request)
+    except HTTPError:
+        raise SecCurrentFilingsError(
+            "SEC filing detail request failed"
+        ) from None
+    with response_context as response:
+        status = int(getattr(response, "status", 200))
+        if status != 200:
+            raise SecCurrentFilingsError(
+                "SEC filing detail returned a non-success status"
+            )
+        final_url = _response_url(response, url)
+        _require_filing_index_url(
+            final_url,
+            cik=filing.cik,
+            accession=filing.accession,
+        )
+        body = _read_bounded_body(
+            response,
+            max_bytes=max_bytes,
+        )
+    documents = _parse_filing_documents(
+        body,
+        filing_url=final_url,
+    )
+    return SecFilingEnvelope(
+        ticker=filing.ticker,
+        cik=filing.cik,
+        company_name=filing.company_name,
+        accession=filing.accession,
+        form_type=filing.form_type,
+        filed_at=filing.filed_at,
+        received_at=(
+            _as_utc(
+                filing.transport_observed_at,
+                "transport_observed_at",
+            )
+            if filing.transport_observed_at is not None
+            else _as_utc(clock(), "clock")
+        ),
+        items=filing.items,
+        description=filing.description,
+        filing_url=final_url,
+        documents=documents,
+        metadata={
+            "transport": transport_name,
+            "primary_document": filing.primary_document,
+        },
+    )
+
+
 def _read_bounded_body(
     response: Any,
     *,
@@ -734,6 +777,33 @@ def _require_sec_url(
     ):
         raise SecCurrentFilingsError(
             "SEC response URL left the approved endpoint"
+        )
+
+
+def _require_filing_index_url(
+    value: str,
+    *,
+    cik: str,
+    accession: str,
+) -> None:
+    parsed = urlparse(str(value or ""))
+    compact = accession.replace("-", "")
+    prefix = (
+        f"/Archives/edgar/data/{cik}/{compact}/"
+        f"{accession}-index."
+    )
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != _SEC_ARCHIVE_HOST
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+        or parsed.path not in {f"{prefix}htm", f"{prefix}html"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SecCurrentFilingsError(
+            "SEC filing index URL left the approved endpoint"
         )
 
 
@@ -862,5 +932,7 @@ __all__ = [
     "SecCurrentFilingsClient",
     "SecCurrentFilingsError",
     "SecCurrentPollResult",
+    "SecFilingIndexCandidate",
+    "fetch_sec_filing_index",
     "sec_current_watches_from_rules",
 ]

@@ -81,13 +81,24 @@ CDN connection close. The NVTS company feed uses the official
 `data.sec.gov/submissions/CIK##########.json` API as a low-latency fallback to
 the always-connected SEC-API WebSocket. It is gated by the same enabled,
 in-window earnings scopes and makes no SEC HTTP request while that set is
-empty. Requests use conditional validators and a shared five-request-per-
-second pacer, leaving headroom below the SEC ten-request-per-second
-fair-access ceiling. A new initial `8-K` must contain Item 2.02, fall inside
+empty. Requests use conditional validators and a four-request-per-second
+pacer. Together with the independent four-request-per-second Latest Filings
+pacer, this leaves headroom below the SEC ten-request-per-second fair-access
+ceiling for the winning document fetch. A new initial `8-K` must contain Item 2.02, fall inside
 the bounded release lookback, and expose exactly one `EX-99.1` on the official
 filing-detail page before it enters the existing SEC router and parser.
 
-Both profile-gated earnings HTTP paths retain a bounded 15-minute
+`EARNINGS_SEC_LATEST_POLL_ENABLED=true` adds a separate official
+SEC Latest Filings Atom path. One conditional request covers all active CIKs,
+so the request count does not grow with the number of earnings profiles. Feed
+entries are rejected before document download unless the CIK is actively
+watched, the form is an initial `8-K`, Item 2.02 is present, the acceptance
+timestamp is inside the bounded lookback, and the accession/index URL stays
+on the exact approved SEC archive path. The matched filing then reuses the
+same official index fetch, `EX-99.1` router, parser, deduplication, and source
+race telemetry as WebSocket and per-CIK submissions traffic.
+
+All profile-gated earnings HTTP paths retain a bounded 15-minute
 observation-only tail after an `ACTIVE` schedule becomes terminal. Tail
 documents are still fetched and parsed for source-race telemetry, but their
 facts use status `OBSERVED`; they cannot enter the resolution source or

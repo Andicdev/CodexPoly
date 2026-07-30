@@ -34,6 +34,9 @@ class EarningsWorkerSettings:
     sec_current_polling_enabled: bool = False
     sec_current_poll_interval: float = 0.25
     sec_current_max_requests_per_second: float = 5.0
+    sec_latest_polling_enabled: bool = False
+    sec_latest_poll_interval: float = 0.25
+    sec_latest_max_requests_per_second: float = 5.0
     source_observation_tail_seconds: float = 0.0
     mstr_btc_shadow_enabled: bool = False
     mstr_btc_ledger_enabled: bool = False
@@ -149,6 +152,23 @@ class EarningsWorkerSettings:
                 _clean(
                     env.get(
                         "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC"
+                    )
+                )
+                or "5"
+            ),
+            sec_latest_polling_enabled=_bool_value(
+                env.get("EARNINGS_SEC_LATEST_POLL_ENABLED"),
+                default=False,
+                name="EARNINGS_SEC_LATEST_POLL_ENABLED",
+            ),
+            sec_latest_poll_interval=float(
+                _clean(env.get("EARNINGS_SEC_LATEST_POLL_SEC"))
+                or "0.25"
+            ),
+            sec_latest_max_requests_per_second=float(
+                _clean(
+                    env.get(
+                        "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC"
                     )
                 )
                 or "5"
@@ -274,6 +294,20 @@ class EarningsWorkerSettings:
         ):
             raise ValueError(
                 "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC must be "
+                "between 0.5 and 5"
+            )
+        if not 0.1 <= self.sec_latest_poll_interval <= 60:
+            raise ValueError(
+                "EARNINGS_SEC_LATEST_POLL_SEC must be between "
+                "0.1 and 60"
+            )
+        if not (
+            0.5
+            <= self.sec_latest_max_requests_per_second
+            <= 5
+        ):
+            raise ValueError(
+                "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC must be "
                 "between 0.5 and 5"
             )
         if not 0 <= self.source_observation_tail_seconds <= 86_400:

@@ -13,6 +13,7 @@ from cbr_trading.earnings.hosted_worker import (
 )
 from cbr_trading.earnings.sec_stream import SecEarningsWatch
 from cbr_trading.earnings.sec_current import SecCurrentPollResult
+from cbr_trading.earnings.sec_latest import SecLatestPollResult
 from cbr_trading.earnings.parsers import checked_in_shadow_rules
 from cbr_trading.earnings.parsers.navitas import (
     nvts_q2_2026_shadow_rule,
@@ -108,6 +109,25 @@ class _SecCurrentClient:
             envelopes=(),
             watch_count=len(watches),
             success_count=len(watches),
+            not_modified_count=0,
+            error_count=0,
+            deferred_count=0,
+        )
+
+    def close(self):
+        return None
+
+
+class _SecLatestClient:
+    def __init__(self):
+        self.watches = []
+
+    def poll(self, watches):
+        self.watches.append(tuple(watches))
+        return SecLatestPollResult(
+            envelopes=(),
+            watch_count=len(watches),
+            success_count=1,
             not_modified_count=0,
             error_count=0,
             deferred_count=0,
@@ -541,6 +561,58 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker._sec_current_active_scope_count, 0)
         self.assertEqual(worker._sec_current_tail_scope_count, 1)
 
+    async def test_sec_latest_polling_is_profile_scope_gated(
+        self,
+    ) -> None:
+        client = _SecLatestClient()
+        scope_id = "earnings:NVTS:2026Q2"
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(
+                (SimpleNamespace(scope_id=scope_id),)
+            ),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            sec_latest_client=client,
+            sec_latest_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_sec_latest_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(len(client.watches), 1)
+        self.assertEqual(
+            {
+                watch.routing_watch.scope_id
+                for watch in client.watches[0]
+            },
+            {scope_id},
+        )
+
+    async def test_sec_latest_polling_does_no_http_without_profile(
+        self,
+    ) -> None:
+        client = _SecLatestClient()
+        gate = ProfileWindowPollingGate(
+            profile_store=_ProfileStore(()),
+            source_name="earnings_resolution",
+        )
+        worker = EarningsHostedShadowWorker(
+            settings=_settings(),
+            store=_Store(checked_in_shadow_rules()),
+            sec_latest_client=client,
+            sec_latest_polling_gate=gate,
+            transport_builder=lambda _watches: _EmptyTransport(),
+        )
+
+        processed = await worker.run_sec_latest_poll_cycle()
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(client.watches, [])
+
     async def test_public_feeds_are_polled_concurrently(self) -> None:
         public_client = _ConcurrentPublicClient()
         scope_id = "earnings:NVTS:2026Q2"
@@ -785,6 +857,42 @@ class EarningsWorkerSettingsTests(unittest.TestCase):
                 {
                     **base,
                     "EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC": "6",
+                }
+            )
+
+    def test_sec_latest_polling_requires_explicit_enable_and_bounds(
+        self,
+    ) -> None:
+        base = {
+            "CBR_DATABASE_URL": "postgresql://configured",
+            "SEC_API_KEY": "configured",
+            "EARNINGS_HTTP_USER_AGENT": (
+                "CodexPoly test@example.com"
+            ),
+        }
+        enabled = EarningsWorkerSettings.from_env(
+            {
+                **base,
+                "EARNINGS_SEC_LATEST_POLL_ENABLED": "true",
+                "EARNINGS_SEC_LATEST_POLL_SEC": "0.25",
+                "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC": "5",
+            }
+        )
+
+        self.assertTrue(enabled.sec_latest_polling_enabled)
+        self.assertEqual(enabled.sec_latest_poll_interval, 0.25)
+        self.assertEqual(
+            enabled.sec_latest_max_requests_per_second,
+            5,
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC",
+        ):
+            EarningsWorkerSettings.from_env(
+                {
+                    **base,
+                    "EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC": "6",
                 }
             )
         with self.assertRaisesRegex(

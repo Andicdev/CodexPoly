@@ -502,8 +502,16 @@ the process stops before a signal, there is no claim to clean up. A crash
 after reservation remains deliberately fail-closed because submission may be
 ambiguous.
 
+The SEC transport race has three independent paths: the always-connected
+SEC-API WebSocket, per-CIK official submissions JSON polling, and one shared
+official SEC Latest Filings Atom poll. The Atom request count is constant as
+the active issuer set grows. It filters by active CIK, initial `8-K`, Item
+2.02, bounded acceptance time, accession, and an allowlisted SEC archive URL
+before fetching the filing index. All three paths converge on the same
+`EX-99.1` router, parser, source-event deduplication, and prepared executor.
+
 After an `ACTIVE` earnings schedule becomes `COMPLETED`, `BLOCKED`, or
-`EXPIRED`, public and SEC-current polling may continue for a configured
+`EXPIRED`, public, SEC-current, and SEC-Latest polling may continue for a configured
 observation tail (production: 15 minutes). Tail documents are fully fetched
 and parsed, but their facts are stored as `OBSERVED`, never `VALIDATED`.
 They therefore cannot enter `EarningsResolutionSource`, create a resolution

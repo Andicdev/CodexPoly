@@ -115,8 +115,8 @@ adopting the larger quantity.
 The processing row records the transport that won processing plus
 document-fetch, parse, and fact-persistence stage timestamps. The observation
 table independently records every transport that saw the same deduplicated
-document, so SEC-API WebSocket, SEC current filings polling, company IR, and
-press-wire discovery latency can be compared. First-seen telemetry is inserted
+document, so SEC-API WebSocket, SEC current filings polling, SEC Latest
+Filings Atom, company IR, and press-wire discovery latency can be compared. First-seen telemetry is inserted
 in the same SQL statement as the source event, without another
 application/database round trip. Existing rows are retained and represented
 as `legacy_unknown`; the original earnings tables are not altered, preserving

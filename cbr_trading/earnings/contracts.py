@@ -24,6 +24,7 @@ class EarningsTransport(str, Enum):
     LEGACY_UNKNOWN = "legacy_unknown"
     SEC_API_WEBSOCKET = "sec_api_websocket"
     SEC_CURRENT_POLL = "sec_current_poll"
+    SEC_LATEST_FILINGS_ATOM = "sec_latest_filings_atom"
     COMPANY_IR_POLL = "company_ir_poll"
     PRESS_RELEASE_RSS_POLL = "press_release_rss_poll"
     GLOBE_NEWSWIRE_POLL = "globenewswire_poll"

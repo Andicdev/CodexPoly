@@ -31,6 +31,10 @@ from cbr_trading.earnings.sec_current import (
     SecCurrentFilingsClient,
     sec_current_watches_from_rules,
 )
+from cbr_trading.earnings.sec_latest import (
+    SecLatestFilingsClient,
+    sec_latest_watches_from_rules,
+)
 from cbr_trading.earnings.sec_stream import (
     SecEarningsWatch,
     SecStreamFilingRouter,
@@ -175,6 +179,8 @@ class EarningsHostedShadowWorker:
         public_polling_gate: ProfileWindowPollingGate | None = None,
         sec_current_client: SecCurrentFilingsClient | None = None,
         sec_current_polling_gate: ProfileWindowPollingGate | None = None,
+        sec_latest_client: SecLatestFilingsClient | None = None,
+        sec_latest_polling_gate: ProfileWindowPollingGate | None = None,
         public_document_fetcher_builder: (
             PublicDocumentFetcherBuilder | None
         ) = None,
@@ -288,6 +294,32 @@ class EarningsHostedShadowWorker:
                 "SEC current-filings polling requires an "
                 "active-profile gate"
             )
+        self._sec_latest_client = (
+            sec_latest_client
+            if sec_latest_client is not None
+            else (
+                SecLatestFilingsClient(
+                    user_agent=settings.http_user_agent,
+                    timeout=settings.fetch_timeout,
+                    max_bytes=settings.max_document_bytes,
+                    max_requests_per_second=(
+                        settings.sec_latest_max_requests_per_second
+                    ),
+                    logger=logger,
+                )
+                if settings.sec_latest_polling_enabled
+                else None
+            )
+        )
+        self._sec_latest_polling_gate = sec_latest_polling_gate
+        if (
+            self._sec_latest_client is not None
+            and self._sec_latest_polling_gate is None
+        ):
+            raise ValueError(
+                "SEC Latest Filings polling requires an "
+                "active-profile gate"
+            )
         self._notification_store = notification_store
         self._ledger_processor = (
             MstrBtcShadowProcessor(
@@ -352,6 +384,18 @@ class EarningsHostedShadowWorker:
         self._sec_current_completed_events: set[
             tuple[str, str, str, str]
         ] = set()
+        self._sec_latest_polling_active = False
+        self._sec_latest_active_scope_count = 0
+        self._sec_latest_tail_scope_count = 0
+        self._sec_latest_watch_count = 0
+        self._sec_latest_poll_count = 0
+        self._sec_latest_success_count = 0
+        self._sec_latest_candidate_count = 0
+        self._sec_latest_signal_count = 0
+        self._sec_latest_observed_count = 0
+        self._sec_latest_completed_events: set[
+            tuple[str, str, str, str]
+        ] = set()
         self._error_count = 0
 
     async def run_forever(self) -> None:
@@ -368,10 +412,11 @@ class EarningsHostedShadowWorker:
             )
         self._logger.info(
             "SEC shadow worker schema ready mode=shadow "
-            "earnings=true public=%s sec_current=%s "
+            "earnings=true public=%s sec_current=%s sec_latest=%s "
             "mstr=%s ledger=%s",
             self._public_release_client is not None,
             self._sec_current_client is not None,
+            self._sec_latest_client is not None,
             self._mstr_watch is not None,
             self._mstr_ledger_watch is not None,
         )
@@ -389,6 +434,11 @@ class EarningsHostedShadowWorker:
         sec_current_task = (
             asyncio.create_task(self._sec_current_poll_loop())
             if self._sec_current_client is not None
+            else None
+        )
+        sec_latest_task = (
+            asyncio.create_task(self._sec_latest_poll_loop())
+            if self._sec_latest_client is not None
             else None
         )
         delay = self._settings.reconnect_initial_delay
@@ -443,6 +493,8 @@ class EarningsHostedShadowWorker:
                 public_task.cancel()
             if sec_current_task is not None:
                 sec_current_task.cancel()
+            if sec_latest_task is not None:
+                sec_latest_task.cancel()
             await asyncio.gather(
                 *tuple(
                     task
@@ -451,6 +503,7 @@ class EarningsHostedShadowWorker:
                         ledger_task,
                         public_task,
                         sec_current_task,
+                        sec_latest_task,
                     )
                     if task is not None
                 ),
@@ -465,6 +518,10 @@ class EarningsHostedShadowWorker:
             if self._sec_current_client is not None:
                 await asyncio.to_thread(
                     self._sec_current_client.close
+                )
+            if self._sec_latest_client is not None:
+                await asyncio.to_thread(
+                    self._sec_latest_client.close
                 )
 
     async def run_connection_cycle(self) -> WorkerCycleResult:
@@ -881,6 +938,192 @@ class EarningsHostedShadowWorker:
                 self._settings.sec_current_poll_interval
             )
 
+    async def run_sec_latest_poll_cycle(self) -> int:
+        """Poll one official SEC Latest Filings feed for enabled scopes."""
+
+        if self._sec_latest_client is None:
+            return 0
+        selection = await asyncio.to_thread(
+            self._sec_latest_polling_gate.polling_scope_selection,
+            observation_tail_seconds=(
+                self._settings.source_observation_tail_seconds
+            ),
+        )
+        polling_scopes = selection.scope_ids
+        self._sec_latest_active_scope_count = len(
+            selection.active_scope_ids
+        )
+        self._sec_latest_tail_scope_count = len(
+            selection.tail_scope_ids
+        )
+        self._sec_latest_polling_active = bool(polling_scopes)
+        if not polling_scopes:
+            self._sec_latest_watch_count = 0
+            return 0
+
+        rules = tuple(
+            await asyncio.to_thread(
+                self._store.load_active_rules
+            )
+        )
+        active_rules = tuple(
+            rule
+            for rule in rules
+            if rule.scope_id in polling_scopes
+        )
+        rules_by_scope = {
+            rule.scope_id: rule
+            for rule in active_rules
+        }
+        watches = sec_latest_watches_from_rules(active_rules)
+        self._sec_latest_watch_count = len(watches)
+        if not watches:
+            return 0
+
+        poll_result = await asyncio.to_thread(
+            self._sec_latest_client.poll,
+            watches,
+        )
+        self._sec_latest_poll_count += 1
+        self._sec_latest_success_count += (
+            poll_result.success_count
+        )
+        self._error_count += poll_result.error_count
+        if not poll_result.envelopes:
+            return 0
+
+        routing_watches = tuple(
+            watch.routing_watch
+            for watch in watches
+        )
+        router = SecStreamFilingRouter(routing_watches)
+        fetcher = SecDocumentFetcher(
+            api_key=self._settings.sec_api_key or "",
+            user_agent=self._settings.http_user_agent,
+            timeout=self._settings.fetch_timeout,
+            max_bytes=self._settings.max_document_bytes,
+            logger=self._logger,
+        )
+        processor = EarningsShadowProcessor(
+            store=self._store,
+            rules=active_rules,
+            parsers=self._parsers,
+            document_fetcher=fetcher,
+            max_fetch_attempts=self._settings.max_fetch_attempts,
+            fetch_retry_delay=self._settings.fetch_retry_delay,
+        )
+        observation_processor = EarningsShadowProcessor(
+            store=self._store,
+            rules=active_rules,
+            parsers=self._parsers,
+            document_fetcher=fetcher,
+            max_fetch_attempts=self._settings.max_fetch_attempts,
+            fetch_retry_delay=self._settings.fetch_retry_delay,
+            observation_only=True,
+        )
+        processed = 0
+        for envelope in poll_result.envelopes:
+            for decision in router.route(envelope):
+                candidate = decision.candidate
+                if candidate is None:
+                    continue
+                event_key = (
+                    candidate.scope_id,
+                    candidate.provider.value,
+                    candidate.provider_event_id,
+                    candidate.source_url,
+                )
+                if event_key in self._sec_latest_completed_events:
+                    continue
+                tail_only = (
+                    candidate.scope_id
+                    in selection.tail_scope_ids
+                )
+                if tail_only:
+                    candidate = replace(
+                        candidate,
+                        metadata={
+                            **dict(candidate.metadata),
+                            "source_observation_mode": "tail",
+                        },
+                    )
+                processed += 1
+                self._sec_latest_candidate_count += 1
+                result = await asyncio.to_thread(
+                    (
+                        observation_processor.process
+                        if tail_only
+                        else processor.process
+                    ),
+                    candidate,
+                )
+                if result.status is ShadowProcessingStatus.SIGNAL:
+                    self._sec_latest_signal_count += 1
+                    await self._enqueue_notification(
+                        source_event_notification_from_earnings(
+                            candidate=candidate,
+                            signal=result.signal,
+                            rule=rules_by_scope[
+                                candidate.scope_id
+                            ],
+                        )
+                    )
+                if result.status is ShadowProcessingStatus.OBSERVED:
+                    self._sec_latest_observed_count += 1
+                if result.status is ShadowProcessingStatus.ERROR:
+                    self._error_count += 1
+                else:
+                    self._sec_latest_completed_events.add(event_key)
+                self._logger.info(
+                    "SEC Latest filing processed scope=%s "
+                    "ticker=%s status=%s reason=%s "
+                    "event_id=%s fact_id=%s value=%s",
+                    candidate.scope_id,
+                    candidate.ticker,
+                    result.status.value,
+                    result.reason,
+                    result.event_id,
+                    result.fact_id,
+                    (
+                        result.signal.value
+                        if result.signal is not None
+                        else None
+                    ),
+                )
+        return processed
+
+    async def _sec_latest_poll_loop(self) -> None:
+        previous_active: bool | None = None
+        while True:
+            try:
+                await self.run_sec_latest_poll_cycle()
+                if (
+                    previous_active
+                    is not self._sec_latest_polling_active
+                ):
+                    self._logger.info(
+                        "SEC Latest polling state active=%s "
+                        "scopes=%s tail_scopes=%s watches=%s",
+                        self._sec_latest_polling_active,
+                        self._sec_latest_active_scope_count,
+                        self._sec_latest_tail_scope_count,
+                        self._sec_latest_watch_count,
+                    )
+                    previous_active = (
+                        self._sec_latest_polling_active
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._error_count += 1
+                self._logger.warning(
+                    "SEC Latest Filings poll failed error_code=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(
+                self._settings.sec_latest_poll_interval
+            )
+
     def _default_public_document_fetcher(
         self,
         watches: Sequence[PublicReleaseWatch],
@@ -1203,6 +1446,11 @@ class EarningsHostedShadowWorker:
                 "sec_current_watches=%s sec_current_polls=%s "
                 "sec_current_success=%s sec_current_candidates=%s "
                 "sec_current_signals=%s sec_current_observed=%s "
+                "sec_latest_active=%s sec_latest_scopes=%s "
+                "sec_latest_tail_scopes=%s "
+                "sec_latest_watches=%s sec_latest_polls=%s "
+                "sec_latest_success=%s sec_latest_candidates=%s "
+                "sec_latest_signals=%s sec_latest_observed=%s "
                 "ledger_active=%s ledger_profiles=%s "
                 "ledger_connected=%s ledger_polls=%s "
                 "ledger_accepted=%s errors=%s",
@@ -1229,6 +1477,15 @@ class EarningsHostedShadowWorker:
                 self._sec_current_candidate_count,
                 self._sec_current_signal_count,
                 self._sec_current_observed_count,
+                self._sec_latest_polling_active,
+                self._sec_latest_active_scope_count,
+                self._sec_latest_tail_scope_count,
+                self._sec_latest_watch_count,
+                self._sec_latest_poll_count,
+                self._sec_latest_success_count,
+                self._sec_latest_candidate_count,
+                self._sec_latest_signal_count,
+                self._sec_latest_observed_count,
                 self._ledger_polling_active,
                 self._ledger_active_profile_count,
                 self._ledger_connected,
@@ -1335,6 +1592,7 @@ def main(
             settings.mstr_btc_ledger_enabled
             or settings.public_sources_enabled
             or settings.sec_current_polling_enabled
+            or settings.sec_latest_polling_enabled
         )
         else None
     )
@@ -1365,6 +1623,15 @@ def main(
         and settings.sec_current_polling_enabled
         else None
     )
+    sec_latest_polling_gate = (
+        ProfileWindowPollingGate(
+            profile_store=profile_store,
+            source_name=EARNINGS_SOURCE_NAME,
+        )
+        if profile_store is not None
+        and settings.sec_latest_polling_enabled
+        else None
+    )
     notification_store = SqlAlchemyNotificationOutboxStore(
         database_url=settings.database_url,
         session_factory=session_factory,
@@ -1377,6 +1644,7 @@ def main(
         ledger_polling_gate=ledger_polling_gate,
         public_polling_gate=public_polling_gate,
         sec_current_polling_gate=sec_current_polling_gate,
+        sec_latest_polling_gate=sec_latest_polling_gate,
         notification_store=notification_store,
         logger=logger,
     )

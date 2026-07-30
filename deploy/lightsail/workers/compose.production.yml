@@ -37,7 +37,13 @@ services:
       # Requests are paced globally below the SEC fair-access ceiling.
       EARNINGS_SEC_CURRENT_POLL_ENABLED: "true"
       EARNINGS_SEC_CURRENT_POLL_SEC: "0.25"
-      EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC: "5"
+      EARNINGS_SEC_CURRENT_MAX_REQUESTS_PER_SEC: "4"
+      # One shared Latest Filings Atom request covers every active CIK.
+      # It is independent from per-issuer submissions polling and the
+      # SEC-API WebSocket so source-arrival latency can be compared.
+      EARNINGS_SEC_LATEST_POLL_ENABLED: "true"
+      EARNINGS_SEC_LATEST_POLL_SEC: "0.25"
+      EARNINGS_SEC_LATEST_MAX_REQUESTS_PER_SEC: "4"
       EARNINGS_SOURCE_OBSERVATION_TAIL_SEC: "900"
       MSTR_BTC_SHADOW_ENABLED: "true"
       MSTR_BTC_LEDGER_ENABLED: "true"
