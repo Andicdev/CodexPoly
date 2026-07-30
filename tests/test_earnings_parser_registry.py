@@ -49,6 +49,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "QCOM",
                 "RCL",
                 "RDDT",
+                "RIVN",
                 "SBUX",
                 "SOFI",
                 "SPGI",
@@ -97,6 +98,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "QCOM",
                 "RCL",
                 "RDDT",
+                "RIVN",
                 "SBUX",
                 "SOFI",
                 "SPGI",
@@ -114,7 +116,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            43,
+            44,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(

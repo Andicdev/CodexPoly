@@ -113,6 +113,10 @@ from cbr_trading.earnings.parsers.reddit import (
     RedditGaapDilutedEpsParser,
     rddt_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.rivian import (
+    RivianGaapDilutedEpsParser,
+    rivn_q2_2026_shadow_rule,
+)
 from cbr_trading.earnings.parsers.woodward import (
     WoodwardGaapEpsParser,
     wwd_q3_2026_shadow_rule,
@@ -154,6 +158,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "QCOM": QualcommNonGaapEpsParser(),
         "RCL": RoyalCaribbeanAdjustedEpsParser(),
         "RDDT": RedditGaapDilutedEpsParser(),
+        "RIVN": RivianGaapDilutedEpsParser(),
         "SBUX": StarbucksGaapEpsParser(),
         "SOFI": SofiGaapEpsParser(),
         "SPGI": SpGlobalAdjustedDilutedEpsParser(),
@@ -201,6 +206,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         qcom_q3_2026_shadow_rule(),
         rcl_q2_2026_shadow_rule(),
         rddt_q2_2026_shadow_rule(),
+        rivn_q2_2026_shadow_rule(),
         sbux_q3_2026_shadow_rule(),
         sofi_q2_2026_shadow_rule(),
         spgi_q2_2026_shadow_rule(),
@@ -248,6 +254,7 @@ __all__ = [
     "RobinhoodGaapEpsParser",
     "RoyalCaribbeanAdjustedEpsParser",
     "RedditGaapDilutedEpsParser",
+    "RivianGaapDilutedEpsParser",
     "SofiGaapEpsParser",
     "SpGlobalAdjustedDilutedEpsParser",
     "StarbucksGaapEpsParser",
@@ -293,6 +300,7 @@ __all__ = [
     "qcom_q3_2026_shadow_rule",
     "rcl_q2_2026_shadow_rule",
     "rddt_q2_2026_shadow_rule",
+    "rivn_q2_2026_shadow_rule",
     "sbux_q3_2026_shadow_rule",
     "sofi_q2_2026_shadow_rule",
     "spgi_q2_2026_shadow_rule",

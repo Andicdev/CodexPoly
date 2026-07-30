@@ -98,6 +98,11 @@ from cbr_trading.earnings.parsers.reddit import (
     RedditGaapDilutedEpsParser,
     rddt_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.rivian import (
+    RIVIAN_CIK,
+    RivianGaapDilutedEpsParser,
+    rivn_q2_2026_shadow_rule,
+)
 from cbr_trading.secret_guard import redact_exception
 
 
@@ -381,6 +386,22 @@ _REPLAYS = {
             "default.aspx"
         ),
         "1.01",
+    ),
+    "RIVN": (
+        RivianGaapDilutedEpsParser(),
+        replace(
+            rivn_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("RIVN", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        RIVIAN_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1874178/"
+            "000187417826000033/"
+            "ex-9911q26rivianearningspr.htm"
+        ),
+        "-0.33",
     ),
     "SBUX": (
         StarbucksGaapEpsParser(),
