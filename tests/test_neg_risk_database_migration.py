@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_DIR = ROOT / "deploy" / "lightsail" / "database"
+CHECKS_DIR = ROOT / "neg_risk_trading" / "checks"
 
 
 class NegRiskMigrationRunnerTests(unittest.TestCase):
@@ -63,6 +64,32 @@ class NegRiskMigrationRunnerTests(unittest.TestCase):
             "codexpoly-production-neg-risk-migrate",
             sudoers,
         )
+
+    def test_active_recorder_check_is_value_safe(
+        self,
+    ) -> None:
+        sql = (
+            CHECKS_DIR
+            / "verify_staging_recorder_active.sql"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "latest_status <> 'READY'",
+            sql,
+        )
+        self.assertIn(
+            "latest_live_orders_enabled",
+            sql,
+        )
+        self.assertIn(
+            "persisted_message_count < 1",
+            sql,
+        )
+        self.assertIn(
+            "persisted_route_count < 1",
+            sql,
+        )
+        self.assertNotIn("SELECT *", sql.upper())
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ COPY scripts scripts
 COPY tools tools
 COPY deploy deploy
 COPY tests tests
+COPY Dockerfile Dockerfile
 
 RUN python scripts/check_no_secrets.py
 RUN python -m unittest discover -s tests -q
