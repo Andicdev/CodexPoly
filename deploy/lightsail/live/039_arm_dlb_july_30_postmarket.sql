@@ -11,8 +11,8 @@ DECLARE
     schedule_state text;
     readiness_until timestamptz;
     reviewed_notional numeric;
-    approved_order_quantity_cap numeric := 200;
-    approved_per_order_notional_cap numeric := 200;
+    approved_order_quantity_cap numeric := 100;
+    approved_per_order_notional_cap numeric := 100;
     approved_aggregate_notional_cap numeric := 1000;
 BEGIN
     IF now() >= TIMESTAMPTZ '2026-07-30 18:15:00+00' THEN
@@ -159,8 +159,8 @@ BEGIN
           AND schedule.state IN ('PENDING', 'READY')
           AND schedule.timing_contract_version = 1
           AND schedule.metadata ->> 'armed_for_live' = 'true'
-          AND schedule.metadata ->> 'max_order_quantity_cap' = '200'
-          AND schedule.metadata ->> 'per_order_notional_cap' = '200'
+          AND schedule.metadata ->> 'max_order_quantity_cap' = '100'
+          AND schedule.metadata ->> 'per_order_notional_cap' = '100'
           AND schedule.metadata ->> 'aggregate_notional_cap' = '1000'
           AND profile.status = 'DISABLED'
           AND profile.quantity = 100

@@ -52,7 +52,7 @@ comparison.
 - YES / NO desired price: `0.999`
 - Quantity: `100`
 - Desired maximum notional: `99.9`
-- Reviewed runtime caps: `200 / 200 / 1000`
+- Reviewed runtime caps: `100 / 100 / 1000`
 - Lifecycle: `reprice_on_tick_change`
 - Tick transition: `0.01 -> 0.001`
 - Maximum reprices: `1`
@@ -97,7 +97,7 @@ No validated DLB fact, execution claim, order group, or order was created.
 Production resolution and readiness workers intentionally remain on the
 previous reviewed AAPL image. A separate operator authorization is required
 to recreate those two shared workers on the DLB image with global caps
-`200 / 200 / 1000`, repeat authenticated preflight, and apply guarded
+`100 / 100 / 1000`, repeat authenticated preflight, and apply guarded
 migration `039_arm_dlb_july_30_postmarket.sql`.
 
 That migration can only change the DLB schedule to `AUTO_LIVE`; scheduler
