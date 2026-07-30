@@ -98,6 +98,13 @@ Run the continuous scanner:
 python -m neg_risk_trading.catalog_main
 ```
 
+Read a safe JSON snapshot of the latest completed scan, category/profile
+totals, and the highest-ranked metadata-complete events:
+
+```powershell
+python -m neg_risk_trading.catalog_report --top 20
+```
+
 The database views `neg_risk_catalog_ranked_events` and
 `neg_risk_catalog_category_summary` expose the current ranked list and
 category totals without requiring raw Gamma payload access.

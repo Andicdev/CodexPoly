@@ -16,6 +16,7 @@ from neg_risk_trading.catalog_service import (
 from neg_risk_trading.catalog_repository import (
     SqlAlchemyCatalogRepository,
 )
+from neg_risk_trading.catalog_report import _json_default
 from neg_risk_trading.domain import NegRiskContractError
 from neg_risk_trading.polymarket import (
     GAMMA_BASE_URL,
@@ -373,6 +374,39 @@ class _SqlSession:
         self.commits += 1
 
 
+class _Rows:
+    def __init__(self, rows: list[dict[str, object]]):
+        self.rows = rows
+
+    def mappings(self) -> _Rows:
+        return self
+
+    def one_or_none(self) -> dict[str, object] | None:
+        return self.rows[0] if self.rows else None
+
+    def all(self) -> list[dict[str, object]]:
+        return self.rows
+
+
+class _ReportSqlSession(_SqlSession):
+    def execute(
+        self,
+        statement: str,
+        params: object = None,
+    ) -> _Rows:
+        self.statements.append((statement, params))
+        if "FROM neg_risk_catalog_scans" in statement:
+            return _Rows([{"event_count": 7}])
+        if "neg_risk_catalog_category_summary" in statement:
+            return _Rows([{"primary_fee_category": "politics"}])
+        if "GROUP BY launch_status" in statement:
+            return _Rows([{"launch_status": "READY_FOR_L2_REPLAY"}])
+        return _Rows([{"slug": "candidate"}])
+
+    def rollback(self) -> None:
+        return None
+
+
 class CatalogRepositoryTests(unittest.TestCase):
     def test_pages_stage_before_atomic_promotion(self) -> None:
         session = _SqlSession()
@@ -431,6 +465,50 @@ class CatalogRepositoryTests(unittest.TestCase):
         self.assertIn(
             "status = 'COMPLETE'",
             promoted_sql,
+        )
+
+    def test_report_reads_only_aggregate_views(self) -> None:
+        session = _ReportSqlSession()
+        repository = SqlAlchemyCatalogRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        report = repository.report(top_limit=5)
+
+        self.assertEqual(
+            report["latest_scan"],
+            {"event_count": 7},
+        )
+        self.assertEqual(
+            report["categories"],
+            [{"primary_fee_category": "politics"}],
+        )
+        self.assertEqual(
+            report["top_candidates"],
+            [{"slug": "candidate"}],
+        )
+        top_calls = [
+            params
+            for statement, params in session.statements
+            if "neg_risk_catalog_ranked_events" in statement
+        ]
+        self.assertEqual(top_calls, [{"top_limit": 5}])
+
+    def test_report_json_default_handles_public_types(
+        self,
+    ) -> None:
+        self.assertEqual(
+            _json_default(Decimal("1.25")),
+            "1.25",
+        )
+        self.assertEqual(
+            _json_default(
+                UUID(
+                    "00000000-0000-0000-0000-000000000001"
+                )
+            ),
+            "00000000-0000-0000-0000-000000000001",
         )
 
 

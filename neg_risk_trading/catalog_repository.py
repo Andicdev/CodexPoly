@@ -753,6 +753,82 @@ WHERE scan_id = :scan_id
   AND status = 'RUNNING'
 """.strip()
 
+_REPORT_LATEST_SCAN_SQL = """
+SELECT
+    scan_id,
+    completed_at,
+    page_count,
+    gamma_market_count,
+    neg_risk_market_count,
+    event_count,
+    ready_event_count,
+    issue_count,
+    skipped_market_count,
+    duration_ms
+FROM neg_risk_catalog_scans
+WHERE status = 'COMPLETE'
+  AND mode = 'SHADOW'
+  AND NOT live_orders_enabled
+ORDER BY completed_at DESC
+LIMIT 1
+""".strip()
+
+_REPORT_CATEGORY_SQL = """
+SELECT
+    primary_fee_category,
+    launch_status,
+    event_count,
+    market_count,
+    volume_24h,
+    liquidity,
+    mixed_tick_event_count,
+    fee_free_event_count,
+    reward_terms_event_count
+FROM neg_risk_catalog_category_summary
+ORDER BY
+    primary_fee_category,
+    launch_status
+""".strip()
+
+_REPORT_PROFILE_SQL = """
+SELECT
+    launch_status,
+    fee_profile,
+    tick_profile,
+    count(*) AS event_count,
+    sum(market_count) AS market_count
+FROM neg_risk_catalog_events_current
+WHERE is_listed
+GROUP BY launch_status, fee_profile, tick_profile
+ORDER BY launch_status, fee_profile, tick_profile
+""".strip()
+
+_REPORT_TOP_SQL = """
+SELECT
+    global_rank,
+    category_rank,
+    event_id,
+    slug,
+    title,
+    primary_fee_category,
+    fee_profile,
+    tick_profile,
+    launch_status,
+    market_count,
+    accepting_market_count,
+    has_explicit_other,
+    has_reward_terms,
+    tail_market_count,
+    volume_24h,
+    liquidity,
+    end_date,
+    last_seen_at
+FROM neg_risk_catalog_ranked_events
+WHERE launch_status = 'READY_FOR_L2_REPLAY'
+ORDER BY global_rank
+LIMIT :top_limit
+""".strip()
+
 
 class CatalogRepositoryError(RuntimeError):
     """A value-safe catalog persistence failure."""
@@ -997,6 +1073,42 @@ class SqlAlchemyCatalogRepository:
                 "Failed to mark neg-risk catalog scan failed: "
                 f"{type(exc).__name__}"
             ) from None
+
+    def report(self, *, top_limit: int = 20) -> dict[str, object]:
+        if not 1 <= int(top_limit) <= 100:
+            raise ValueError("top_limit must be between 1 and 100")
+        session_factory, text_factory = self._dependencies()
+        try:
+            with session_factory() as session:
+                latest = session.execute(
+                    text_factory(_REPORT_LATEST_SCAN_SQL)
+                ).mappings().one_or_none()
+                categories = session.execute(
+                    text_factory(_REPORT_CATEGORY_SQL)
+                ).mappings().all()
+                profiles = session.execute(
+                    text_factory(_REPORT_PROFILE_SQL)
+                ).mappings().all()
+                top = session.execute(
+                    text_factory(_REPORT_TOP_SQL),
+                    {"top_limit": int(top_limit)},
+                ).mappings().all()
+                session.rollback()
+        except Exception as exc:
+            raise CatalogRepositoryError(
+                "Failed to read neg-risk catalog report: "
+                f"{type(exc).__name__}"
+            ) from None
+        if latest is None:
+            raise CatalogRepositoryError(
+                "Neg-risk catalog has no complete scan"
+            )
+        return {
+            "latest_scan": dict(latest),
+            "categories": [dict(row) for row in categories],
+            "profiles": [dict(row) for row in profiles],
+            "top_candidates": [dict(row) for row in top],
+        }
 
     def close(self) -> None:
         if self._engine is not None:
