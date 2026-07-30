@@ -38,6 +38,7 @@ class _Store:
         self.recorded_events = 0
         self.recorded_facts = 0
         self.recorded_fact_statuses = []
+        self.observed_facts = {}
 
     def record_source_event(self, _candidate):
         self.recorded_events += 1
@@ -64,12 +65,34 @@ class _Store:
     ):
         self.recorded_facts += 1
         self.recorded_fact_statuses.append(status)
+        existing_observed = self.observed_facts.get(source_event_id)
         if status == "VALIDATED":
+            if existing_observed is not None:
+                self.facts.append(existing_observed)
+                del self.observed_facts[source_event_id]
+                return StoredEarningsRecord(
+                    row_id=22,
+                    created=False,
+                    status="VALIDATED",
+                )
             self.facts.append(candidate)
+        elif status == "OBSERVED":
+            self.observed_facts[source_event_id] = candidate
         return StoredEarningsRecord(
             row_id=22,
             created=True,
             status=status,
+        )
+
+    def promote_observed_fact(self, *, source_event_id):
+        candidate = self.observed_facts.pop(source_event_id, None)
+        if candidate is None:
+            return None
+        self.facts.append(candidate)
+        return StoredEarningsRecord(
+            row_id=22,
+            created=False,
+            status="VALIDATED",
         )
 
     def load_validated_facts(self, *, scope_id=None):
@@ -209,6 +232,94 @@ class EarningsShadowProcessorTests(unittest.TestCase):
         self.assertEqual(result.status, ShadowProcessingStatus.DUPLICATE)
         self.assertEqual(fetcher.calls, 0)
         self.assertEqual(store.recorded_facts, 0)
+
+    def test_executable_transport_promotes_terminal_observation(self) -> None:
+        store = _Store()
+        document = _document(
+            "June 30, 2026",
+            "(0.03)",
+        ).encode()
+        observation_processor = EarningsShadowProcessor(
+            store=store,
+            rules=[nvts_q2_2026_shadow_rule()],
+            parsers={"NVTS": NavitasEpsParser()},
+            document_fetcher=_Fetcher(document),
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            observation_only=True,
+            clock=lambda: _NOW,
+            sleep=lambda _seconds: None,
+        )
+        observation = observation_processor.process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+        store.event = StoredEarningsRecord(
+            row_id=11,
+            created=False,
+            status="PARSED",
+        )
+        executable_fetcher = _Fetcher(
+            AssertionError("promotion must not refetch")
+        )
+
+        result = _processor(store, executable_fetcher).process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(
+            observation.status,
+            ShadowProcessingStatus.OBSERVED,
+        )
+        self.assertEqual(result.status, ShadowProcessingStatus.SIGNAL)
+        self.assertEqual(result.reason, "promoted_observation_signal")
+        self.assertEqual(result.fact_id, 22)
+        self.assertIsNotNone(result.signal)
+        self.assertEqual(executable_fetcher.calls, 0)
+        self.assertEqual(len(store.facts), 1)
+        self.assertEqual(store.observed_facts, {})
+
+    def test_executable_race_promotes_observation_during_parse(
+        self,
+    ) -> None:
+        store = _Store()
+        document = _document(
+            "June 30, 2026",
+            "(0.03)",
+        ).encode()
+        observation_processor = EarningsShadowProcessor(
+            store=store,
+            rules=[nvts_q2_2026_shadow_rule()],
+            parsers={"NVTS": NavitasEpsParser()},
+            document_fetcher=_Fetcher(document),
+            max_fetch_attempts=1,
+            fetch_retry_delay=0,
+            observation_only=True,
+            clock=lambda: _NOW,
+            sleep=lambda _seconds: None,
+        )
+        observation_processor.process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+        store.event = StoredEarningsRecord(
+            row_id=11,
+            created=False,
+            status="FETCHED",
+        )
+        executable_fetcher = _Fetcher(document)
+
+        result = _processor(store, executable_fetcher).process(
+            _source(nvts_q2_2026_shadow_rule())
+        )
+
+        self.assertEqual(result.status, ShadowProcessingStatus.SIGNAL)
+        self.assertEqual(result.reason, "shadow_resolution_signal")
+        self.assertEqual(executable_fetcher.calls, 1)
+        self.assertEqual(
+            store.recorded_fact_statuses,
+            ["OBSERVED", "VALIDATED"],
+        )
+        self.assertEqual(len(store.facts), 1)
+        self.assertEqual(store.observed_facts, {})
 
     def test_fetch_failure_retries_then_records_type_only_error(self) -> None:
         secret = "credential-that-must-not-leak"

@@ -464,10 +464,30 @@ RETURNING id
 """.strip()
 
 _SELECT_FACT_SQL = """
-SELECT id
+SELECT id, status
 FROM earnings_fact_candidates
 WHERE idempotency_key = :idempotency_key
 LIMIT 1
+""".strip()
+
+_PROMOTE_OBSERVED_FACT_BY_KEY_SQL = """
+UPDATE earnings_fact_candidates
+SET
+    status = 'VALIDATED',
+    updated_at = now()
+WHERE idempotency_key = :idempotency_key
+  AND status = 'OBSERVED'
+RETURNING id, status
+""".strip()
+
+_PROMOTE_OBSERVED_FACT_BY_EVENT_SQL = """
+UPDATE earnings_fact_candidates
+SET
+    status = 'VALIDATED',
+    updated_at = now()
+WHERE source_event_id = :source_event_id
+  AND status = 'OBSERVED'
+RETURNING id, status
 """.strip()
 
 _LOAD_VALIDATED_FACTS_SQL = """
@@ -771,7 +791,22 @@ class SqlAlchemyEarningsStore:
                     return StoredEarningsRecord(
                         row_id=int(inserted["id"]),
                         created=True,
+                        status=normalized_status,
                     )
+                if normalized_status == "VALIDATED":
+                    promoted = session.execute(
+                        text_factory(
+                            _PROMOTE_OBSERVED_FACT_BY_KEY_SQL
+                        ),
+                        {"idempotency_key": idempotency_key},
+                    ).mappings().one_or_none()
+                    if promoted is not None:
+                        session.commit()
+                        return StoredEarningsRecord(
+                            row_id=int(promoted["id"]),
+                            created=False,
+                            status=str(promoted["status"]),
+                        )
                 existing = session.execute(
                     text_factory(_SELECT_FACT_SQL),
                     {"idempotency_key": idempotency_key},
@@ -789,6 +824,36 @@ class SqlAlchemyEarningsStore:
         return StoredEarningsRecord(
             row_id=int(existing["id"]),
             created=False,
+            status=str(existing["status"]),
+        )
+
+    def promote_observed_fact(
+        self,
+        *,
+        source_event_id: int,
+    ) -> StoredEarningsRecord | None:
+        session_factory, text_factory = self._resolve_dependencies()
+        try:
+            with session_factory() as session:
+                promoted = session.execute(
+                    text_factory(
+                        _PROMOTE_OBSERVED_FACT_BY_EVENT_SQL
+                    ),
+                    {"source_event_id": int(source_event_id)},
+                ).mappings().one_or_none()
+                if promoted is None:
+                    session.rollback()
+                    return None
+                session.commit()
+        except Exception as exc:
+            raise EarningsStoreError(
+                "Failed to promote observed earnings fact: "
+                f"{type(exc).__name__}"
+            ) from None
+        return StoredEarningsRecord(
+            row_id=int(promoted["id"]),
+            created=False,
+            status=str(promoted["status"]),
         )
 
     def load_validated_facts(

@@ -70,6 +70,12 @@ class EarningsStore(Protocol):
         status: str = "VALIDATED",
     ) -> StoredEarningsRecord: ...
 
+    def promote_observed_fact(
+        self,
+        *,
+        source_event_id: int,
+    ) -> StoredEarningsRecord | None: ...
+
     def load_validated_facts(
         self,
         *,
@@ -157,6 +163,36 @@ class EarningsShadowProcessor:
             not stored_event.created
             and existing_status in self._TERMINAL_EVENT_STATUSES
         ):
+            if (
+                not self._observation_only
+                and existing_status == "PARSED"
+                and (rule := self._rules.get(candidate.scope_id))
+                is not None
+            ):
+                promoted = self._store.promote_observed_fact(
+                    source_event_id=stored_event.row_id,
+                )
+                if promoted is not None:
+                    signal, reason = self._resolve_signal(rule)
+                    if signal is None:
+                        return self._finish_without_signal(
+                            candidate=candidate,
+                            event_id=stored_event.row_id,
+                            fact_id=promoted.row_id,
+                            status=(
+                                ShadowProcessingStatus.QUARANTINED
+                            ),
+                            reason=reason,
+                            timing=timing,
+                        )
+                    return ShadowProcessingResult(
+                        status=ShadowProcessingStatus.SIGNAL,
+                        reason="promoted_observation_signal",
+                        scope_id=candidate.scope_id,
+                        event_id=stored_event.row_id,
+                        fact_id=promoted.row_id,
+                        signal=signal,
+                    )
             return ShadowProcessingResult(
                 status=ShadowProcessingStatus.DUPLICATE,
                 reason=f"already_{existing_status.lower()}",
@@ -301,20 +337,8 @@ class EarningsShadowProcessor:
                 event_id=stored_event.row_id,
                 fact_id=stored_fact.row_id,
             )
-        resolver = EarningsResolutionSource(
-            candidate_provider=lambda: tuple(
-                self._store.load_validated_facts(
-                    scope_id=rule.scope_id
-                )
-            ),
-            rules=(rule,),
-        )
-        signals = resolver.poll_once()
-        if len(signals) != 1:
-            reason = (
-                resolver.quarantine_reasons.get(rule.scope_id)
-                or "canonical_signal_not_unique"
-            )
+        signal, reason = self._resolve_signal(rule)
+        if signal is None:
             return self._finish_without_signal(
                 candidate=candidate,
                 event_id=stored_event.row_id,
@@ -334,7 +358,28 @@ class EarningsShadowProcessor:
             scope_id=candidate.scope_id,
             event_id=stored_event.row_id,
             fact_id=stored_fact.row_id,
-            signal=signals[0],
+            signal=signal,
+        )
+
+    def _resolve_signal(
+        self,
+        rule: EarningsMarketRule,
+    ) -> tuple[ResolutionSignal | None, str]:
+        resolver = EarningsResolutionSource(
+            candidate_provider=lambda: tuple(
+                self._store.load_validated_facts(
+                    scope_id=rule.scope_id
+                )
+            ),
+            rules=(rule,),
+        )
+        signals = resolver.poll_once()
+        if len(signals) == 1:
+            return signals[0], "shadow_resolution_signal"
+        return (
+            None,
+            resolver.quarantine_reasons.get(rule.scope_id)
+            or "canonical_signal_not_unique",
         )
 
     def _fetch_document(
