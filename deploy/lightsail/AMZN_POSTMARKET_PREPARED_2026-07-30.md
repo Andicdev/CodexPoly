@@ -1,7 +1,7 @@
 # AMZN POST_MARKET prepared — 2026-07-30
 
 Only the Amazon Q2 2026 earnings market was added. The production schedule
-remains non-live pending separate operator authorization.
+was armed only after separate operator authorization.
 
 ## Official schedule and market rule
 
@@ -86,21 +86,24 @@ executor_execute_called=false
 
 No validated AMZN fact, execution claim, order group, or order was created.
 
-## Remaining release gate
+## Live arming
 
-Current production state is:
+After separate explicit authorization with limits `100 / 100 / 1000`,
+migration `037_arm_amzn_july_30_postmarket.sql` was applied in production.
+Its immediate read-only armed verifier passed and confirmed:
 
 ```text
 rule=SHADOW
 profile=DISABLED
-schedule=AUTO_PREFLIGHT/PENDING
-armed_for_live=false
+schedule=AUTO_LIVE/PENDING
+armed_for_live=true
 ```
 
-Migration `037_arm_amzn_july_30_postmarket.sql` is prepared but has not been
-applied. It can change only the reviewed AMZN schedule to `AUTO_LIVE`; it
-cannot enable the profile directly. The scheduler remains responsible for a
-fresh authenticated preflight at 17:45 UTC and activation at 18:00 UTC.
+The armed verifier also confirmed a fresh live resolution heartbeat with
+supervision and trading enabled, a valid timing contract, and no AMZN fact,
+execution claim, or active order group. No order was submitted by the arming
+migration.
 
-Applying migration 037 requires separate explicit operator authorization with
-limits `100 / 100 / 1000`.
+The scheduler remains responsible for a fresh authenticated preflight at
+17:45 UTC and profile activation at 18:00 UTC. Any failed readiness or
+activation guard must leave the profile disabled.
