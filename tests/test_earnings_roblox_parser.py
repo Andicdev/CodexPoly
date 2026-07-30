@@ -141,6 +141,7 @@ class RobloxGaapDilutedEpsParserTests(unittest.TestCase):
         self.assertEqual(result.status, ParseStatus.ACCEPTED)
         assert result.candidate is not None
         self.assertEqual(result.candidate.value, Decimal("-0.26"))
+        self.assertEqual(result.candidate.parser_version, "2")
 
     def test_conflicting_duplicate_rows_quarantine(self) -> None:
         rule = rblx_q2_2026_shadow_rule()

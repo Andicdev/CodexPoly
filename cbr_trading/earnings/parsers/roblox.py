@@ -52,7 +52,7 @@ class RobloxGaapDilutedEpsParser(LabelledEpsParser):
                 basis=EpsBasis.DILUTED,
                 label_patterns=(),
                 parser_name="roblox_gaap_diluted_eps",
-                parser_version="1",
+                parser_version="2",
                 accepted_reason="official_roblox_gaap_diluted_eps",
                 missing_reason=(
                     "roblox_gaap_diluted_eps_row_not_found"
