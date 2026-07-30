@@ -152,13 +152,45 @@ class RivianGaapDilutedEpsParserTests(unittest.TestCase):
         self.assertEqual(result.status, ParseStatus.ACCEPTED)
         assert result.candidate is not None
         self.assertEqual(result.candidate.value, Decimal("-0.63"))
-        self.assertEqual(result.candidate.parser_version, "2")
+        self.assertEqual(result.candidate.parser_version, "3")
+
+    def test_q2_unknown_four_column_layout_fails_closed(self) -> None:
+        rule = rivn_q2_2026_shadow_rule()
+        document = """
+        <h1>Rivian Releases Second Quarter 2026 Financial Results</h1>
+        <p>Quarter ended June 30, 2026.</p>
+        <table>
+          <tr><th></th><th>2025</th><th>2026</th>
+          <th>2025</th><th>2026</th></tr>
+          <tr>
+            <td>Net loss per share attributable to Class A and Class B
+            common stockholders, basic and diluted</td>
+            <td>$(0.97)</td><td>$(0.63)</td>
+            <td>$(1.45)</td><td>$(0.97)</td>
+          </tr>
+        </table>
+        """
+
+        result = RivianGaapDilutedEpsParser().parse(
+            document,
+            source=_source(rule),
+            rule=rule,
+            detected_at=_DETECTED,
+        )
+
+        self.assertEqual(result.status, ParseStatus.NO_MATCH)
+        self.assertIsNone(result.candidate)
 
     def test_conflicting_duplicate_rows_quarantine(self) -> None:
         rule = rivn_q2_2026_shadow_rule()
         document = """
         <p>Quarter ended June 30, 2026.</p>
         <table>
+          <tr>
+            <th></th>
+            <th colspan="2">Three Months Ended June 30</th>
+          </tr>
+          <tr><th></th><th>2025</th><th>2026</th></tr>
           <tr>
             <td>Net loss per share attributable to Class A and Class B
             common stockholders, basic and diluted</td>

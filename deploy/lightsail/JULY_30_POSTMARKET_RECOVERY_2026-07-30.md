@@ -46,8 +46,9 @@ which is the second value, `-0.63`. The correct rule result is therefore
   text normalization.
 - The RBLX parser audit version is `2`.
 - A subsequent local RIVN correction selects the second value from the exact
-  basic-and-diluted GAAP EPS row. Its audit version is `2`, and a four-column
-  Q2 regression fixture prevents the quarterly/YTD confusion from recurring.
+  basic-and-diluted GAAP EPS row. Its audit version is `3`; a four-column Q2
+  regression fixture prevents the quarterly/YTD confusion from recurring,
+  and an unknown multi-period header layout now fails closed without a fact.
   This correction was not part of the immutable production image documented
   below and requires a separate deployment.
 - A one-shot guarded production retry changed only the reviewed RBLX SEC
