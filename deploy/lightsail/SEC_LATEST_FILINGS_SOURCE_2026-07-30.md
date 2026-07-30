@@ -1,7 +1,7 @@
 # SEC Latest Filings source — 2026-07-30
 
-Status: implementation and local verification complete; initial inactive
-staging startup passed; final observation-only image rollout pending.
+Status: observation-only rollout complete in staging and production; latency
+comparison on the next earnings event is pending.
 
 ## Purpose
 
@@ -49,7 +49,7 @@ winning exhibit request.
 - Unit tests cover routing, active-CIK filtering, one-request fan-in,
   conditional requests, stale entries, URL fail-closed behavior, profile
   gating, and feed-arrival timestamps.
-- Full repository suite: `928` tests passed, `1` skipped.
+- Full repository suite: `929` tests passed, `1` skipped.
 - Secret scan passed.
 
 The first immutable staging image
@@ -62,5 +62,21 @@ started with restart count `0`. Its startup and first heartbeat confirmed:
 - SEC-API WebSocket connected with `39` watches;
 - `errors=0`.
 
-The observation-only guard was added after this inactive startup. A new exact
-image must repeat the same staging check before production changes.
+The final source archive for commit `63376c2` has SHA-256
+`342e764b6ef9b3e8a99a065a4e8fa9c8b1a70fc659d6b760aab0878fb7b63e04`.
+Its Docker archive has SHA-256
+`c22190bc40f443656d8a8fb7b7610d2c41628c815a57ce121a84b6984ff71899`.
+The exact image content ID is
+`sha256:c73a1f469698452a5a76de9c86ffb0d5e430ec369aabadb640eb8bb6e7072a36`
+and its OCI revision is `63376c2`.
+
+The final image repeated the staging check with restart count `0`. Startup
+explicitly confirmed `sec_latest_observation_only=True`; the first heartbeat
+showed the SEC-API WebSocket connected with `39` watches, no active or tail
+scopes, zero polling requests, and `errors=0`.
+
+Production passed the fail-closed restart guard before deployment. Only
+`earnings-worker` was recreated on the final image; resolution, readiness,
+scheduler, and notification workers were not restarted. Production startup
+also explicitly confirmed `sec_latest=True` and
+`sec_latest_observation_only=True`.
