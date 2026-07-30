@@ -1,8 +1,8 @@
 # AAPL POST_MARKET prepared - 2026-07-30
 
-Only the Apple Q3 2026 earnings market was added. The production profile is
-prepared but is not armed for live trading. A separate explicit operator
-authorization is required before applying the live migration.
+Only the Apple Q3 2026 earnings market was added. The production profile was
+first prepared without live authority and was armed only after a separate
+explicit operator authorization.
 
 ## Official schedule and market rule
 
@@ -50,7 +50,9 @@ diluted EPS `1.57` as expected.
 - YES / NO desired price: `0.999`
 - Quantity: `100`
 - Desired maximum notional: `99.9`
-- Aggregate cap: `1000`
+- Runtime maximum order quantity: `200`
+- Runtime per-order notional cap: `200`
+- Runtime aggregate notional cap: `1000`
 - Lifecycle: `reprice_on_tick_change`
 - Tick transition: `0.01 -> 0.001`
 - Maximum reprices: `1`
@@ -60,6 +62,7 @@ diluted EPS `1.57` as expected.
 ## Immutable deployment and verification
 
 - Feature commit: `9e095f6`
+- Live-cap guard commit: `d7a588d`
 - Source archive SHA256:
   `233764c1075dec63c9e6a249621c8832cc2a23a3b82b8e1f5d9123e52139f758`
 - Image:
@@ -71,10 +74,9 @@ The immutable build passed the repository secret scan and all 949 tests, with
 one skipped test.
 
 Seed 032 and the guarded read-only verifier passed in staging and production.
-Only the earnings worker was recreated on the new image; the production
-resolution, readiness, scheduler, notification, and already armed AMZN
-workers were not restarted. Both earnings-worker instances report restart
-count zero, a connected SEC stream, and zero errors.
+During non-live preparation only the earnings worker was recreated on the new
+image. Both earnings-worker instances reported restart count zero, a
+connected SEC stream, and zero errors.
 
 The manual authenticated non-submitting production preflight prepared and
 pre-signed both outcome templates:
@@ -102,10 +104,37 @@ The guarded verifier confirms:
 ```text
 rule=SHADOW
 profile=DISABLED
-schedule=AUTO_PREFLIGHT/PENDING
-armed_for_live=false
+schedule=AUTO_LIVE/PENDING
+armed_for_live=true
+runtime_caps=200/200/1000
 ```
 
-Migration `038_arm_aapl_july_30_postmarket.sql` and its armed-state verifier
-are prepared but have not been applied. Live arming requires separate explicit
-authorization with limits `100 / 100 / 1000`.
+After separate explicit authorization, the shared production resolution and
+readiness workers were recreated on the same reviewed AAPL image with global
+caps `200 / 200 / 1000`. The operator explicitly accepted that these caps
+also apply to AMZN and that the shared restart briefly interrupts the common
+live path.
+
+The safe-restart guard passed immediately before recreation. Both workers
+then reported the exact reviewed image, restart count zero, and running
+status. Name-scoped boolean checks confirmed the approved caps in both
+containers. Sanitized startup evidence confirmed:
+
+- live resolution heartbeat with supervision and trading enabled;
+- readiness worker ready in non-submitting mode;
+- no startup error or traceback.
+
+A fresh authenticated non-submitting AAPL preflight after the restart again
+prepared and pre-signed two templates with current-tick maximum notional
+`99.0`; it did not call executor execution or submit an order.
+
+Migration `038_arm_aapl_july_30_postmarket.sql` was then applied in production.
+Its independent read-only verifier required a fresh live resolution heartbeat
+and rejected any validated AAPL fact, execution claim, or active order group.
+The separately armed AMZN schedule passed its own independent verifier after
+the shared worker restart.
+
+The scheduler remains responsible for authenticated readiness at 18:15 UTC
+and profile activation at 18:30 UTC. Before that window, public and SEC
+polling remain inactive by design while the SEC-API WebSocket remains
+connected. Any failed guard must leave the AAPL profile disabled.
