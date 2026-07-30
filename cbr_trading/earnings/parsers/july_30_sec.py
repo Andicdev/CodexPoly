@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -33,6 +34,21 @@ MASTERCARD_CIK = "1141391"
 MASTERCARD_Q2_2026_CONDITION_ID = (
     "0x9aa5ff923c2669e27ce9be9631deb177"
     "19afd08d877237e9bf24d853b75893a1"
+)
+YUM_BRANDS_CIK = "1041061"
+YUM_BRANDS_Q2_2026_CONDITION_ID = (
+    "0xf12f1d26c9f7c02c36e0986be4e32f5a"
+    "dc2b30642f0f1f4dda2b5a51bf3e20dd"
+)
+INTERCONTINENTAL_EXCHANGE_CIK = "1571949"
+INTERCONTINENTAL_EXCHANGE_Q2_2026_CONDITION_ID = (
+    "0x52f96f0d385691c1534d86c7fbad89ab"
+    "d4358da382624b79882279a4ec3eaa20"
+)
+CIGNA_GROUP_CIK = "1739940"
+CIGNA_GROUP_Q2_2026_CONDITION_ID = (
+    "0xecdbab51723875aee7d00faa3b5a8adb"
+    "bfe7054763dff375c92443a670bb6a61"
 )
 
 _GLOBENEWSWIRE_EARNINGS_FEED = (
@@ -173,6 +189,254 @@ class MastercardAdjustedDilutedEpsParser(LabelledEpsParser):
                 ),
             )
         )
+
+
+class YumEpsExcludingSpecialItemsParser(LabelledEpsParser):
+    """Parse YUM's primary headline EPS excluding Special Items."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            LabelledEpsParserConfig(
+                ticker="YUM",
+                cik=YUM_BRANDS_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                basis=EpsBasis.DILUTED,
+                label_patterns=(
+                    eps_label(
+                        r"\beps\s+excluding\s+special\s+items"
+                        r"(?:\s*\(?\s*\d+\s*\)?)?\s+"
+                        r"(?:of|was|were)\b"
+                    ),
+                ),
+                parser_name="yum_eps_excluding_special_items",
+                parser_version="1",
+                accepted_reason=(
+                    "official_yum_eps_excluding_special_items"
+                ),
+                missing_reason=(
+                    "yum_eps_excluding_special_items_not_found"
+                ),
+                conflicting_reason=(
+                    "conflicting_yum_eps_excluding_special_items"
+                ),
+                evidence_title="YUM official earnings release",
+                resolution_basis=(
+                    "primary_headline_eps_excluding_special_items"
+                ),
+                forbidden_prefixes=("guidance", "outlook", "expected"),
+                forbidden_tails=("guidance", "outlook", "expected"),
+            )
+        )
+
+
+class IceAdjustedDilutedEpsParser(LabelledEpsParser):
+    """Parse ICE's primary headline adjusted diluted EPS."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            LabelledEpsParserConfig(
+                ticker="ICE",
+                cik=INTERCONTINENTAL_EXCHANGE_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                basis=EpsBasis.DILUTED,
+                label_patterns=(
+                    eps_label(
+                        r"\badj(?:usted)?\.?\s+diluted\s+eps"
+                        r"(?:\s*\(?\s*\d+\s*\)?)?\s+"
+                        r"(?:of|was|were)\b"
+                    ),
+                ),
+                parser_name="ice_adjusted_diluted_eps",
+                parser_version="1",
+                accepted_reason="official_ice_adjusted_diluted_eps",
+                missing_reason="ice_adjusted_diluted_eps_not_found",
+                conflicting_reason=(
+                    "conflicting_ice_adjusted_diluted_eps_values"
+                ),
+                evidence_title="ICE official earnings release",
+                resolution_basis=(
+                    "primary_headline_adjusted_diluted_eps"
+                ),
+                forbidden_prefixes=("guidance", "outlook", "expected"),
+                forbidden_tails=("guidance", "outlook", "expected"),
+            )
+        )
+
+
+class CignaAdjustedIncomePerShareParser(LabelledEpsParser):
+    """Parse Cigna's headline adjusted income from operations per share."""
+
+    _CURRENT_PERIOD = re.compile(
+        r"\badjusted\s+income\s+from\s+operations"
+        r"(?:\s*\(?\s*\d+\s*\)?)?\s+for\s+"
+        r"(?:the\s+)?(?:first|second|1st|2nd)\s+quarter\s+2026"
+        r"\s+was\s+\$?[\d,.]+\s+(?:billion|million)\s*,?\s+or\s+"
+        r"\$?(?P<value>\d+(?:\.\d+)?)\s+per\s+share\b",
+        re.IGNORECASE,
+    )
+
+    def __init__(self) -> None:
+        super().__init__(
+            LabelledEpsParserConfig(
+                ticker="CI",
+                cik=CIGNA_GROUP_CIK,
+                metric=EarningsMetric.NON_GAAP_EPS,
+                basis=EpsBasis.DILUTED,
+                label_patterns=(),
+                parser_name="cigna_adjusted_income_per_share",
+                parser_version="1",
+                accepted_reason=(
+                    "official_cigna_adjusted_income_per_share"
+                ),
+                missing_reason=(
+                    "cigna_adjusted_income_per_share_not_found"
+                ),
+                conflicting_reason=(
+                    "conflicting_cigna_adjusted_income_per_share_values"
+                ),
+                evidence_title="Cigna official earnings release",
+                resolution_basis=(
+                    "primary_headline_adjusted_income_per_share"
+                ),
+            )
+        )
+
+    def _preferred_matches(
+        self,
+        value: str,
+        *,
+        rule: EarningsMarketRule,
+    ) -> tuple[tuple[Decimal, str], ...]:
+        del rule
+        return tuple(
+            (
+                Decimal(match.group("value")),
+                match.group(0)[:400],
+            )
+            for match in self._CURRENT_PERIOD.finditer(value)
+        )
+
+
+def _businesswire_q2_2026_rule(
+    *,
+    ticker: str,
+    cik: str,
+    rule_key: str,
+    condition_id: str,
+    strike: str,
+    market_slug: str,
+    estimated_release_at: str,
+    metric_selection: str,
+    title_all: tuple[str, ...],
+    title_none: tuple[str, ...],
+) -> EarningsMarketRule:
+    rule = EarningsMarketRule(
+        rule_key=rule_key,
+        scope_id=earnings_scope_id(ticker, 2026, 2),
+        ticker=ticker,
+        cik=cik,
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        estimated_release_at=datetime.fromisoformat(estimated_release_at),
+        metric=EarningsMetric.NON_GAAP_EPS,
+        primary_basis=EpsBasis.DILUTED,
+        fallback_basis=EpsBasis.BASIC,
+        comparison_op=">",
+        strike=Decimal(strike),
+        rounding_places=2,
+        currency="USD",
+        market_slug=market_slug,
+        condition_id=condition_id,
+        source_policy={
+            "primary_authority": "official_company",
+            "initial_release_only": True,
+            "metric_selection": metric_selection,
+            "sec": {
+                "form_type": "8-K",
+                "required_item": "2.02",
+                "document_type": "EX-99.1",
+            },
+        },
+        fallback_policy={
+            "non_gaap_secondary": "seeking_alpha",
+            "gaap_after_hours": 96,
+            "no_release_after_days": 45,
+            "gaap_primary_basis": "diluted",
+            "gaap_fallback_basis": "basic",
+        },
+    )
+    return replace(
+        rule,
+        source_policy={
+            **rule.source_policy,
+            "press_wire": {
+                "allowed_document_hosts": ["www.businesswire.com"],
+                "feed_url": _BUSINESSWIRE_EARNINGS_FEED,
+                "kind": "rss",
+                "provider": "businesswire",
+                "title_all": list(title_all),
+                "title_none": list(title_none),
+            },
+        },
+    )
+
+
+def yum_q2_2026_shadow_rule() -> EarningsMarketRule:
+    return _businesswire_q2_2026_rule(
+        ticker="YUM",
+        cik=YUM_BRANDS_CIK,
+        rule_key="yum-2026q2-nongaap-eps-1pt56",
+        condition_id=YUM_BRANDS_Q2_2026_CONDITION_ID,
+        strike="1.56",
+        market_slug=(
+            "yum-quarterly-earnings-nongaap-eps-07-30-2026-1pt56"
+        ),
+        estimated_release_at="2026-07-30T07:00:00-04:00",
+        metric_selection="primary_headline_eps_excluding_special_items",
+        title_all=("Yum", "Second", "Quarter", "Results"),
+        title_none=("Conference Call Details", "to release"),
+    )
+
+
+def ice_q2_2026_shadow_rule() -> EarningsMarketRule:
+    return _businesswire_q2_2026_rule(
+        ticker="ICE",
+        cik=INTERCONTINENTAL_EXCHANGE_CIK,
+        rule_key="ice-2026q2-nongaap-eps-1pt84",
+        condition_id=INTERCONTINENTAL_EXCHANGE_Q2_2026_CONDITION_ID,
+        strike="1.84",
+        market_slug=(
+            "ice-quarterly-earnings-nongaap-eps-07-30-2026-1pt84"
+        ),
+        estimated_release_at="2026-07-30T07:30:00-04:00",
+        metric_selection="primary_headline_adjusted_diluted_eps",
+        title_all=(
+            "Intercontinental Exchange",
+            "Second Quarter",
+            "2026",
+        ),
+        title_none=("Statistics", "Conference Call"),
+    )
+
+
+def ci_q2_2026_shadow_rule() -> EarningsMarketRule:
+    return _businesswire_q2_2026_rule(
+        ticker="CI",
+        cik=CIGNA_GROUP_CIK,
+        rule_key="ci-2026q2-nongaap-eps-7pt60",
+        condition_id=CIGNA_GROUP_Q2_2026_CONDITION_ID,
+        strike="7.60",
+        market_slug=(
+            "ci-quarterly-earnings-nongaap-eps-07-30-2026-7pt6"
+        ),
+        estimated_release_at="2026-07-30T08:30:00-04:00",
+        metric_selection=(
+            "primary_headline_adjusted_income_per_share"
+        ),
+        title_all=("Cigna", "Second Quarter", "2026", "Results"),
+        title_none=("Conference", "to report"),
+    )
 
 
 def virt_q2_2026_shadow_rule() -> EarningsMarketRule:
@@ -327,12 +591,24 @@ def mastercard_q2_2026_shadow_rule() -> EarningsMarketRule:
 
 
 __all__ = [
+    "CIGNA_GROUP_CIK",
+    "CIGNA_GROUP_Q2_2026_CONDITION_ID",
+    "CignaAdjustedIncomePerShareParser",
+    "INTERCONTINENTAL_EXCHANGE_CIK",
+    "INTERCONTINENTAL_EXCHANGE_Q2_2026_CONDITION_ID",
+    "IceAdjustedDilutedEpsParser",
     "MASTERCARD_CIK",
     "MASTERCARD_Q2_2026_CONDITION_ID",
     "MastercardAdjustedDilutedEpsParser",
     "VIRTU_FINANCIAL_CIK",
     "VIRTU_FINANCIAL_Q2_2026_CONDITION_ID",
     "VirtuNormalizedAdjustedEpsParser",
+    "YUM_BRANDS_CIK",
+    "YUM_BRANDS_Q2_2026_CONDITION_ID",
+    "YumEpsExcludingSpecialItemsParser",
+    "ci_q2_2026_shadow_rule",
+    "ice_q2_2026_shadow_rule",
     "mastercard_q2_2026_shadow_rule",
     "virt_q2_2026_shadow_rule",
+    "yum_q2_2026_shadow_rule",
 ]

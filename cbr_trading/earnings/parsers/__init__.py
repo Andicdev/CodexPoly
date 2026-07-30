@@ -74,10 +74,16 @@ from cbr_trading.earnings.parsers.july_29_sec import (
     wing_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.july_30_sec import (
+    CignaAdjustedIncomePerShareParser,
+    IceAdjustedDilutedEpsParser,
     MastercardAdjustedDilutedEpsParser,
     VirtuNormalizedAdjustedEpsParser,
+    YumEpsExcludingSpecialItemsParser,
+    ci_q2_2026_shadow_rule,
+    ice_q2_2026_shadow_rule,
     mastercard_q2_2026_shadow_rule,
     virt_q2_2026_shadow_rule,
+    yum_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.navitas import (
     NavitasEpsParser,
@@ -103,6 +109,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "BA": BoeingCoreEpsParser(),
         "BBBY": BedBathBeyondNonGaapEpsParser(),
         "CBRE": CbreGaapEpsParser(),
+        "CI": CignaAdjustedIncomePerShareParser(),
         "CSGP": CostarGaapEpsParser(),
         "CZR": CaesarsGaapEpsParser(),
         "EA": ElectronicArtsGaapEpsParser(),
@@ -114,6 +121,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "HUM": HumanaAdjustedEpsParser(),
         "IART": IntegraAdjustedDilutedEpsParser(),
         "IVZ": InvescoAdjustedDilutedEpsParser(),
+        "ICE": IceAdjustedDilutedEpsParser(),
         "JBLU": JetBlueAdjustedDilutedEpsParser(),
         "KO": CocaColaComparableEpsParser(),
         "MA": MastercardAdjustedDilutedEpsParser(),
@@ -135,6 +143,7 @@ def earnings_parser_registry() -> dict[str, object]:
         "WAY": WaystarNonGaapEpsParser(),
         "WING": WingstopGaapEpsParser(),
         "WWD": WoodwardGaapEpsParser(),
+        "YUM": YumEpsExcludingSpecialItemsParser(),
     }
 
 
@@ -145,6 +154,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         csgp_q2_2026_shadow_rule(),
         czr_q2_2026_shadow_rule(),
         cbre_q2_2026_shadow_rule(),
+        ci_q2_2026_shadow_rule(),
         ea_q1_2027_shadow_rule(),
         ebay_q2_2026_shadow_rule(),
         ford_q2_2026_shadow_rule(),
@@ -154,6 +164,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         hum_q2_2026_shadow_rule(),
         iart_q2_2026_shadow_rule(),
         ivz_q2_2026_shadow_rule(),
+        ice_q2_2026_shadow_rule(),
         jblu_q2_2026_shadow_rule(),
         ko_q2_2026_shadow_rule(),
         mastercard_q2_2026_shadow_rule(),
@@ -175,6 +186,7 @@ def checked_in_shadow_rules() -> tuple[EarningsMarketRule, ...]:
         way_q2_2026_shadow_rule(),
         wing_q2_2026_shadow_rule(),
         wwd_q3_2026_shadow_rule(),
+        yum_q2_2026_shadow_rule(),
         bbby_q2_2026_shadow_rule(),
     )
 
@@ -183,6 +195,7 @@ __all__ = [
     "BedBathBeyondNonGaapEpsParser",
     "BoeingCoreEpsParser",
     "CbreGaapEpsParser",
+    "CignaAdjustedIncomePerShareParser",
     "CaesarsGaapEpsParser",
     "CocaColaComparableEpsParser",
     "CostarGaapEpsParser",
@@ -194,6 +207,7 @@ __all__ = [
     "HumanaAdjustedEpsParser",
     "IntegraAdjustedDilutedEpsParser",
     "InvescoAdjustedDilutedEpsParser",
+    "IceAdjustedDilutedEpsParser",
     "JetBlueAdjustedDilutedEpsParser",
     "MastercardAdjustedDilutedEpsParser",
     "MetaGaapEpsParser",
@@ -215,12 +229,14 @@ __all__ = [
     "WaystarNonGaapEpsParser",
     "WingstopGaapEpsParser",
     "WoodwardGaapEpsParser",
+    "YumEpsExcludingSpecialItemsParser",
     "ba_q2_2026_shadow_rule",
     "arcc_q2_2026_shadow_rule",
     "bbby_q2_2026_shadow_rule",
     "checked_in_shadow_rules",
     "csgp_q2_2026_shadow_rule",
     "cbre_q2_2026_shadow_rule",
+    "ci_q2_2026_shadow_rule",
     "czr_q2_2026_shadow_rule",
     "ea_q1_2027_shadow_rule",
     "ebay_q2_2026_shadow_rule",
@@ -232,6 +248,7 @@ __all__ = [
     "hum_q2_2026_shadow_rule",
     "iart_q2_2026_shadow_rule",
     "ivz_q2_2026_shadow_rule",
+    "ice_q2_2026_shadow_rule",
     "jblu_q2_2026_shadow_rule",
     "ko_q2_2026_shadow_rule",
     "mastercard_q2_2026_shadow_rule",
@@ -253,4 +270,5 @@ __all__ = [
     "way_q2_2026_shadow_rule",
     "wing_q2_2026_shadow_rule",
     "wwd_q3_2026_shadow_rule",
+    "yum_q2_2026_shadow_rule",
 ]

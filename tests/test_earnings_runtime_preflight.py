@@ -119,8 +119,8 @@ class EarningsRuntimePreflightTests(unittest.TestCase):
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
-        self.assertEqual(payload["active_rule_count"], 36)
-        self.assertEqual(payload["watch_count"], 36)
+        self.assertEqual(payload["active_rule_count"], 39)
+        self.assertEqual(payload["watch_count"], 39)
         self.assertEqual(payload["missing_parsers"], [])
 
 

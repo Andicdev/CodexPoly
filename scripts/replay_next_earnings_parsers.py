@@ -60,9 +60,18 @@ from cbr_trading.earnings.parsers.july_28_sec import (
     visa_q3_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.july_30_sec import (
+    CIGNA_GROUP_CIK,
+    INTERCONTINENTAL_EXCHANGE_CIK,
     MASTERCARD_CIK,
+    YUM_BRANDS_CIK,
+    CignaAdjustedIncomePerShareParser,
+    IceAdjustedDilutedEpsParser,
     MastercardAdjustedDilutedEpsParser,
+    YumEpsExcludingSpecialItemsParser,
+    ci_q2_2026_shadow_rule,
+    ice_q2_2026_shadow_rule,
     mastercard_q2_2026_shadow_rule,
+    yum_q2_2026_shadow_rule,
 )
 from cbr_trading.earnings.parsers.royal_caribbean import (
     ROYAL_CARIBBEAN_CIK,
@@ -73,6 +82,51 @@ from cbr_trading.secret_guard import redact_exception
 
 
 _REPLAYS = {
+    "CI": (
+        CignaAdjustedIncomePerShareParser(),
+        replace(
+            ci_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("CI", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        CIGNA_GROUP_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1739940/"
+            "000114036126017971/ef20071317_ex99-1.htm"
+        ),
+        "7.79",
+    ),
+    "ICE": (
+        IceAdjustedDilutedEpsParser(),
+        replace(
+            ice_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("ICE", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        INTERCONTINENTAL_EXCHANGE_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1571949/"
+            "000110465926052145/tm2612824d1_ex99-1.htm"
+        ),
+        "2.35",
+    ),
+    "YUM": (
+        YumEpsExcludingSpecialItemsParser(),
+        replace(
+            yum_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("YUM", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        YUM_BRANDS_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1041061/"
+            "000104106126000108/a8kex9914292026.htm"
+        ),
+        "1.50",
+    ),
     "BA": (
         BoeingCoreEpsParser(),
         replace(

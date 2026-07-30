@@ -20,6 +20,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "BA",
                 "BBBY",
                 "CBRE",
+                "CI",
                 "CSGP",
                 "CZR",
                 "EA",
@@ -30,6 +31,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "HOOD",
                 "HUM",
                 "IART",
+                "ICE",
                 "IVZ",
                 "JBLU",
                 "KO",
@@ -52,6 +54,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "WAY",
                 "WING",
                 "WWD",
+                "YUM",
             },
         )
         self.assertEqual(
@@ -61,6 +64,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "BA",
                 "BBBY",
                 "CBRE",
+                "CI",
                 "CSGP",
                 "CZR",
                 "EA",
@@ -71,6 +75,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "HOOD",
                 "HUM",
                 "IART",
+                "ICE",
                 "IVZ",
                 "JBLU",
                 "KO",
@@ -93,6 +98,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "WAY",
                 "WING",
                 "WWD",
+                "YUM",
             },
         )
         self.assertTrue(
@@ -100,7 +106,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            36,
+            39,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(
