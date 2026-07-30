@@ -335,7 +335,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_connection_cycle()
 
-        self.assertEqual(result.watch_count, 44)
+        self.assertEqual(result.watch_count, 45)
         self.assertEqual(
             {watch.ticker for watch in captured},
             {
@@ -373,6 +373,7 @@ class EarningsHostedWorkerTests(unittest.IsolatedAsyncioTestCase):
                 "RCL",
                 "RDDT",
                 "RIVN",
+                "RBLX",
                 "SBUX",
                 "SOFI",
                 "SPGI",

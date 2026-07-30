@@ -103,6 +103,11 @@ from cbr_trading.earnings.parsers.rivian import (
     RivianGaapDilutedEpsParser,
     rivn_q2_2026_shadow_rule,
 )
+from cbr_trading.earnings.parsers.roblox import (
+    ROBLOX_CIK,
+    RobloxGaapDilutedEpsParser,
+    rblx_q2_2026_shadow_rule,
+)
 from cbr_trading.secret_guard import redact_exception
 
 
@@ -402,6 +407,22 @@ _REPLAYS = {
             "ex-9911q26rivianearningspr.htm"
         ),
         "-0.33",
+    ),
+    "RBLX": (
+        RobloxGaapDilutedEpsParser(),
+        replace(
+            rblx_q2_2026_shadow_rule(),
+            scope_id=earnings_scope_id("RBLX", 2026, 1),
+            fiscal_quarter=1,
+            period_end=date(2026, 3, 31),
+        ),
+        ROBLOX_CIK,
+        (
+            "https://www.sec.gov/Archives/edgar/data/1315098/"
+            "000162828026028882/"
+            "ex991-q12026earningsshar.htm"
+        ),
+        "-0.35",
     ),
     "SBUX": (
         StarbucksGaapEpsParser(),
