@@ -4,6 +4,7 @@ Status: production hotfix deployed; AMZN/AAPL/DLB remained completed; RDDT
 and RBLX were recovered correctly through the normal live resolution path.
 RIVN reached execution, but parser version `1` selected a year-to-date column
 and produced an incorrect `NO` decision.
+The fail-closed RIVN parser version `3` remediation was deployed afterward.
 
 ## Incident
 
@@ -49,8 +50,8 @@ which is the second value, `-0.63`. The correct rule result is therefore
   basic-and-diluted GAAP EPS row. Its audit version is `3`; a four-column Q2
   regression fixture prevents the quarterly/YTD confusion from recurring,
   and an unknown multi-period header layout now fails closed without a fact.
-  This correction was not part of the immutable production image documented
-  below and requires a separate deployment.
+  This correction was not part of the first recovery image documented below;
+  its separate production rollout is recorded in the next section.
 - A one-shot guarded production retry changed only the reviewed RBLX SEC
   event from `NO_MATCH` to retryable `ERROR`. It refused to run if a fact,
   execution claim, inactive profile, different accession, different source
@@ -69,8 +70,8 @@ Verification:
 - immutable-image secret scan passed;
 - immutable-image suite: `968` tests passed.
 
-The later, not-yet-deployed RIVN parser-v2 correction passes the local secret
-scan and the complete suite of `969` tests with `1` skipped.
+The later RIVN parser-v3 correction passes the local secret scan and the
+complete suite of `970` tests with `1` skipped.
 
 ## Immutable deployment
 
@@ -98,6 +99,41 @@ The final heartbeat has:
 The cumulative source error counter includes the known RBLX IR endpoint
 failures and earlier observation-only SEC Latest timeouts. Those paths are
 inactive after completion and did not block the independent SEC recovery.
+
+## RIVN parser-v3 remediation deployment
+
+The production remediation was deployed at `2026-07-30T21:54:59Z`.
+
+- Source revision: `320080e`
+- Source archive SHA256:
+  `20eea95931b5589ef481da991d0b770eaedefc4d0f2875e8f63529e548c149bd`
+- Immutable image:
+  `sha256:39881dc509c316dc59cfd44c922147d6f268d101605c09bccefc05b7c300cd71`
+- Image archive SHA256:
+  `8df362b802c5430e78944b304b5bf94f99820f3da36832db13e4cb8d628f3bee`
+- OCI revision label: `320080e`
+
+The rootless staging build passed its embedded secret scan and all `970`
+tests. The staging earnings worker was recreated first, reported restart
+count zero, and connected with `44` earnings watches plus `1` MSTR watch.
+
+The fail-closed production restart guard confirmed there was no enabled or
+active profile, imminent schedule, pending execution claim, or active order
+supervision group. The exact staging image archive was then loaded into the
+rootful production Docker daemon. Only `earnings-worker` was recreated.
+Resolution, readiness, scheduler, notification, and PostgreSQL containers
+were not restarted.
+
+The first production heartbeat at `2026-07-30T21:55:59.308Z` reported:
+
+- `connected=True`;
+- `30` earnings watches plus `1` MSTR watch;
+- all profile-gated polling inactive because no profile was in-window;
+- `processed=0`, `signals=0`, and `errors=0`;
+- container restart count zero.
+
+The deployment changes future parsing only. The historical parser-v1 fact,
+claims, and fills described below remain immutable incident evidence.
 
 ## Results
 
