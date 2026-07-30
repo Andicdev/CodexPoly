@@ -159,6 +159,13 @@ adequate latency diagnosis.
 - Run authenticated preflight without submitting orders.
 - Confirm preparation freshness, runtime heartbeat, route telemetry, and
   supervision readiness.
+- Do not treat a configured feed as a ready independent source. Require an
+  issuer-specific historical replay or current direct probe within the
+  reviewed source SLA. A generic category RSS that never surfaced the issuer
+  is a fallback, not a production-ready second route.
+- Distinguish SEC Latest Filings RSS/Atom from per-CIK submissions JSON in
+  naming, telemetry, and source-race reports; they are independent discovery
+  paths with different latency.
 - Activate only the intended event block; unrelated profiles remain disabled.
 - After the event, record direction correctness, source winner, stage
   latencies, exchange result, fill quality, resting price, and every error in
