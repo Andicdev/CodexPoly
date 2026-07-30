@@ -89,16 +89,31 @@ maximum_notional=99.00
 The current 0.01 tick explains the prepared `99.00` notional. The reviewed
 desired-price maximum remains `99.90`.
 
-## Live boundary
+## Production arming
 
-RDDT has not been armed for live trading. Enabling it requires:
+The operator separately authorized the shared worker restart and RDDT
+`AUTO_LIVE` transition with global caps `100 / 100 / 1000`.
 
-1. separate operator authorization;
-2. one guarded shared restart of production resolution and readiness workers
-   on the RDDT image with global caps `100 / 100 / 1000`;
-3. a fresh authenticated preflight;
-4. guarded live SQL 040 before `2026-07-30T18:08:00Z`;
-5. the read-only armed verifier while the profile is still disabled.
+- Shared `resolution-worker` and `profile-readiness-worker` were recreated on
+  the RDDT image with restart count zero.
+- The repeated authenticated preflight prepared and pre-signed 2/2 templates
+  without submitting an order.
+- Guarded live SQL 040 passed before the activation deadline.
+- The pre-activation read-only armed verifier passed with the profile still
+  disabled.
+- At `2026-07-30T18:08:00Z`, the scheduler changed the schedule to `ACTIVE`
+  and the profile to `ENABLED`.
+- The post-activation RDDT verifier passed with a fresh supervised live
+  heartbeat and no validated fact or execution claim.
 
-The shared scheduler and the already armed AAPL, AMZN, and DLB profiles must
-be reverified after that restart.
+AAPL and DLB remained safely armed after the restart. AMZN had already
+crossed its activation time, so its pre-activation verifier correctly became
+inapplicable; the dedicated post-activation verifier confirmed
+`ACTIVE/ENABLED`, a fresh live heartbeat, and no fact or claim.
+
+At the first post-activation earnings heartbeat, the SEC WebSocket was
+connected and the two active earnings scopes had four public watches, two
+SEC-current watches, and two SEC-Latest observation watches. Public and
+SEC-current polling were succeeding. The only accumulated source errors were
+intermittent timeouts from the observation-only SEC Latest feed; they did not
+degrade the independent trading-capable sources.
