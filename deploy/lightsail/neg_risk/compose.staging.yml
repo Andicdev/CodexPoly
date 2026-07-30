@@ -1,6 +1,59 @@
 name: codexpoly-staging-neg-risk
 
 services:
+  neg-risk-catalog:
+    image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
+    command:
+      - python
+      - -u
+      - -m
+      - neg_risk_trading.catalog_main
+    restart: unless-stopped
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: INFO
+      PRIMARY_DB_TARGET: server_int
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: codexpoly_neg_risk
+      DATABASE_USER: codexpoly_app
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/DATABASE_APP_PASSWORD
+      NEG_RISK_CATALOG_MODE: shadow
+      NEG_RISK_CATALOG_POLL_SEC: "900"
+      NEG_RISK_CATALOG_RETRY_SEC: "30"
+      NEG_RISK_CATALOG_PAGE_SIZE: "100"
+      NEG_RISK_CATALOG_MAX_PAGES: "2000"
+      NEG_RISK_CATALOG_MAX_MARKETS: "200000"
+      NEG_RISK_CATALOG_CONNECT_TIMEOUT_SEC: "2"
+      NEG_RISK_CATALOG_READ_TIMEOUT_SEC: "15"
+      NEG_RISK_CATALOG_MAX_RESPONSE_BYTES: "8388608"
+    secrets:
+      - source: database_app_password
+        target: DATABASE_APP_PASSWORD
+    networks:
+      - backend
+      - egress
+    dns:
+      - 169.254.169.253
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.50
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
   neg-risk-recorder:
     image: "${CODEXPOLY_IMAGE_REF:?set CODEXPOLY_IMAGE_REF}"
     command:

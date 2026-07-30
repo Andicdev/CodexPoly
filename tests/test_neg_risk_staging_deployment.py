@@ -47,6 +47,32 @@ class NegRiskStagingDeploymentTests(unittest.TestCase):
         self.assertIn("read_only: true", compose)
         self.assertNotIn("ports:", compose)
 
+    def test_catalog_scanner_is_shadow_only_and_bounded(
+        self,
+    ) -> None:
+        compose = COMPOSE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "neg_risk_trading.catalog_main",
+            compose,
+        )
+        self.assertIn(
+            "NEG_RISK_CATALOG_MODE: shadow",
+            compose,
+        )
+        self.assertIn(
+            'NEG_RISK_CATALOG_POLL_SEC: "900"',
+            compose,
+        )
+        self.assertIn(
+            'NEG_RISK_CATALOG_MAX_PAGES: "2000"',
+            compose,
+        )
+        self.assertIn(
+            'NEG_RISK_CATALOG_MAX_MARKETS: "200000"',
+            compose,
+        )
+
     def test_recorder_receives_no_trading_credentials(
         self,
     ) -> None:

@@ -73,6 +73,35 @@ explicitly first. Public stream messages enter a bounded in-memory queue and
 are written in batches by a separate task; database I/O is not performed by
 the WebSocket event callback.
 
+## Full neg-risk catalog
+
+The catalog scanner continuously traverses the official Gamma
+`/markets/keyset` endpoint and filters the complete active result locally.
+It groups neg-risk markets by their linked event and stores:
+
+- current event and market volume windows, liquidity, and open interest;
+- fee type, exact fee schedule, rebate rate, and derived fee category;
+- current tick, minimum order size, price, spread, and accepting-order state;
+- reward size/spread terms, explicit `Other` legs, and sub-one-percent tails;
+- transparent fee/tick profiles and `READY_FOR_L2_REPLAY`,
+  `REVIEW_REQUIRED`, or `NOT_TRADABLE` screening status.
+
+The status is only a metadata-completeness screen. It is not an arbitrage
+signal and does not replace L2 replay, fill probability, or risk review.
+Pages are written to scan-scoped staging tables and promoted in one database
+transaction only after cursor exhaustion, so readers never see a partial
+catalog as current.
+
+Run the continuous scanner:
+
+```powershell
+python -m neg_risk_trading.catalog_main
+```
+
+The database views `neg_risk_catalog_ranked_events` and
+`neg_risk_catalog_category_summary` expose the current ranked list and
+category totals without requiring raw Gamma payload access.
+
 ## Resting-order retention
 
 Queue position is treated as an asset. A temporary edge reduction, a long
@@ -94,12 +123,13 @@ depth, and time spent in queue.
    tick changes, readiness epochs, resync states, and queue-ahead bounds.
 3. Completed locally: append-only PostgreSQL persistence and a bounded
    continuous shadow recorder for the isolated `codexpoly_neg_risk` database.
-4. Deploy the recorder to staging and derive fill probability, trade flow,
-   and post-fill markouts.
-5. Implement prepared full-basket inventory and a paper executor.
-6. Add authenticated preflight, persistent idempotency, exact-order
+4. Completed: staging recorder and full active neg-risk Gamma catalog.
+5. Derive fill probability, trade flow, post-fill markouts, and select events
+   for dedicated L2 recording from catalog rankings.
+6. Implement prepared full-basket inventory and a paper executor.
+7. Add authenticated preflight, persistent idempotency, exact-order
    supervision, and settlement recovery.
-7. Keep live trading disabled until the complete preflight and risk review.
+8. Keep live trading disabled until the complete preflight and risk review.
 
 Relevant Polymarket documentation:
 
@@ -108,3 +138,4 @@ Relevant Polymarket documentation:
 - https://docs.polymarket.com/trading/orderbook
 - https://docs.polymarket.com/programs/maker-rebates
 - https://docs.polymarket.com/programs/liquidity-rewards
+- https://docs.polymarket.com/market-data/fetching-markets

@@ -91,6 +91,56 @@ class NegRiskMigrationRunnerTests(unittest.TestCase):
         )
         self.assertNotIn("SELECT *", sql.upper())
 
+    def test_catalog_migration_promotes_complete_scans(
+        self,
+    ) -> None:
+        sql = (
+            ROOT
+            / "neg_risk_trading"
+            / "migrations"
+            / "002_add_catalog_scanner_tables.sql"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "neg_risk_catalog_scan_markets",
+            sql,
+        )
+        self.assertIn(
+            "neg_risk_catalog_events_current",
+            sql,
+        )
+        self.assertIn(
+            "neg_risk_catalog_ranked_events",
+            sql,
+        )
+        self.assertIn(
+            "READY_FOR_L2_REPLAY",
+            sql,
+        )
+        self.assertIn(
+            "live_orders_enabled = false",
+            sql,
+        )
+
+    def test_active_catalog_check_is_value_safe(
+        self,
+    ) -> None:
+        sql = (
+            CHECKS_DIR
+            / "verify_staging_catalog_active.sql"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("status = 'COMPLETE'", sql)
+        self.assertIn(
+            "latest_ready_event_count < 1",
+            sql,
+        )
+        self.assertIn(
+            "current snapshot is incomplete",
+            sql,
+        )
+        self.assertNotIn("SELECT *", sql.upper())
+
 
 if __name__ == "__main__":
     unittest.main()

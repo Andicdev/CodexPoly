@@ -9,9 +9,13 @@ from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from neg_risk_trading.catalog import (
+    CatalogPage,
+    parse_catalog_page,
+)
 from neg_risk_trading.domain import (
     BookLevel,
     FeeSchedule,
@@ -636,6 +640,47 @@ class PolymarketPublicClient:
             raise PublicApiError(
                 f"{reason_prefix}_json_invalid"
             ) from exc
+
+    def fetch_catalog_page(
+        self,
+        *,
+        after_cursor: str | None = None,
+        page_size: int = 100,
+    ) -> CatalogPage:
+        """Fetch one stable Gamma market-catalog page."""
+        if not 1 <= int(page_size) <= 500:
+            raise ValueError(
+                "catalog page_size must be between 1 and 500"
+            )
+        params = {
+            "closed": "false",
+            "limit": str(int(page_size)),
+            "order": "id",
+            "ascending": "true",
+        }
+        cursor = str(after_cursor or "").strip()
+        if cursor:
+            if len(cursor) > 4_096:
+                raise ValueError("catalog cursor is too long")
+            params["after_cursor"] = cursor
+        url = (
+            f"{GAMMA_BASE_URL}/markets/keyset?"
+            f"{urlencode(params)}"
+        )
+        try:
+            response = self._session.get(
+                url,
+                timeout=self._timeout,
+            )
+        except self._request_exception_types as exc:
+            raise PublicApiError(
+                "gamma_catalog_request_failed"
+            ) from exc
+        payload = self._response_json(
+            response,
+            reason_prefix="gamma_catalog",
+        )
+        return parse_catalog_page(payload)
 
     def fetch_snapshot(self, event_value: str) -> MarketSnapshot:
         slug = extract_event_slug(event_value)

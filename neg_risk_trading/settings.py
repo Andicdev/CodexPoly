@@ -162,6 +162,155 @@ class NegRiskRecorderSettings:
             )
 
 
+@dataclass(frozen=True)
+class NegRiskCatalogSettings:
+    mode: str = "shadow"
+    database_url: str | None = field(default=None, repr=False)
+    database_target: str = "server_ext"
+    database_source: str = "DATABASE_URL_SERVER_EXT"
+    database_error: str | None = None
+    poll_interval_seconds: float = 900.0
+    retry_interval_seconds: float = 30.0
+    page_size: int = 100
+    maximum_pages: int = 2_000
+    maximum_markets: int = 200_000
+    connect_timeout_seconds: float = 2.0
+    read_timeout_seconds: float = 15.0
+    maximum_response_bytes: int = 8 * 1024 * 1024
+    log_level: str = "INFO"
+
+    @classmethod
+    def from_env(
+        cls,
+        environ: Mapping[str, str] | None = None,
+    ) -> NegRiskCatalogSettings:
+        env = environ if environ is not None else os.environ
+        database = resolve_database_selection("primary", env)
+        settings = cls(
+            mode=(
+                _clean(env.get("NEG_RISK_CATALOG_MODE"))
+                or "shadow"
+            ).lower(),
+            database_url=database.url,
+            database_target=database.target,
+            database_source=database.source,
+            database_error=database.error,
+            poll_interval_seconds=float(
+                _clean(
+                    env.get("NEG_RISK_CATALOG_POLL_SEC")
+                )
+                or "900"
+            ),
+            retry_interval_seconds=float(
+                _clean(
+                    env.get("NEG_RISK_CATALOG_RETRY_SEC")
+                )
+                or "30"
+            ),
+            page_size=int(
+                _clean(
+                    env.get("NEG_RISK_CATALOG_PAGE_SIZE")
+                )
+                or "100"
+            ),
+            maximum_pages=int(
+                _clean(
+                    env.get("NEG_RISK_CATALOG_MAX_PAGES")
+                )
+                or "2000"
+            ),
+            maximum_markets=int(
+                _clean(
+                    env.get("NEG_RISK_CATALOG_MAX_MARKETS")
+                )
+                or "200000"
+            ),
+            connect_timeout_seconds=float(
+                _clean(
+                    env.get(
+                        "NEG_RISK_CATALOG_CONNECT_TIMEOUT_SEC"
+                    )
+                )
+                or "2"
+            ),
+            read_timeout_seconds=float(
+                _clean(
+                    env.get(
+                        "NEG_RISK_CATALOG_READ_TIMEOUT_SEC"
+                    )
+                )
+                or "15"
+            ),
+            maximum_response_bytes=int(
+                _clean(
+                    env.get(
+                        "NEG_RISK_CATALOG_MAX_RESPONSE_BYTES"
+                    )
+                )
+                or str(8 * 1024 * 1024)
+            ),
+            log_level=(
+                _clean(env.get("LOG_LEVEL"))
+                or "INFO"
+            ).upper(),
+        )
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        if self.mode != "shadow":
+            raise ValueError(
+                "NEG_RISK_CATALOG_MODE must remain 'shadow'"
+            )
+        if not self.database_url:
+            raise ValueError(
+                self.database_error
+                or "Neg-risk database URL is not configured"
+            )
+        if not 60 <= self.poll_interval_seconds <= 86_400:
+            raise ValueError(
+                "NEG_RISK_CATALOG_POLL_SEC must be between "
+                "60 and 86400"
+            )
+        if not 1 <= self.retry_interval_seconds <= 3_600:
+            raise ValueError(
+                "NEG_RISK_CATALOG_RETRY_SEC must be between "
+                "1 and 3600"
+            )
+        if not 1 <= self.page_size <= 500:
+            raise ValueError(
+                "NEG_RISK_CATALOG_PAGE_SIZE must be between "
+                "1 and 500"
+            )
+        if not 1 <= self.maximum_pages <= 10_000:
+            raise ValueError(
+                "NEG_RISK_CATALOG_MAX_PAGES must be between "
+                "1 and 10000"
+            )
+        if not 100 <= self.maximum_markets <= 1_000_000:
+            raise ValueError(
+                "NEG_RISK_CATALOG_MAX_MARKETS must be between "
+                "100 and 1000000"
+            )
+        if (
+            self.connect_timeout_seconds <= 0
+            or self.read_timeout_seconds <= 0
+            or self.connect_timeout_seconds > 60
+            or self.read_timeout_seconds > 120
+        ):
+            raise ValueError(
+                "Neg-risk catalog timeouts are invalid"
+            )
+        if not (
+            1024
+            <= self.maximum_response_bytes
+            <= 64 * 1024 * 1024
+        ):
+            raise ValueError(
+                "NEG_RISK_CATALOG_MAX_RESPONSE_BYTES is invalid"
+            )
+
+
 def _quantities(value: str) -> tuple[Decimal, ...]:
     try:
         quantities = tuple(
