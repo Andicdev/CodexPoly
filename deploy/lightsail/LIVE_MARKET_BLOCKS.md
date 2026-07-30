@@ -51,6 +51,24 @@ earliest observed publication across prior quarters. Never derive
 PostgreSQL without a valid versioned contract. Existing version-0 schedules
 remain readable for backward compatibility.
 
+Timing research must inspect both the issuer's event calendar and its
+news/release-details announcement:
+
+1. An event-card timestamp is presumed to be a call or webcast.
+2. `Release at HH:MM` may support an exact publication time.
+3. `No later than HH:MM` is only a latest-publication deadline. It cannot be
+   used as `earliest_signal_at`.
+4. If no exact publication time exists, use a conservative session floor or
+   an earlier issuer-specific historical minimum.
+5. Publication evidence and call evidence must remain separate; copying one
+   timestamp into both fields fails review.
+
+For example, CI's July 30 event card showed `08:30 ET`, while the issuer's
+release-details announcement promised results no later than `06:30 ET`. The
+SEC filing appeared at `10:16 UTC`, before both the event card and the stated
+deadline. The profile traded because its actual activation was `10:00 UTC`;
+the catalog timestamp was nevertheless incorrect and was corrected.
+
 ## Lifecycle boundary
 
 Only schedules in the selected block are changed together:

@@ -19,6 +19,28 @@ The root cause was schedule research that treated the issuer call as the
 primary timing anchor. A call/webcast is a later presentation event and is
 not a safe lower bound for publication.
 
+## CI evidence correction
+
+The initial CI catalog row repeated the same research mistake even though its
+execution schedule was already active early enough:
+
+- the issuer event card showed `08:30 ET`;
+- a separate issuer release-details announcement said that financial results
+  would be released no later than `06:30 ET`;
+- the SEC document was fetched at `10:16:27.548 UTC`;
+- the fact was persisted at `10:16:27.724 UTC`;
+- live resolution completed at `10:16:27.823 UTC`;
+- the exchange accepted the order request with HTTP 200.
+
+CI was not a missed execution. VIRT was the only activation-window miss among
+the first two July 30 signals. The CI catalog evidence and reusable seed were
+wrong and must not be copied into later quarters.
+
+`No later than` describes a publication deadline. It is neither an exact
+publication time nor the earliest plausible signal. An issuer event card is
+also presumed to describe a call/webcast unless a separate issuer statement
+explicitly identifies the material-publication time.
+
 ## Immediate MA protection
 
 MA was already authorized for `AUTO_LIVE`, but its original activation was

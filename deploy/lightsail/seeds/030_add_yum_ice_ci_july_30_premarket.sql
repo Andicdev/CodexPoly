@@ -385,15 +385,15 @@ VALUES
     'CI',
     DATE '2026-07-30',
     'PRE_MARKET',
-    TIMESTAMPTZ '2026-07-30 12:30:00+00',
+    TIMESTAMPTZ '2026-07-30 10:30:00+00',
     TIMESTAMPTZ '2026-07-30 12:30:00+00',
     'CONFIRMED',
-    'https://investors.thecignagroup.com/events-and-presentations/events/event-details/2026/Second-Quarter-2026-Earnings-Release-2026-MLPNK-N11I/default.aspx',
+    'https://newsroom.thecignagroup.com/2026-07-07-The-Cigna-Groups-Second-Quarter-2026-Earnings-Release-Details',
     'PARSER_ONLY',
     'FULL_HTML',
     '{"comparison_op":">","market_basis":"non_gaap_eps","primary_basis":"diluted","reported_label":"Adjusted income from operations per share","strike":"7.60"}'::jsonb,
     '[{"delivery":"websocket","provider":"sec_api","status":"available"},{"delivery":"polling","provider":"sec","status":"profile_gated"},{"delivery":"rss","provider":"businesswire","status":"profile_gated"}]'::jsonb,
-    'Issuer calendar confirms the earnings release at 08:30 ET.',
+    'Issuer says results will be available no later than 06:30 ET; the 08:30 ET event is the call. The deadline is not an earliest-signal floor.',
     now()
 )
 ON CONFLICT (event_key) DO UPDATE

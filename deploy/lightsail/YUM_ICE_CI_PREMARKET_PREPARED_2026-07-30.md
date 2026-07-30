@@ -6,11 +6,19 @@
 | --- | --- | --- | --- |
 | YUM | Issuer announcement | 11:00 UTC | 12:15 UTC |
 | ICE | Issuer-confirmed call; historical release estimate | 11:30 UTC | 12:30 UTC |
-| CI | Issuer earnings calendar | 12:30 UTC | 12:30 UTC |
+| CI | Issuer release-details announcement | no later than 10:30 UTC | 12:30 UTC |
 
 YUM's release time is explicitly stated by the issuer. ICE explicitly confirms
 the 08:30 ET call, while 07:30 ET is recorded only as a historical release
-estimate. Cigna labels its 08:30 ET event as the earnings release.
+estimate. Cigna's event card labels the 08:30 ET call as the earnings event,
+but the issuer's separate release-details announcement says that financial
+results will be available no later than 06:30 ET. The event-card timestamp is
+therefore not a publication timestamp.
+
+The phrase `no later than 06:30 ET` is an upper bound, not an exact release
+time and not an earliest-signal floor. CI must be active before a conservative
+PRE_MARKET session floor. The July 30 schedule happened to activate at
+10:00 UTC and was live when the SEC document appeared at 10:16 UTC.
 
 ## Parsing contracts
 

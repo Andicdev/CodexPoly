@@ -146,6 +146,15 @@ adequate latency diagnosis.
   or conference call. `activate_at` must precede `earliest_signal_at` by the
   reviewed safety lead; an unknown exact publication time requires a
   conservative session floor or prior-quarter minimum, never the call time.
+- Research the issuer's news/release-details announcement in addition to its
+  event-calendar card. Treat an event-card timestamp as a call/webcast unless
+  issuer text explicitly says the financial materials are published then.
+- Treat `at HH:MM` as an exact publication time only when the issuer attaches
+  it to `release`, `publish`, `post`, or equivalent language. Treat
+  `no later than HH:MM` as a latest-publication deadline, never as
+  `earliest_signal_at`; use a conservative session floor instead.
+- Persist separate evidence for publication and call times. A single event
+  page or one timestamp copied into both fields fails timing review.
 - Require `timing_contract_version=1` before an `AUTO_LIVE` transition.
 - Run authenticated preflight without submitting orders.
 - Confirm preparation freshness, runtime heartbeat, route telemetry, and
