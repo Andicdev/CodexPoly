@@ -92,14 +92,42 @@ executor_execute_called=false
 
 No validated DLB fact, execution claim, order group, or order was created.
 
-## Remaining live gate
+## Live arming
 
-Production resolution and readiness workers intentionally remain on the
-previous reviewed AAPL image. A separate operator authorization is required
-to recreate those two shared workers on the DLB image with global caps
-`100 / 100 / 1000`, repeat authenticated preflight, and apply guarded
-migration `039_arm_dlb_july_30_postmarket.sql`.
+After explicit operator authorization, the safe-restart guard passed at
+`2026-07-30T17:23:25Z`. The shared production resolution and readiness
+workers were then recreated on the DLB image with global caps
+`100 / 100 / 1000`. The operator accepted the brief AAPL/AMZN interruption
+and the global cap reduction from `200 / 200 / 1000`.
 
-That migration can only change the DLB schedule to `AUTO_LIVE`; scheduler
-readiness and activation remain responsible for keeping the execution profile
-disabled unless all guards pass.
+Both recreated workers reported:
+
+- exact image
+  `sha256:f6fcf284d2787e5fd110035fc6c049a58f6544290fe0a01548bdbd6c7720caa5`;
+- running state and restart count zero;
+- live resolution heartbeat with no managed profile before activation;
+- readiness `ready (non-submitting)` and no errors.
+
+The post-restart authenticated DLB preflight again prepared and pre-signed two
+templates with maximum notional `99.9`. It did not call executor execution or
+submit an order.
+
+Migration `039_arm_dlb_july_30_postmarket.sql` and its independent read-only
+verifier passed. The resulting production state is:
+
+```text
+rule=SHADOW
+profile=DISABLED
+schedule=AUTO_LIVE/PENDING
+armed_for_live=true
+runtime_caps=100/100/1000
+```
+
+Independent AAPL and AMZN armed verifiers also passed after the shared
+restart. The scheduler heartbeat remains fresh with `auto_live=true` and no
+blocked schedules. The SEC WebSocket is connected with zero errors.
+
+The scheduler remains responsible for authenticated readiness at `18:00 UTC`
+and DLB profile activation at `18:15 UTC`. Until then, DLB polling stays
+inactive and the execution profile stays disabled. Any failed guard must
+leave it disabled.
