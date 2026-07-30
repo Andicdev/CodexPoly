@@ -14,13 +14,14 @@ BEGIN
           ON profile.profile_key = schedule.profile_key
         WHERE schedule.schedule_key =
               'schedule:earnings-rblx-2026q2'
-          AND schedule.automation_mode = 'AUTO_PREFLIGHT'
+          AND schedule.automation_mode = 'AUTO_LIVE'
           AND schedule.state = 'READY'
           AND schedule.readiness_checked_at IS NOT NULL
           AND schedule.readiness_valid_until >
               TIMESTAMPTZ '2026-07-30 19:20:00+00'
           AND schedule.last_error_code IS NULL
-          AND schedule.metadata ->> 'armed_for_live' = 'false'
+          AND schedule.metadata ->> 'armed_for_live' = 'true'
+          AND schedule.metadata ->> 'reduced_lead_accepted' = 'true'
           AND profile.status = 'DISABLED'
           AND profile.quantity = 100
     ) <> 1 THEN
