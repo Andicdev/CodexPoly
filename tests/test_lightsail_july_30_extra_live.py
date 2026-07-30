@@ -13,6 +13,10 @@ _CHECK = (
     _ROOT / "deploy" / "lightsail" / "checks"
     / "verify_yum_ice_ci_july_30_auto_live_armed.sql"
 )
+_PREFLIGHT_CHECK = (
+    _ROOT / "deploy" / "lightsail" / "checks"
+    / "verify_yum_ice_ci_july_30_preflight_ready.sql"
+)
 
 
 class July30ExtraLiveSqlTests(unittest.TestCase):
@@ -50,6 +54,20 @@ class July30ExtraLiveSqlTests(unittest.TestCase):
         self.assertIn("FACTS OR CLAIMS", upper)
         self.assertIn("LIVE RESOLUTION HEARTBEAT", upper)
         self.assertNotIn("SELECT *", upper)
+
+    def test_preflight_check_requires_ready_but_not_enabled(self) -> None:
+        text = _PREFLIGHT_CHECK.read_text(encoding="utf-8")
+        upper = text.upper()
+
+        self.assertIn("BEGIN TRANSACTION READ ONLY", upper)
+        self.assertIn("SCHEDULE.STATE = 'READY'", upper)
+        self.assertIn("PROFILE.STATUS = 'DISABLED'", upper)
+        self.assertIn("READINESS_VALID_UNTIL", upper)
+        self.assertIn("READINESS_EVIDENCE", upper)
+        self.assertIn("HOSTED-RESOLUTION", upper)
+        self.assertIn("TRADING_ENABLED", upper)
+        self.assertIn("SUPERVISION_ENABLED", upper)
+        self.assertNotIn("UPDATE ", upper)
 
 
 if __name__ == "__main__":
