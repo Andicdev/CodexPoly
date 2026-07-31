@@ -80,3 +80,18 @@ replay-verified route.
 The seed cannot enable live trading. A separate operator-authorized
 `AUTO_LIVE` transition, immutable-image rollout, authenticated preflight, and
 production verification remain required.
+
+## Guarded live artifacts
+
+The following artifacts are prepared but have not been applied to production:
+
+- `live/044_arm_xom_july_31_premarket.sql` changes only the reviewed XOM
+  schedule from `AUTO_PREFLIGHT` to `AUTO_LIVE`. It requires a fresh fully-live
+  resolution heartbeat, a disabled profile, the exact market/rule/timing
+  contract, a clean scope, and caps `100 / 100 / 1000`.
+- `checks/verify_xom_july_31_auto_live_armed.sql` verifies the safe armed state
+  before activation.
+- `checks/verify_xom_july_31_preflight_ready.sql` verifies fresh authenticated
+  readiness during the 08:15--08:30 UTC preflight interval.
+- `checks/verify_xom_july_31_live_active.sql` verifies scheduler-owned
+  activation between 08:30 UTC and the 10:30 UTC release.
