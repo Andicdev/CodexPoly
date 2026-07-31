@@ -21,10 +21,21 @@ umask 077
 install -d -m 0700 "${backup_directory}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 temporary_file=""
-readonly database_names=(
-    codexpoly
-    codexpoly_neg_risk
-)
+configured_databases="${CODEXPOLY_BACKUP_DATABASES:-codexpoly codexpoly_neg_risk}"
+read -r -a database_names <<<"${configured_databases}"
+readonly database_names
+
+if (( ${#database_names[@]} == 0 )); then
+    printf 'No PostgreSQL databases configured for backup.\n' >&2
+    exit 2
+fi
+
+for database_name in "${database_names[@]}"; do
+    if [[ ! "${database_name}" =~ ^[a-z][a-z0-9_]*$ ]]; then
+        printf 'Invalid PostgreSQL database name in backup configuration.\n' >&2
+        exit 2
+    fi
+done
 
 cleanup() {
     if [[ -n "${temporary_file:-}" && -e "${temporary_file}" ]]; then

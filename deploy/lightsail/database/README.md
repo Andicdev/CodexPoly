@@ -137,6 +137,11 @@ daily through
 The initial production backup was created during installation. Lightsail disk
 snapshots remain a separate disaster-recovery layer.
 
+The backup set is explicit and fails if a configured database is absent. A
+host that intentionally has only the core database, such as `host01`, installs
+`codexpoly-postgres-backup.core-only.conf` as a systemd drop-in. Hosts without
+that drop-in back up both databases by default.
+
 Staging backups can be created manually by `codexdeploy`:
 
 ```bash
