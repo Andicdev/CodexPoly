@@ -19,6 +19,27 @@ _ARM = (
     / "live"
     / "045_arm_july_31_premarket_batch.sql"
 )
+_ARMED_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_31_premarket_batch_auto_live_armed.sql"
+)
+_PREFLIGHT_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_31_premarket_seven_preflight_ready.sql"
+)
+_LIVE_CHECK = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "checks"
+    / "verify_july_31_premarket_seven_live_active.sql"
+)
 
 
 class July31PremarketBatchTests(unittest.TestCase):
@@ -72,6 +93,23 @@ class July31PremarketBatchTests(unittest.TestCase):
         self.assertIn("block_notional <> 699.3", text)
         self.assertIn("block_notional > 1000", text)
         self.assertIn("authenticated readiness is not fresh", text)
+
+    def test_runtime_checks_are_read_only_and_cover_all_seven(self) -> None:
+        armed_text = _ARMED_CHECK.read_text(encoding="utf-8")
+        preflight_text = _PREFLIGHT_CHECK.read_text(encoding="utf-8")
+        live_text = _LIVE_CHECK.read_text(encoding="utf-8")
+
+        for text in (armed_text, preflight_text, live_text):
+            self.assertIn("BEGIN TRANSACTION READ ONLY", text)
+            self.assertIn("live resolution heartbeat is missing or stale", text)
+            self.assertIn("earnings:ARES:2026Q2", text)
+            self.assertIn("ROLLBACK", text)
+        self.assertIn("earnings:XOM:2026Q2", preflight_text)
+        self.assertIn("earnings:XOM:2026Q2", live_text)
+        self.assertIn("state = 'READY'", preflight_text)
+        self.assertIn("profile.status = 'DISABLED'", preflight_text)
+        self.assertIn("state = 'ACTIVE'", live_text)
+        self.assertIn("profile.status = 'ENABLED'", live_text)
 
 
 if __name__ == "__main__":
