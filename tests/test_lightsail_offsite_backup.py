@@ -70,7 +70,7 @@ class LightsailOffsiteBackupTests(unittest.TestCase):
         self.assertIn("known_hosts.host02", script)
         self.assertNotIn("vultr-polymarket-analytics-fra-1", script)
 
-    def test_no_retention_is_enabled_before_first_verified_copy(self) -> None:
+    def test_retention_is_scoped_to_completed_timestamp_directories(self) -> None:
         vps_script = (OFFSITE / "stage-offsite-backup.sh").read_text(
             encoding="utf-8"
         )
@@ -78,10 +78,16 @@ class LightsailOffsiteBackupTests(unittest.TestCase):
             OFFSITE / "synology" / "pull-codexpoly-backups.sh"
         ).read_text(encoding="utf-8")
 
-        self.assertNotIn("-mtime", vps_script)
-        self.assertNotIn("-delete", vps_script)
-        self.assertNotIn("-mtime", nas_script)
-        self.assertNotIn("-delete", nas_script)
+        self.assertIn('OFFSITE_RETENTION_DAYS:-60', vps_script)
+        self.assertIn('[[ -f "${candidate}/COMPLETE" ]]', vps_script)
+        self.assertIn('[[ "${candidate}" != "${newest_complete}" ]]', vps_script)
+        self.assertIn('^[0-9]{8}T[0-9]{6}Z$', vps_script)
+
+        self.assertIn('RETENTION_DAYS:-60', nas_script)
+        self.assertIn('[ -f "${candidate}/COMPLETE" ]', nas_script)
+        self.assertIn('[ -f "${candidate}/VERIFIED" ]', nas_script)
+        self.assertIn('[ "${candidate}" != "${newest_verified}" ]', nas_script)
+        self.assertNotIn("--delete", nas_script)
 
 
 if __name__ == "__main__":

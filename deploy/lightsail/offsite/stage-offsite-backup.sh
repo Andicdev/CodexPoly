@@ -26,6 +26,7 @@ source "${config_file}"
 : "${CODEXPOLY_BACKUP_DATABASES:?CODEXPOLY_BACKUP_DATABASES is required}"
 : "${AGE_RECIPIENT_FILE:?AGE_RECIPIENT_FILE is required}"
 readonly max_source_age_minutes="${MAX_SOURCE_AGE_MINUTES:-1440}"
+readonly retention_days="${OFFSITE_RETENTION_DAYS:-60}"
 
 if [[ ! "${HOST_LABEL}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
     printf 'Invalid offsite backup host label.\n' >&2
@@ -33,6 +34,10 @@ if [[ ! "${HOST_LABEL}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
 fi
 if [[ ! "${max_source_age_minutes}" =~ ^[1-9][0-9]*$ ]]; then
     printf 'Invalid maximum source backup age.\n' >&2
+    exit 2
+fi
+if [[ ! "${retention_days}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Invalid offsite backup retention.\n' >&2
     exit 2
 fi
 if [[ ! -r "${AGE_RECIPIENT_FILE}" ]]; then
@@ -50,6 +55,34 @@ if (( ${#database_names[@]} == 0 )); then
     printf 'No PostgreSQL databases configured for offsite backup.\n' >&2
     exit 2
 fi
+
+prune_expired_backups() {
+    local candidate candidate_name newest_complete="" newest_name=""
+
+    for candidate in "${offsite_directory}"/*; do
+        [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+        candidate_name="$(basename -- "${candidate}")"
+        [[ "${candidate_name}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+        [[ -f "${candidate}/COMPLETE" ]] || continue
+        if [[ -z "${newest_name}" || "${candidate_name}" > "${newest_name}" ]]; then
+            newest_name="${candidate_name}"
+            newest_complete="${candidate}"
+        fi
+    done
+
+    for candidate in "${offsite_directory}"/*; do
+        [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+        candidate_name="$(basename -- "${candidate}")"
+        [[ "${candidate_name}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+        [[ -f "${candidate}/COMPLETE" ]] || continue
+        [[ "${candidate}" != "${newest_complete}" ]] || continue
+        if find "${candidate}" -maxdepth 0 -mtime "+${retention_days}" \
+            -print -quit | grep -q .; then
+            rm -rf -- "${candidate}"
+            printf 'Pruned expired VPS offsite backup %s.\n' "${candidate_name}"
+        fi
+    done
+}
 
 declare -A source_files=()
 source_timestamp=""
@@ -108,6 +141,7 @@ final_directory="${offsite_directory}/${source_timestamp}"
 incomplete_directory="${offsite_directory}/.incomplete-${source_timestamp}"
 
 if [[ -f "${final_directory}/COMPLETE" ]]; then
+    prune_expired_backups
     printf 'Offsite backup is already staged for %s.\n' "${source_timestamp}"
     exit 0
 fi
@@ -168,4 +202,5 @@ incomplete_directory=""
 ln -sfn "${source_timestamp}" "${offsite_directory}/latest"
 chown -h root:nasbackup "${offsite_directory}/latest"
 
+prune_expired_backups
 printf 'Encrypted offsite backup staged for %s.\n' "${source_timestamp}"

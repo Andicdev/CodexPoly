@@ -106,6 +106,7 @@ REMOTE_USER=nasbackup
 SSH_BINARY=${ssh_binary}
 RSYNC_BINARY=${rsync_binary}
 SHA256_BINARY=${sha256_binary}
+RETENTION_DAYS=60
 EOF
 chmod 0600 "${config_directory}/pull.conf"
 

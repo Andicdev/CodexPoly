@@ -97,6 +97,7 @@ trap 'rm -f -- "${authorized_keys_temp}" "${config_temp}"' EXIT INT TERM
     printf 'CODEXPOLY_BACKUP_DATABASES=%q\n' "${configured_databases}"
     printf 'AGE_RECIPIENT_FILE=%q\n' "${config_directory}/recipient.txt"
     printf 'MAX_SOURCE_AGE_MINUTES=1440\n'
+    printf 'OFFSITE_RETENTION_DAYS=60\n'
 } >"${config_temp}"
 install -m 0644 -o root -g root \
     "${config_temp}" "${config_directory}/production.conf"

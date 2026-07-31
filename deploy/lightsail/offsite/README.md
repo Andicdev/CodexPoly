@@ -28,8 +28,10 @@ The NAS stores the two targets separately:
 ```
 
 After rsync, Synology verifies `SHA256SUMS` and creates `VERIFIED`. No automated
-retention is configured until the first transfers and available NAS capacity
-are reviewed. The existing Vultr configuration is not reused or modified.
+deletion happens before a successful transfer and verification. VPS staging and
+Synology both retain 60 days of completed timestamp directories and always keep
+the newest completed copy even when it is older than the retention window. The
+existing Vultr configuration is not reused or modified.
 
 Suggested Synology Task Scheduler times are 05:10 local for host01 and 05:30
 local for host02. Both run as root and invoke:

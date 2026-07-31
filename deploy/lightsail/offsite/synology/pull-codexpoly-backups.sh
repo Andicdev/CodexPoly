@@ -32,11 +32,22 @@ fi
 : "${SSH_BINARY:?SSH_BINARY is required}"
 : "${RSYNC_BINARY:?RSYNC_BINARY is required}"
 : "${SHA256_BINARY:?SHA256_BINARY is required}"
+retention_days="${RETENTION_DAYS:-60}"
 
 if [ "${TARGET_NAME}" != "${target_name}" ]; then
     printf 'Backup target configuration mismatch.\n' >&2
     exit 1
 fi
+case "${retention_days}" in
+    *[!0-9]*|'')
+        printf 'Invalid backup retention.\n' >&2
+        exit 1
+        ;;
+    0)
+        printf 'Backup retention must be positive.\n' >&2
+        exit 1
+        ;;
+esac
 
 umask 077
 mkdir -p "${backup_directory}" "${log_directory}"
@@ -98,4 +109,47 @@ done
 if [ "${verification_failed}" -ne 0 ]; then
     exit 1
 fi
+
+newest_verified=""
+newest_name=""
+for candidate in "${backup_directory}"/*; do
+    [ -d "${candidate}" ] || continue
+    [ ! -L "${candidate}" ] || continue
+    candidate_name="$(basename "${candidate}")"
+    case "${candidate_name}" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z)
+            ;;
+        *)
+            continue
+            ;;
+    esac
+    [ -f "${candidate}/COMPLETE" ] || continue
+    [ -f "${candidate}/VERIFIED" ] || continue
+    if [ -z "${newest_name}" ] || [ "${candidate_name}" \> "${newest_name}" ]; then
+        newest_name="${candidate_name}"
+        newest_verified="${candidate}"
+    fi
+done
+
+for candidate in "${backup_directory}"/*; do
+    [ -d "${candidate}" ] || continue
+    [ ! -L "${candidate}" ] || continue
+    candidate_name="$(basename "${candidate}")"
+    case "${candidate_name}" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z)
+            ;;
+        *)
+            continue
+            ;;
+    esac
+    [ -f "${candidate}/COMPLETE" ] || continue
+    [ -f "${candidate}/VERIFIED" ] || continue
+    [ "${candidate}" != "${newest_verified}" ] || continue
+    if find "${candidate}" -maxdepth 0 -mtime "+${retention_days}" \
+        -print -quit | grep -q .; then
+        rm -rf -- "${candidate}"
+        log "status=pruned backup=${candidate_name} retention_days=${retention_days}"
+    fi
+done
+
 log 'status=complete'
