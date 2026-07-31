@@ -1,7 +1,7 @@
 # XOM PRE_MARKET preparation — 2026-07-31
 
-Status: code and guarded database seed prepared; production remains
-unchanged and the schedule is not authorized for `AUTO_LIVE`.
+Status: immutable image deployed to production; XOM is safely armed as
+`AUTO_LIVE / PENDING` with its execution profile still `DISABLED`.
 
 ## Reviewed event
 
@@ -60,7 +60,7 @@ the issuer explicitly says the release will be issued through BusinessWire,
 but the generic category feed is not counted as an independently
 replay-verified route.
 
-## Disabled schedule
+## Execution schedule
 
 - Rule: `xom-2026q2-nongaap-eps-3pt66`
 - Scope: `earnings:XOM:2026Q2`
@@ -76,14 +76,17 @@ replay-verified route.
 - Deactivation: `2026-07-31T14:00:00Z`
 - Timing contract: `OFFICIAL_EXACT`, version 1, 7,200-second safety lead
 - Seed mode/status: `AUTO_PREFLIGHT / PENDING`, profile `DISABLED`
+- Armed mode/status: `AUTO_LIVE / PENDING`, profile `DISABLED`
 
-The seed cannot enable live trading. A separate operator-authorized
-`AUTO_LIVE` transition, immutable-image rollout, authenticated preflight, and
-production verification remain required.
+The seed itself cannot enable live trading. The separately authorized
+immutable-image rollout and `AUTO_LIVE` transition are complete.
+Authenticated preflight and scheduler-owned activation remain pending at
+their time boundaries.
 
 ## Guarded live artifacts
 
-The following artifacts are prepared but have not been applied to production:
+The following guarded artifacts were applied after explicit operator
+authorization:
 
 - `live/044_arm_xom_july_31_premarket.sql` changes only the reviewed XOM
   schedule from `AUTO_PREFLIGHT` to `AUTO_LIVE`. It requires a fresh fully-live
@@ -95,3 +98,49 @@ The following artifacts are prepared but have not been applied to production:
   readiness during the 08:15--08:30 UTC preflight interval.
 - `checks/verify_xom_july_31_live_active.sql` verifies scheduler-owned
   activation between 08:30 UTC and the 10:30 UTC release.
+
+## Production rollout
+
+- Application commit: `018896a`.
+- Source archive SHA256:
+  `d08277606b703ff1f2eee65f06ca5d49fc8f682a337cd32c1f2d93954921e4a5`.
+- Immutable image:
+  `codexpoly@sha256:f08d723b87ce274e65e4595b7b6c2c57db4176b4042f75a67464ce5cd0aed23d`.
+- Image archive SHA256:
+  `b920b181131b5da3cc7a17c92b12ddc8efca0be08a0572f5c3623a170318154e`.
+- OCI revision: `018896a`.
+
+The image was built from the clean Git archive in rootless Docker. The build
+repeated the secret scan and all `999` tests. The exact exported image was
+then checksum-recorded and loaded into rootful production Docker.
+
+Recoverable Compose copies were saved as:
+
+- `compose.before-018896a.yml`;
+- `compose.trading.before-018896a.yml`.
+
+All five production application workers were recreated on the immutable
+image. PostgreSQL was not restarted. The approved runtime controls remain:
+
+- live resolution and order supervision enabled;
+- scheduler automatic live activation enabled;
+- quantity, per-order notional, and aggregate caps `100 / 100 / 1000`;
+- authenticated readiness remains non-submitting.
+
+Production seed 037 and its disabled-profile verifier passed. The new runtime
+reported a connected SEC WebSocket with `32` aggregate watches, a fresh
+fully-live resolution heartbeat, and no managed profile or startup error.
+Guarded arming and its read-only verifier then passed:
+
+```text
+schedule=AUTO_LIVE/PENDING
+profile=DISABLED
+fact_candidates=0
+execution_claims=0
+orders_submitted=0
+```
+
+Authenticated preflight remains scheduler-owned at 08:15 UTC. Activation
+remains scheduler-owned at 08:30 UTC and must fail closed unless readiness is
+fresh. A thread heartbeat monitors both boundaries and is removed after the
+final active-state verification.
