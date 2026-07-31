@@ -64,7 +64,7 @@ heartbeat reported `mode=live`, and the scheduler heartbeat reported
 
 - Before 08:30 UTC:
   `verify_july_31_premarket_batch_auto_live_armed.sql`
-- From 08:30 to 08:45 UTC:
+- From 08:30 to 08:45 UTC (XOM active; the other six ready):
   `verify_july_31_premarket_seven_preflight_ready.sql`
 - From 08:45 UTC until the earliest expected signal:
   `verify_july_31_premarket_seven_live_active.sql`

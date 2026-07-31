@@ -1,4 +1,4 @@
--- Read-only authenticated-preflight check for all seven July 31 profiles.
+-- Read-only mixed-window check after XOM activation and before batch activation.
 
 BEGIN TRANSACTION READ ONLY;
 
@@ -15,8 +15,24 @@ BEGIN
         FROM resolution_profile_schedules AS schedule
         JOIN resolution_execution_profiles AS profile
           ON profile.profile_key = schedule.profile_key
+        WHERE schedule.schedule_key = 'schedule:earnings-xom-2026q2'
+          AND schedule.automation_mode = 'AUTO_LIVE'
+          AND schedule.state = 'ACTIVE'
+          AND schedule.readiness_checked_at IS NOT NULL
+          AND schedule.last_error_code IS NULL
+          AND profile.status = 'ENABLED'
+          AND profile.account_name = 'abccbaq'
+          AND profile.quantity = 100
+    ) <> 1 THEN
+        RAISE EXCEPTION 'XOM live activation is invalid';
+    END IF;
+
+    IF (
+        SELECT count(*)
+        FROM resolution_profile_schedules AS schedule
+        JOIN resolution_execution_profiles AS profile
+          ON profile.profile_key = schedule.profile_key
         WHERE schedule.schedule_key IN (
-            'schedule:earnings-xom-2026q2',
             'schedule:earnings-ben-2026q3',
             'schedule:earnings-cboe-2026q2',
             'schedule:earnings-cvx-2026q2',
@@ -32,8 +48,8 @@ BEGIN
           AND profile.status = 'DISABLED'
           AND profile.account_name = 'abccbaq'
           AND profile.quantity = 100
-    ) <> 7 THEN
-        RAISE EXCEPTION 'July 31 seven-profile authenticated readiness is invalid';
+    ) <> 6 THEN
+        RAISE EXCEPTION 'July 31 six-profile authenticated readiness is invalid';
     END IF;
 
     IF NOT EXISTS (

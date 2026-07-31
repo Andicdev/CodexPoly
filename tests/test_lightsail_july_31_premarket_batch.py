@@ -108,6 +108,8 @@ class July31PremarketBatchTests(unittest.TestCase):
         self.assertIn("earnings:XOM:2026Q2", live_text)
         self.assertIn("state = 'READY'", preflight_text)
         self.assertIn("profile.status = 'DISABLED'", preflight_text)
+        self.assertIn("state = 'ACTIVE'", preflight_text)
+        self.assertIn("profile.status = 'ENABLED'", preflight_text)
         self.assertIn("state = 'ACTIVE'", live_text)
         self.assertIn("profile.status = 'ENABLED'", live_text)
 
