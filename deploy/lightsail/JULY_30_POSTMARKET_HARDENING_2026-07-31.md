@@ -83,8 +83,11 @@ execution claim, and no active/repricing order group. A rollout-specific
 guard also confirmed that the deployment created no new completion audit
 gap.
 
-The older global completion verifier still finds at least one historical
-`COMPLETED` schedule without a `RESOLUTION_EXECUTION_COMPLETED` event. The
-status, terminality, and event-idempotency sub-checks pass, and the missing
-event predates this rollout. It was not rewritten because historical
-reconciliation requires a separately reviewed migration.
+The initial global completion verifier produced a false positive for two
+deliberate non-execution terminal paths. A later read-only audit identified
+HOOD (`official_result_observed_execution_missing`) and MSFT
+(`official_result_parser_quarantined`). Both already had one correct
+`POST_EVENT_RECONCILIATION_COMPLETED` event and no execution claim or active
+order group. No historical row was rewritten. The verifier now validates
+both execution completion and evidence-backed non-execution completion, and
+passes in staging and production.

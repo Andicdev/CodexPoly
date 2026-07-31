@@ -95,12 +95,38 @@ class July29CompletionReconciliationSqlTests(unittest.TestCase):
         self.assertIn("'HISTORICAL_EXECUTED_CLAIM_RECONCILED'", upper)
         self.assertIn("EVENT.PREVIOUS_STATE = 'ACTIVE'", upper)
         self.assertIn(
-            "EVENT.PREVIOUS_STATE IN ('ACTIVE', 'BLOCKED')",
+            "EVENT.PREVIOUS_STATE IN (\n"
+            "                            'ACTIVE',\n"
+            "                            'BLOCKED'\n"
+            "                        )",
             upper,
         )
         self.assertIn("'HISTORICAL_RECONCILIATION' = 'TRUE'", upper)
         self.assertIn(
             "'EXISTING_ORDERS_LEFT_UNCHANGED' = 'TRUE'",
+            upper,
+        )
+        self.assertIn(
+            "'POST_EVENT_RECONCILIATION_COMPLETED'",
+            upper,
+        )
+        self.assertIn(
+            "'OFFICIAL_RESULT_OBSERVED_EXECUTION_MISSING'",
+            upper,
+        )
+        self.assertIn(
+            "'OFFICIAL_RESULT_PARSER_QUARANTINED'",
+            upper,
+        )
+        self.assertIn(
+            "NOT EXISTS (\n"
+            "                            SELECT 1\n"
+            "                            FROM RESOLUTION_EXECUTION_CLAIMS",
+            upper,
+        )
+        self.assertIn(
+            "SOURCE.STATUS =\n"
+            "                                          'QUARANTINED'",
             upper,
         )
 
