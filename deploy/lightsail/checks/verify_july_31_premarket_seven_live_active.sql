@@ -4,7 +4,7 @@ BEGIN TRANSACTION READ ONLY;
 
 DO $verify$
 BEGIN
-    IF now() < TIMESTAMPTZ '2026-07-31 08:45:00+00'
+    IF now() < TIMESTAMPTZ '2026-07-31 08:30:00+00'
        OR now() >= TIMESTAMPTZ '2026-07-31 10:15:00+00'
     THEN
         RAISE EXCEPTION 'July 31 seven-profile live check is outside its clean-scope window';

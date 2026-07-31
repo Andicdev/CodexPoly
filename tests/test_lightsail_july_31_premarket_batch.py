@@ -19,6 +19,13 @@ _ARM = (
     / "live"
     / "045_arm_july_31_premarket_batch.sql"
 )
+_ACTIVATE_NOW = (
+    _ROOT
+    / "deploy"
+    / "lightsail"
+    / "live"
+    / "046_activate_july_31_premarket_batch_now.sql"
+)
 _ARMED_CHECK = (
     _ROOT
     / "deploy"
@@ -93,6 +100,19 @@ class July31PremarketBatchTests(unittest.TestCase):
         self.assertIn("block_notional <> 699.3", text)
         self.assertIn("block_notional > 1000", text)
         self.assertIn("authenticated readiness is not fresh", text)
+
+    def test_early_activation_only_advances_scheduler_boundary(self) -> None:
+        text = _ACTIVATE_NOW.read_text(encoding="utf-8")
+
+        self.assertIn("explicit_early_activation_authorization", text)
+        self.assertIn("state = 'READY'", text)
+        self.assertIn("profile.status = 'DISABLED'", text)
+        self.assertIn("readiness_valid_until", text)
+        self.assertIn("live resolution heartbeat is missing or stale", text)
+        self.assertIn("enabled_notional + batch_notional <> 699.3", text)
+        self.assertIn("enabled_notional + batch_notional > 1000", text)
+        self.assertIn("activate_at = activation_time", text)
+        self.assertNotIn("SET status = 'ENABLED'", text)
 
     def test_runtime_checks_are_read_only_and_cover_all_seven(self) -> None:
         armed_text = _ARMED_CHECK.read_text(encoding="utf-8")

@@ -71,3 +71,33 @@ heartbeat reported `mode=live`, and the scheduler heartbeat reported
 
 The thread heartbeat owns these remaining checks and must not bypass
 `BLOCKED` or `ERROR` states.
+
+## Explicit early activation result
+
+At the user's explicit request, guarded migration
+`046_activate_july_31_premarket_batch_now.sql` advanced the six batch
+schedules at `2026-07-31T08:41:33Z`. The scheduler recorded six normal
+`PROFILE_ENABLED` transitions at `08:41:34Z`; it did not bypass lifecycle
+events or the aggregate-notional check.
+
+This exposed two independent runtime time gates:
+
+1. `resolution_profile_schedules.activate_at` controls lifecycle activation.
+2. `resolution_execution_profiles.prepare_from` controls when long-lived
+   resolution and source workers may load an enabled profile.
+
+Migration 046 intentionally changed only the scheduler boundary, so the six
+profiles were `ACTIVE/ENABLED` in the database but remained ineligible for
+runtime loading until their original `prepare_from=08:45:00Z`. A second
+fail-closed correction was attempted only after that boundary and was
+correctly rejected as no longer required; it made no database change.
+
+At `08:45:05Z` the resolution worker dynamically attached all six profiles.
+At `08:45:30Z` the source heartbeat reported seven active public, SEC-current,
+and SEC-latest scopes. The final seven-profile live guard passed with clean
+fact and execution-claim scopes. The rollout heartbeat automation was then
+deleted.
+
+Future early-activation tooling must advance and verify both `activate_at` and
+`prepare_from` in the same guarded transaction. Merely setting a schedule to
+`ACTIVE` does not start its profile-gated source or resolution runtime early.
