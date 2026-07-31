@@ -4,9 +4,10 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from uuid import UUID, uuid4
 
+from neg_risk_trading.domain import RouteDirection
 from neg_risk_trading.stream import StreamUpdate
 
 
@@ -37,11 +38,19 @@ SELECT
           AND table_name = 'neg_risk_stream_messages'
     ) AS messages_columns,
     (
-        SELECT count(*) = 22
+        SELECT count(*) = 23
         FROM information_schema.columns
         WHERE table_schema = current_schema()
           AND table_name = 'neg_risk_route_observations'
     ) AS observations_columns,
+    to_regclass('neg_risk_stream_anomalies') IS NOT NULL
+        AS anomalies_table,
+    (
+        SELECT count(*) = 6
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'neg_risk_stream_anomalies'
+    ) AS anomalies_columns,
     EXISTS (
         SELECT 1
         FROM pg_index
@@ -77,7 +86,17 @@ SELECT
           AND tgname =
               'trg_neg_risk_route_observations_append_only'
           AND NOT tgisinternal
-    ) AS observations_append_only
+    ) AS observations_append_only,
+    EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgrelid = to_regclass(
+            'neg_risk_stream_anomalies'
+        )
+          AND tgname =
+              'trg_neg_risk_stream_anomalies_append_only'
+          AND NOT tgisinternal
+    ) AS anomalies_append_only
 """.strip()
 
 _INSERT_SESSION_SQL = """
@@ -158,6 +177,7 @@ INSERT INTO neg_risk_route_observations (
     connection_epoch,
     observed_at,
     trigger_event_type,
+    route_direction,
     maker_condition_id,
     maker_question,
     quantity,
@@ -181,6 +201,7 @@ VALUES (
     :connection_epoch,
     :observed_at,
     :trigger_event_type,
+    :route_direction,
     :maker_condition_id,
     :maker_question,
     :quantity,
@@ -200,6 +221,7 @@ VALUES (
 )
 ON CONFLICT (
     stream_message_id,
+    route_direction,
     maker_condition_id,
     quantity
 ) DO NOTHING
@@ -238,6 +260,23 @@ WHERE session_id = :session_id
   AND ended_at IS NULL
 """.strip()
 
+_INSERT_ANOMALY_SQL = """
+INSERT INTO neg_risk_stream_anomalies (
+    session_id,
+    connection_epoch,
+    observed_at,
+    reason_code,
+    diagnostics
+)
+VALUES (
+    :session_id,
+    :connection_epoch,
+    :observed_at,
+    :reason_code,
+    CAST(:diagnostics AS jsonb)
+)
+""".strip()
+
 _FINISH_SESSION_SQL = """
 UPDATE neg_risk_stream_sessions
 SET
@@ -246,6 +285,47 @@ SET
     reason_code = :reason_code
 WHERE session_id = :session_id
   AND ended_at IS NULL
+""".strip()
+
+_SELECT_LATEST_REPLAY_SESSION_SQL = """
+SELECT
+    session_id,
+    event_id,
+    event_slug,
+    started_at,
+    ended_at,
+    metadata
+FROM neg_risk_stream_sessions
+WHERE mode = 'SHADOW'
+  AND NOT live_orders_enabled
+ORDER BY started_at DESC
+LIMIT 1
+""".strip()
+
+_SELECT_REPLAY_SESSION_SQL = """
+SELECT
+    session_id,
+    event_id,
+    event_slug,
+    started_at,
+    ended_at,
+    metadata
+FROM neg_risk_stream_sessions
+WHERE session_id = :session_id
+  AND mode = 'SHADOW'
+  AND NOT live_orders_enabled
+""".strip()
+
+_SELECT_REPLAY_MESSAGES_SQL = """
+SELECT
+    connection_epoch,
+    message_sequence,
+    received_at,
+    payload
+FROM neg_risk_stream_messages
+WHERE session_id = :session_id
+ORDER BY connection_epoch, message_sequence
+LIMIT :maximum_messages
 """.strip()
 
 
@@ -304,6 +384,42 @@ class RecordedStreamMessage:
             raise ValueError(
                 "route_evaluation must be a mapping"
             )
+
+
+@dataclass(frozen=True)
+class ReplaySession:
+    session_id: UUID
+    event_id: str
+    event_slug: str
+    started_at: datetime
+    ended_at: datetime | None
+    metadata: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        _aware_datetime(self.started_at, name="started_at")
+        if self.ended_at is not None:
+            _aware_datetime(self.ended_at, name="ended_at")
+        if not str(self.event_id or "").strip():
+            raise ValueError("event_id is required")
+        if not str(self.event_slug or "").strip():
+            raise ValueError("event_slug is required")
+        if not isinstance(self.metadata, Mapping):
+            raise ValueError("metadata must be a mapping")
+
+
+@dataclass(frozen=True)
+class ReplayMessage:
+    connection_epoch: int
+    message_sequence: int
+    received_at: datetime
+    payload: object
+
+    def __post_init__(self) -> None:
+        if self.connection_epoch <= 0:
+            raise ValueError("connection_epoch must be positive")
+        if self.message_sequence <= 0:
+            raise ValueError("message_sequence must be positive")
+        _aware_datetime(self.received_at, name="received_at")
 
 
 class SqlAlchemyObservationRepository:
@@ -473,15 +589,39 @@ class SqlAlchemyObservationRepository:
         *,
         session_id: UUID,
         reason_code: str,
+        connection_epoch: int,
+        observed_at: datetime,
+        diagnostics: Mapping[str, object] | None = None,
     ) -> None:
-        self._update_session(
-            _RECONNECT_SESSION_SQL,
-            {
-                "session_id": str(session_id),
-                "reason_code": _reason(reason_code),
-            },
-            action="mark neg-risk stream reconnecting",
-        )
+        if connection_epoch <= 0:
+            raise ValueError("connection_epoch must be positive")
+        _aware_datetime(observed_at, name="observed_at")
+        params = {
+            "session_id": str(session_id),
+            "reason_code": _reason(reason_code),
+            "connection_epoch": int(connection_epoch),
+            "observed_at": observed_at,
+            "diagnostics": _json_dumps(
+                _safe_diagnostics(diagnostics or {})
+            ),
+        }
+        session_factory, text_factory = self._dependencies()
+        try:
+            with session_factory() as session:
+                session.execute(
+                    text_factory(_INSERT_ANOMALY_SQL),
+                    params,
+                )
+                session.execute(
+                    text_factory(_RECONNECT_SESSION_SQL),
+                    params,
+                )
+                session.commit()
+        except Exception as exc:
+            raise ObservationRepositoryError(
+                "Failed to mark neg-risk stream reconnecting: "
+                f"{type(exc).__name__}"
+            ) from None
 
     def finish_session(
         self,
@@ -513,6 +653,119 @@ class SqlAlchemyObservationRepository:
             },
             action="finish neg-risk stream session",
         )
+
+    def load_replay_session(
+        self,
+        *,
+        session_id: UUID | None = None,
+    ) -> ReplaySession:
+        session_factory, text_factory = self._dependencies()
+        sql = (
+            _SELECT_LATEST_REPLAY_SESSION_SQL
+            if session_id is None
+            else _SELECT_REPLAY_SESSION_SQL
+        )
+        params = (
+            {}
+            if session_id is None
+            else {"session_id": str(session_id)}
+        )
+        try:
+            with session_factory() as session:
+                row = session.execute(
+                    text_factory(sql),
+                    params,
+                ).mappings().one_or_none()
+                session.rollback()
+        except Exception as exc:
+            raise ObservationRepositoryError(
+                "Failed to load neg-risk replay session: "
+                f"{type(exc).__name__}"
+            ) from None
+        if row is None:
+            raise ObservationRepositoryError(
+                "Neg-risk replay session was not found"
+            )
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                raise ObservationRepositoryError(
+                    "Neg-risk replay session metadata is invalid"
+                ) from None
+        if not isinstance(metadata, Mapping):
+            raise ObservationRepositoryError(
+                "Neg-risk replay session metadata is invalid"
+            )
+        return ReplaySession(
+            session_id=UUID(str(row["session_id"])),
+            event_id=str(row["event_id"]),
+            event_slug=str(row["event_slug"]),
+            started_at=row["started_at"],
+            ended_at=row["ended_at"],
+            metadata=dict(metadata),
+        )
+
+    def iter_replay_messages(
+        self,
+        *,
+        session_id: UUID,
+        maximum_messages: int | None = None,
+    ) -> Iterable[ReplayMessage]:
+        if maximum_messages is not None and maximum_messages <= 0:
+            raise ValueError("maximum_messages must be positive")
+        limit = (
+            int(maximum_messages)
+            if maximum_messages is not None
+            else 9_223_372_036_854_775_807
+        )
+        session_factory, text_factory = self._dependencies()
+
+        def rows() -> Iterable[ReplayMessage]:
+            try:
+                with session_factory() as session:
+                    statement = text_factory(
+                        _SELECT_REPLAY_MESSAGES_SQL
+                    )
+                    execution_options = getattr(
+                        statement,
+                        "execution_options",
+                        None,
+                    )
+                    if callable(execution_options):
+                        statement = execution_options(
+                            stream_results=True,
+                            yield_per=1_000,
+                        )
+                    result = session.execute(
+                        statement,
+                        {
+                            "session_id": str(session_id),
+                            "maximum_messages": limit,
+                        },
+                    ).mappings()
+                    for row in result:
+                        yield ReplayMessage(
+                            connection_epoch=int(
+                                row["connection_epoch"]
+                            ),
+                            message_sequence=int(
+                                row["message_sequence"]
+                            ),
+                            received_at=row["received_at"],
+                            payload=row["payload"],
+                        )
+                    session.rollback()
+            except ObservationRepositoryError:
+                raise
+            except Exception as exc:
+                raise ObservationRepositoryError(
+                    "Failed to stream neg-risk replay messages: "
+                    f"{type(exc).__name__}"
+                ) from None
+
+        return rows()
 
     def close(self) -> None:
         if self._engine is not None:
@@ -674,6 +927,14 @@ def _route_params(
     params: list[dict[str, object]] = []
     for route in routes:
         available = route.get("available") is True
+        try:
+            route_direction = RouteDirection(
+                str(route.get("route_direction") or "")
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "route direction is invalid"
+            ) from exc
         reward = route.get("reward")
         reward_mapping = (
             reward if isinstance(reward, Mapping) else {}
@@ -685,6 +946,7 @@ def _route_params(
                 "connection_epoch": message.connection_epoch,
                 "observed_at": message.received_at,
                 "trigger_event_type": trigger_event_type,
+                "route_direction": route_direction.value,
                 "maker_condition_id": str(
                     route.get("maker_condition_id") or ""
                 ),
@@ -765,6 +1027,41 @@ def _reason(value: object) -> str:
     if not reason:
         raise ValueError("reason_code is required")
     return reason[:160]
+
+
+_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "asset_id",
+        "change_count",
+        "condition_id",
+        "epoch_reached_ready",
+        "event_type",
+        "expected_ask",
+        "expected_bid",
+        "local_ask",
+        "local_bid",
+        "reconnect_delay_seconds",
+        "timestamp_ms",
+    }
+)
+
+
+def _safe_diagnostics(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key not in _DIAGNOSTIC_KEYS:
+            continue
+        if item is None or isinstance(
+            item,
+            (bool, int, float),
+        ):
+            result[normalized_key] = item
+        elif isinstance(item, str):
+            result[normalized_key] = item[:160]
+    return result
 
 
 def _aware_datetime(value: datetime, *, name: str) -> None:

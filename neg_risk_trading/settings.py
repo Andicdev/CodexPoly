@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 from cbr_trading.db_config import resolve_database_selection
+from neg_risk_trading.domain import RouteDirection
 from neg_risk_trading.polymarket import (
     DEFAULT_FED_SEPTEMBER_SLUG,
     extract_event_slug,
@@ -17,6 +18,10 @@ class NegRiskRecorderSettings:
     mode: str = "shadow"
     event_slug: str = DEFAULT_FED_SEPTEMBER_SLUG
     quantities: tuple[Decimal, ...] = (Decimal("200"),)
+    route_directions: tuple[RouteDirection, ...] = (
+        RouteDirection.MAKER_BUY,
+        RouteDirection.MAKER_SELL,
+    )
     database_url: str | None = field(default=None, repr=False)
     database_target: str = "server_ext"
     database_source: str = "DATABASE_URL_SERVER_EXT"
@@ -50,6 +55,12 @@ class NegRiskRecorderSettings:
             quantities=_quantities(
                 _clean(env.get("NEG_RISK_QUANTITIES"))
                 or "200"
+            ),
+            route_directions=_route_directions(
+                _clean(
+                    env.get("NEG_RISK_ROUTE_DIRECTIONS")
+                )
+                or "MAKER_BUY,MAKER_SELL"
             ),
             database_url=database.url,
             database_target=database.target,
@@ -115,6 +126,14 @@ class NegRiskRecorderSettings:
             )
         if not self.quantities:
             raise ValueError("NEG_RISK_QUANTITIES is required")
+        if (
+            not self.route_directions
+            or len(self.route_directions)
+            != len(set(self.route_directions))
+        ):
+            raise ValueError(
+                "NEG_RISK_ROUTE_DIRECTIONS must be unique"
+            )
         if not 100 <= self.queue_capacity <= 100_000:
             raise ValueError(
                 "NEG_RISK_QUEUE_CAPACITY must be between "
@@ -335,6 +354,29 @@ def _quantities(value: str) -> tuple[Decimal, ...]:
             "positive finite values"
         )
     return quantities
+
+
+def _route_directions(
+    value: str,
+) -> tuple[RouteDirection, ...]:
+    try:
+        directions = tuple(
+            RouteDirection(part.strip().upper())
+            for part in value.split(",")
+            if part.strip()
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "NEG_RISK_ROUTE_DIRECTIONS is invalid"
+        ) from exc
+    if (
+        not directions
+        or len(directions) != len(set(directions))
+    ):
+        raise ValueError(
+            "NEG_RISK_ROUTE_DIRECTIONS must be unique"
+        )
+    return directions
 
 
 def _clean(value: str | None) -> str:

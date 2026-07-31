@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from neg_risk_trading.domain import (
     MarketSnapshot,
     NegRiskContractError,
+    RouteDirection,
 )
 from neg_risk_trading.market_stream import (
     MarketStreamTransportError,
@@ -23,6 +24,7 @@ from neg_risk_trading.repository import (
     SqlAlchemyObservationRepository,
     StreamSessionStart,
 )
+from neg_risk_trading.replay import event_contract_payload
 from neg_risk_trading.scanner import evaluate_snapshot
 from neg_risk_trading.settings import NegRiskRecorderSettings
 from neg_risk_trading.stream import (
@@ -47,10 +49,15 @@ class StreamObservationCollector:
         quantities: tuple[Decimal, ...],
         route_sample_interval_ms: int,
         queue: asyncio.Queue[RecordedStreamMessage | object],
+        route_directions: tuple[RouteDirection, ...] = (
+            RouteDirection.MAKER_BUY,
+            RouteDirection.MAKER_SELL,
+        ),
     ):
         self._registry = registry
         self._event = registry.event
         self._quantities = quantities
+        self._route_directions = route_directions
         self._route_sample_interval_ms = int(
             route_sample_interval_ms
         )
@@ -71,6 +78,12 @@ class StreamObservationCollector:
             raise StreamContractError(
                 "shadow_recorder_update_missing"
             )
+        if all(
+            update.event_type == "new_market"
+            and not update.affected_asset_ids
+            for update in updates
+        ):
+            return
         epoch = self._registry.epoch
         sequence = self._sequence_by_epoch.get(epoch, 0) + 1
         self._sequence_by_epoch[epoch] = sequence
@@ -138,6 +151,7 @@ class StreamObservationCollector:
         evaluation = evaluate_snapshot(
             snapshot,
             quantities=self._quantities,
+            route_directions=self._route_directions,
         )
         self._last_route_at_ms = received_at_ms
         return evaluation
@@ -249,6 +263,10 @@ class ContinuousShadowRecorder:
             self._public_client.fetch_stream_bootstrap,
             self._settings.event_slug,
         )
+        asset_configs = asset_configs_from_books(
+            event=bootstrap.event,
+            books=bootstrap.books,
+        )
         await asyncio.to_thread(self._repository.ensure_ready)
         started_at = _utc_now()
         session_id = await asyncio.to_thread(
@@ -270,18 +288,24 @@ class ContinuousShadowRecorder:
                         format(quantity, "f")
                         for quantity in self._settings.quantities
                     ],
+                    "route_directions": [
+                        direction.value
+                        for direction
+                        in self._settings.route_directions
+                    ],
                     "route_sample_interval_ms": (
                         self._settings.route_sample_interval_ms
+                    ),
+                    "event_contract": event_contract_payload(
+                        event=bootstrap.event,
+                        assets=asset_configs,
                     ),
                 },
             ),
         )
         registry = LocalBookRegistry(
             event=bootstrap.event,
-            assets=asset_configs_from_books(
-                event=bootstrap.event,
-                books=bootstrap.books,
-            ),
+            assets=asset_configs,
             clock_ms=_epoch_ms,
         )
         queue: asyncio.Queue[RecordedStreamMessage | object] = (
@@ -292,6 +316,7 @@ class ContinuousShadowRecorder:
         collector = StreamObservationCollector(
             registry=registry,
             quantities=self._settings.quantities,
+            route_directions=self._settings.route_directions,
             route_sample_interval_ms=(
                 self._settings.route_sample_interval_ms
             ),
@@ -314,6 +339,9 @@ class ContinuousShadowRecorder:
         )
         try:
             while True:
+                reconnect_diagnostics: Mapping[
+                    str, object
+                ] = {}
                 stream_task = asyncio.create_task(
                     self._stream.run_once(
                         registry,
@@ -340,12 +368,38 @@ class ContinuousShadowRecorder:
                     StreamContractError,
                 ) as exc:
                     terminal_reason = _reason_code(exc)
+                    raw_diagnostics = getattr(
+                        exc,
+                        "diagnostics",
+                        {},
+                    )
+                    if isinstance(raw_diagnostics, Mapping):
+                        reconnect_diagnostics = dict(
+                            raw_diagnostics
+                        )
                 if registry.status is StreamStatus.HALTED:
                     terminal_status = "HALTED"
                     terminal_reason = (
                         registry.reason_code or "market_resolved"
                     )
                     break
+                epoch_reached_ready = (
+                    registry.epoch_reached_ready
+                )
+                if epoch_reached_ready:
+                    reconnect_delay = (
+                        self._settings.reconnect_initial_seconds
+                    )
+                reconnect_diagnostics.update(
+                    {
+                        "epoch_reached_ready": (
+                            epoch_reached_ready
+                        ),
+                        "reconnect_delay_seconds": (
+                            reconnect_delay
+                        ),
+                    }
+                )
                 await asyncio.to_thread(
                     self._repository.mark_reconnecting,
                     session_id=session_id,
@@ -353,6 +407,9 @@ class ContinuousShadowRecorder:
                         terminal_reason
                         or "market_stream_reconnecting"
                     ),
+                    connection_epoch=registry.epoch,
+                    observed_at=_utc_now(),
+                    diagnostics=reconnect_diagnostics,
                 )
                 self._logger.warning(
                     "Neg-risk market stream reconnecting "
@@ -361,10 +418,11 @@ class ContinuousShadowRecorder:
                     reconnect_delay,
                 )
                 await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(
-                    self._settings.reconnect_max_seconds,
-                    reconnect_delay * 2,
-                )
+                if not epoch_reached_ready:
+                    reconnect_delay = min(
+                        self._settings.reconnect_max_seconds,
+                        reconnect_delay * 2,
+                    )
         except asyncio.CancelledError:
             terminal_status = "STOPPED"
             terminal_reason = "recorder_cancelled"

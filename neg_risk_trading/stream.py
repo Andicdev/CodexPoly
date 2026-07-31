@@ -30,6 +30,21 @@ class StreamStatus(str, Enum):
 class StreamContractError(NegRiskContractError):
     """A public market event cannot safely update local state."""
 
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        diagnostics: Mapping[str, object] | None = None,
+    ):
+        normalized = str(reason_code or "").strip()
+        if not normalized:
+            raise ValueError("reason_code is required")
+        super().__init__(normalized)
+        self.reason_code = normalized
+        self.diagnostics = MappingProxyType(
+            dict(diagnostics or {})
+        )
+
 
 @dataclass(frozen=True)
 class StreamAssetConfig:
@@ -323,6 +338,7 @@ class LocalBookRegistry:
         self._clock_ms = clock_ms
         self._books: dict[str, _MutableBook] = {}
         self._epoch = 0
+        self._epoch_reached_ready = False
         self._status = StreamStatus.DISCONNECTED
         self._reason_code: str | None = None
 
@@ -343,6 +359,10 @@ class LocalBookRegistry:
         return self._epoch
 
     @property
+    def epoch_reached_ready(self) -> bool:
+        return self._epoch_reached_ready
+
+    @property
     def asset_ids(self) -> tuple[str, ...]:
         return tuple(self._configs)
 
@@ -353,6 +373,7 @@ class LocalBookRegistry:
     def begin_epoch(self) -> int:
         self._epoch += 1
         self._books.clear()
+        self._epoch_reached_ready = False
         self._reason_code = None
         self._status = (
             StreamStatus.BOOTSTRAPPING
@@ -594,25 +615,79 @@ class LocalBookRegistry:
 
         for asset_id, current in pending.items():
             expected_bid, expected_ask = expected_tops[asset_id]
+            local_bid = _best_price(
+                current.bids,
+                reverse=True,
+            )
+            local_ask = _best_price(
+                current.asks,
+                reverse=False,
+            )
             if (
                 expected_bid is not None
-                and expected_bid != _best_price(
-                    current.bids,
-                    reverse=True,
-                )
+                and expected_bid != local_bid
             ):
                 raise StreamContractError(
-                    "price_change_best_bid_mismatch"
+                    "price_change_best_bid_mismatch",
+                    diagnostics={
+                        "event_type": "price_change",
+                        "asset_id": asset_id,
+                        "condition_id": current.config.condition_id,
+                        "timestamp_ms": timestamp_ms,
+                        "change_count": len(changes),
+                        "expected_bid": format(
+                            expected_bid,
+                            "f",
+                        ),
+                        "local_bid": (
+                            format(local_bid, "f")
+                            if local_bid is not None
+                            else None
+                        ),
+                        "expected_ask": (
+                            format(expected_ask, "f")
+                            if expected_ask is not None
+                            else None
+                        ),
+                        "local_ask": (
+                            format(local_ask, "f")
+                            if local_ask is not None
+                            else None
+                        ),
+                    },
                 )
             if (
                 expected_ask is not None
-                and expected_ask != _best_price(
-                    current.asks,
-                    reverse=False,
-                )
+                and expected_ask != local_ask
             ):
                 raise StreamContractError(
-                    "price_change_best_ask_mismatch"
+                    "price_change_best_ask_mismatch",
+                    diagnostics={
+                        "event_type": "price_change",
+                        "asset_id": asset_id,
+                        "condition_id": current.config.condition_id,
+                        "timestamp_ms": timestamp_ms,
+                        "change_count": len(changes),
+                        "expected_bid": (
+                            format(expected_bid, "f")
+                            if expected_bid is not None
+                            else None
+                        ),
+                        "local_bid": (
+                            format(local_bid, "f")
+                            if local_bid is not None
+                            else None
+                        ),
+                        "expected_ask": format(
+                            expected_ask,
+                            "f",
+                        ),
+                        "local_ask": (
+                            format(local_ask, "f")
+                            if local_ask is not None
+                            else None
+                        ),
+                    },
                 )
 
         self._books.update(pending)
@@ -758,6 +833,7 @@ class LocalBookRegistry:
     def _promote_if_complete(self) -> None:
         if set(self._books) == set(self._configs):
             self._status = StreamStatus.READY
+            self._epoch_reached_ready = True
             self._reason_code = None
 
     def _now(self) -> int:

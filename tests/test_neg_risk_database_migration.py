@@ -89,6 +89,18 @@ class NegRiskMigrationRunnerTests(unittest.TestCase):
             "persisted_route_count < 1",
             sql,
         )
+        self.assertIn(
+            "maker_buy_route_count < 1",
+            sql,
+        )
+        self.assertIn(
+            "maker_sell_route_count < 1",
+            sql,
+        )
+        self.assertIn(
+            "event_contract_version <> 1",
+            sql,
+        )
         self.assertNotIn("SELECT *", sql.upper())
 
     def test_catalog_migration_promotes_complete_scans(

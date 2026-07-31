@@ -4,10 +4,13 @@ from decimal import Decimal
 from typing import Any, Iterable
 
 from neg_risk_trading.domain import (
+    MakerBuyEvaluation,
     MakerSellEvaluation,
     MarketSnapshot,
     NegRiskContractError,
+    RouteDirection,
     RouteUnavailable,
+    evaluate_strict_maker_buy,
     evaluate_strict_maker_sell,
 )
 
@@ -17,10 +20,17 @@ def _decimal_text(value: Decimal) -> str:
 
 
 def _evaluation_payload(
-    evaluation: MakerSellEvaluation,
+    evaluation: MakerBuyEvaluation | MakerSellEvaluation,
 ) -> dict[str, Any]:
+    maker_buy = isinstance(evaluation, MakerBuyEvaluation)
     return {
         "available": True,
+        "route_direction": (
+            RouteDirection.MAKER_BUY.value
+            if maker_buy
+            else RouteDirection.MAKER_SELL.value
+        ),
+        "maker_side": "BUY" if maker_buy else "SELL",
         "maker_condition_id": evaluation.maker_condition_id,
         "maker_question": evaluation.maker_question,
         "maker_price": _decimal_text(
@@ -33,8 +43,14 @@ def _evaluation_payload(
             {
                 "condition_id": leg.condition_id,
                 "question": leg.question,
-                "gross_proceeds": _decimal_text(
-                    leg.gross_proceeds
+                (
+                    "gross_cost"
+                    if maker_buy
+                    else "gross_proceeds"
+                ): _decimal_text(
+                    leg.gross_cost
+                    if maker_buy
+                    else leg.gross_proceeds
                 ),
                 "conservative_taker_fee": _decimal_text(
                     leg.taker_fee
@@ -52,7 +68,9 @@ def _evaluation_payload(
             for leg in evaluation.hedge_legs
         ],
         "gross_collateral": _decimal_text(
-            evaluation.gross_collateral
+            evaluation.gross_cost
+            if maker_buy
+            else evaluation.gross_collateral
         ),
         "conservative_taker_fees": _decimal_text(
             evaluation.conservative_taker_fees
@@ -106,6 +124,9 @@ def evaluate_snapshot(
     snapshot: MarketSnapshot,
     *,
     quantities: Iterable[Decimal],
+    route_directions: Iterable[
+        RouteDirection | str
+    ] = (RouteDirection.MAKER_SELL,),
     maximum_books_duration_ms: int = 2_000,
 ) -> dict[str, Any]:
     normalized_quantities = tuple(
@@ -116,35 +137,60 @@ def evaluate_snapshot(
         raise ValueError("at least one quantity is required")
     if any(quantity <= 0 for quantity in normalized_quantities):
         raise ValueError("quantities must be positive")
+    normalized_directions = tuple(
+        _route_direction(direction)
+        for direction in route_directions
+    )
+    if not normalized_directions:
+        raise ValueError("at least one route direction is required")
+    if len(normalized_directions) != len(
+        set(normalized_directions)
+    ):
+        raise ValueError("route directions must be unique")
 
     evaluations: list[dict[str, Any]] = []
-    for market in snapshot.event.markets:
-        for quantity in normalized_quantities:
-            try:
-                result = evaluate_strict_maker_sell(
-                    snapshot,
-                    maker_condition_id=market.condition_id,
-                    quantity=quantity,
-                    maximum_books_duration_ms=(
-                        maximum_books_duration_ms
-                    ),
-                )
-            except RouteUnavailable as exc:
-                evaluations.append(
-                    {
-                        "available": False,
-                        "maker_condition_id": market.condition_id,
-                        "maker_question": market.question,
-                        "quantity": _decimal_text(quantity),
-                        "reason_code": exc.reason_code,
-                    }
-                )
-            except NegRiskContractError:
-                raise
-            else:
-                evaluations.append(
-                    _evaluation_payload(result)
-                )
+    for direction in normalized_directions:
+        evaluator = (
+            evaluate_strict_maker_buy
+            if direction is RouteDirection.MAKER_BUY
+            else evaluate_strict_maker_sell
+        )
+        for market in snapshot.event.markets:
+            for quantity in normalized_quantities:
+                try:
+                    result = evaluator(
+                        snapshot,
+                        maker_condition_id=market.condition_id,
+                        quantity=quantity,
+                        maximum_books_duration_ms=(
+                            maximum_books_duration_ms
+                        ),
+                    )
+                except RouteUnavailable as exc:
+                    evaluations.append(
+                        {
+                            "available": False,
+                            "route_direction": direction.value,
+                            "maker_side": (
+                                "BUY"
+                                if direction
+                                is RouteDirection.MAKER_BUY
+                                else "SELL"
+                            ),
+                            "maker_condition_id": (
+                                market.condition_id
+                            ),
+                            "maker_question": market.question,
+                            "quantity": _decimal_text(quantity),
+                            "reason_code": exc.reason_code,
+                        }
+                    )
+                except NegRiskContractError:
+                    raise
+                else:
+                    evaluations.append(
+                        _evaluation_payload(result)
+                    )
 
     available = [
         result
@@ -164,6 +210,10 @@ def evaluate_snapshot(
     ]
     return {
         "mode": "READ_ONLY_SHADOW",
+        "route_directions": [
+            direction.value
+            for direction in normalized_directions
+        ],
         "event": {
             "id": snapshot.event.event_id,
             "slug": snapshot.event.slug,
@@ -190,3 +240,15 @@ def evaluate_snapshot(
         "available_routes": available,
         "unavailable_routes": unavailable,
     }
+
+
+def _route_direction(
+    value: RouteDirection | str,
+) -> RouteDirection:
+    if isinstance(value, RouteDirection):
+        return value
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    try:
+        return RouteDirection(normalized)
+    except ValueError as exc:
+        raise ValueError("route direction is invalid") from exc

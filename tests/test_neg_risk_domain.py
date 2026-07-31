@@ -13,6 +13,7 @@ from neg_risk_trading.domain import (
     OutcomeMarket,
     RewardConfig,
     RouteUnavailable,
+    evaluate_strict_maker_buy,
     evaluate_strict_maker_sell,
 )
 
@@ -327,6 +328,156 @@ class StrictMakerSellEvaluationTests(unittest.TestCase):
                     snapshot.event.markets[0].condition_id
                 ),
                 maker_price=Decimal("0.39"),
+                quantity=Decimal("200"),
+            )
+
+
+class StrictMakerBuyEvaluationTests(unittest.TestCase):
+    def test_one_cent_raw_two_leg_edge_is_consumed_by_fees(
+        self,
+    ) -> None:
+        markets = tuple(_market(index) for index in range(2))
+        event = NegRiskEvent(
+            event_id="two-way-election",
+            slug="two-way-election",
+            title="Two-way election?",
+            neg_risk=True,
+            augmented=False,
+            markets=markets,
+        )
+        books = {
+            markets[0].condition_id: _book(
+                markets[0],
+                bid="0.55",
+                bid_size="20000",
+                ask="0.56",
+                tick_size="0.01",
+            ),
+            markets[1].condition_id: _book(
+                markets[1],
+                bid="0.43",
+                ask="0.44",
+                tick_size="0.01",
+            ),
+        }
+        snapshot = MarketSnapshot(
+            event=event,
+            books=books,
+            requested_at_ms=NOW_MS - 10,
+            received_at_ms=NOW_MS,
+            gamma_duration_ms=0,
+            books_duration_ms=10,
+        )
+
+        result = evaluate_strict_maker_buy(
+            snapshot,
+            maker_condition_id=markets[0].condition_id,
+            quantity=Decimal("200"),
+        )
+
+        self.assertEqual(result.maker_price, Decimal("0.55"))
+        self.assertEqual(result.queue_ahead, Decimal("20000"))
+        self.assertEqual(result.gross_cost, Decimal("198.00"))
+        self.assertEqual(
+            result.conservative_taker_fees,
+            Decimal("2.46400"),
+        )
+        self.assertEqual(result.base_profit, Decimal("-0.46400"))
+        self.assertEqual(
+            result.estimated_maker_rebate,
+            Decimal("0.6187500"),
+        )
+        self.assertEqual(
+            result.profit_with_rebate,
+            Decimal("0.1547500"),
+        )
+        self.assertEqual(len(result.hedge_legs), 1)
+        self.assertTrue(result.reward_top_of_book_candidate)
+
+    def test_depth_aware_buy_sweeps_asks_and_can_be_positive(
+        self,
+    ) -> None:
+        snapshot = _snapshot()
+        maker = snapshot.event.markets[3]
+        books = dict(snapshot.books)
+        for index, ask in enumerate(("0.39", "0.01", "0.01", "0.56", "0.01")):
+            market = snapshot.event.markets[index]
+            original = books[market.condition_id]
+            bid = (
+                "0.55"
+                if index == 3
+                else format(Decimal(ask) - Decimal("0.001"), "f")
+            )
+            books[market.condition_id] = replace(
+                original,
+                bids=(
+                    BookLevel(
+                        price=Decimal(bid),
+                        size=Decimal("1000"),
+                    ),
+                ),
+                asks=(
+                    BookLevel(
+                        price=Decimal(ask),
+                        size=Decimal("1000"),
+                    ),
+                ),
+            )
+        snapshot = replace(snapshot, books=books)
+
+        result = evaluate_strict_maker_buy(
+            snapshot,
+            maker_condition_id=maker.condition_id,
+            quantity=Decimal("200"),
+        )
+
+        self.assertEqual(result.gross_cost, Decimal("194.00"))
+        self.assertEqual(
+            result.conservative_taker_fees,
+            Decimal("2.67600"),
+        )
+        self.assertEqual(result.base_profit, Decimal("3.32400"))
+
+    def test_crossing_maker_buy_fails_closed(self) -> None:
+        snapshot = _snapshot()
+        market = snapshot.event.markets[0]
+
+        with self.assertRaisesRegex(
+            RouteUnavailable,
+            "maker_buy_would_cross",
+        ):
+            evaluate_strict_maker_buy(
+                snapshot,
+                maker_condition_id=market.condition_id,
+                maker_price=Decimal("0.40"),
+                quantity=Decimal("200"),
+            )
+
+    def test_incomplete_ask_depth_fails_closed(self) -> None:
+        snapshot = _snapshot()
+        hedge_market = snapshot.event.markets[2]
+        shallow = replace(
+            snapshot.books[hedge_market.condition_id],
+            asks=(
+                BookLevel(
+                    price=Decimal("0.039"),
+                    size=Decimal("10"),
+                ),
+            ),
+        )
+        books = dict(snapshot.books)
+        books[hedge_market.condition_id] = shallow
+        snapshot = replace(snapshot, books=books)
+
+        with self.assertRaisesRegex(
+            RouteUnavailable,
+            "hedge_depth_insufficient",
+        ):
+            evaluate_strict_maker_buy(
+                snapshot,
+                maker_condition_id=(
+                    snapshot.event.markets[0].condition_id
+                ),
                 quantity=Decimal("200"),
             )
 

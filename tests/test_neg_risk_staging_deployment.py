@@ -44,6 +44,10 @@ class NegRiskStagingDeploymentTests(unittest.TestCase):
             "neg_risk_trading.recorder_main",
             compose,
         )
+        self.assertIn(
+            'NEG_RISK_ROUTE_DIRECTIONS: "MAKER_BUY,MAKER_SELL"',
+            compose,
+        )
         self.assertIn("read_only: true", compose)
         self.assertNotIn("ports:", compose)
 

@@ -6,7 +6,10 @@ import sys
 from decimal import Decimal, InvalidOperation
 from typing import Sequence
 
-from neg_risk_trading.domain import NegRiskContractError
+from neg_risk_trading.domain import (
+    NegRiskContractError,
+    RouteDirection,
+)
 from neg_risk_trading.polymarket import (
     DEFAULT_FED_SEPTEMBER_SLUG,
     PolymarketPublicClient,
@@ -33,10 +36,36 @@ def _quantities(value: str) -> tuple[Decimal, ...]:
     return quantities
 
 
+def _directions(value: str) -> tuple[RouteDirection, ...]:
+    aliases = {
+        "buy": RouteDirection.MAKER_BUY,
+        "maker-buy": RouteDirection.MAKER_BUY,
+        "maker_buy": RouteDirection.MAKER_BUY,
+        "sell": RouteDirection.MAKER_SELL,
+        "maker-sell": RouteDirection.MAKER_SELL,
+        "maker_sell": RouteDirection.MAKER_SELL,
+    }
+    try:
+        directions = tuple(
+            aliases[part.strip().lower()]
+            for part in value.split(",")
+            if part.strip()
+        )
+    except KeyError as exc:
+        raise argparse.ArgumentTypeError(
+            "directions must contain maker-buy and/or maker-sell"
+        ) from exc
+    if not directions or len(directions) != len(set(directions)):
+        raise argparse.ArgumentTypeError(
+            "directions must be unique"
+        )
+    return directions
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Read-only strict neg-risk maker-sell opportunity scanner."
+            "Read-only strict neg-risk basket opportunity scanner."
         )
     )
     parser.add_argument(
@@ -49,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=_quantities,
         default=_quantities("20,50,100,200,500"),
         help="Comma-separated basket quantities.",
+    )
+    parser.add_argument(
+        "--directions",
+        type=_directions,
+        default=_directions("maker-buy,maker-sell"),
+        help="Comma-separated maker-buy and/or maker-sell routes.",
     )
     parser.add_argument(
         "--maximum-books-duration-ms",
@@ -67,6 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = evaluate_snapshot(
             snapshot,
             quantities=args.quantities,
+            route_directions=args.directions,
             maximum_books_duration_ms=(
                 args.maximum_books_duration_ms
             ),

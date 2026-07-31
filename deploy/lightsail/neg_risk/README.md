@@ -34,11 +34,14 @@ host port. Shadow mode is mandatory and the database schemas enforce
    `neg_risk_trading/migrations/002_add_catalog_scanner_tables.sql`
    and verify it with
    `neg_risk_trading/checks/verify_catalog_schema.sql`.
-5. Install this Compose file at
+5. Apply
+   `neg_risk_trading/migrations/003_add_bid_routes_and_stream_anomalies.sql`
+   and verify the observation schema again.
+6. Install this Compose file at
    `/opt/codexpoly/staging/apps/neg-risk/compose.yml`.
-6. Set `CODEXPOLY_IMAGE_REF` to the reviewed immutable image digest and start
+7. Set `CODEXPOLY_IMAGE_REF` to the reviewed immutable image digest and start
    the selected service explicitly.
-7. Verify aggregate session/message/observation counts and the latest complete
+8. Verify aggregate session/message/observation counts and the latest complete
    catalog scan. Do not return raw payload rows in ordinary deployment logs.
 
 Production is intentionally absent from this checkpoint. Public market

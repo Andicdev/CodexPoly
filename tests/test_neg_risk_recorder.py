@@ -129,7 +129,7 @@ class StreamObservationCollectorTests(unittest.TestCase):
         assert record.route_evaluation is not None
         self.assertEqual(
             len(record.route_evaluation["available_routes"]),
-            5,
+            10,
         )
 
     def test_full_queue_fails_closed_without_dropping(
@@ -162,6 +162,35 @@ class StreamObservationCollectorTests(unittest.TestCase):
             collector.on_message(payload, updates)
 
         self.assertEqual(queue.qsize(), 1)
+
+    def test_irrelevant_new_market_notice_is_not_persisted(
+        self,
+    ) -> None:
+        event = _event()
+        registry = LocalBookRegistry(
+            event=event,
+            assets=_configs(event),
+            clock_ms=lambda: NOW_MS + 10,
+        )
+        registry.begin_epoch()
+        payload = {
+            "event_type": "new_market",
+            "timestamp": str(NOW_MS),
+        }
+        updates = registry.apply_message(payload)
+        queue: asyncio.Queue[RecordedStreamMessage | object] = (
+            asyncio.Queue(maxsize=10)
+        )
+        collector = StreamObservationCollector(
+            registry=registry,
+            quantities=(Decimal("200"),),
+            route_sample_interval_ms=0,
+            queue=queue,
+        )
+
+        collector.on_message(payload, updates)
+
+        self.assertTrue(queue.empty())
 
 
 class _FakeRepository:
@@ -279,6 +308,15 @@ class ContinuousShadowRecorderTests(unittest.TestCase):
             [bootstrap.event.slug],
         )
         self.assertEqual(len(repository.starts), 1)
+        metadata = repository.starts[0].metadata
+        self.assertEqual(
+            metadata["route_directions"],
+            ["MAKER_BUY", "MAKER_SELL"],
+        )
+        self.assertEqual(
+            metadata["event_contract"]["version"],
+            1,
+        )
         persisted = [
             message
             for _session_id, batch in repository.batches

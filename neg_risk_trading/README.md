@@ -6,15 +6,22 @@ composition and does not place, sign, cancel, or prepare an order.
 
 ## First strategy
 
-The first implemented route is a strict full-basket maker-sell cycle for a
-standard (non-augmented) negative-risk event:
+The first strategy evaluates both strict full-basket directions for a standard
+(non-augmented) negative-risk event:
 
-1. one complete YES basket is treated as costing 1 unit of collateral;
-2. one selected YES outcome is offered as a resting maker sell;
-3. after that maker fill, the same quantity of every other YES outcome is
-   sold into the bid books;
-4. every hedge level uses its own configured taker fee;
-5. the route is available only when every hedge leg has sufficient depth.
+- `MAKER_BUY`: rest a BUY on one YES outcome. After it fills, buy the same
+  quantity of every other YES outcome from their ask books. The completed
+  basket redeems for 1 unit of collateral per share.
+- `MAKER_SELL`: treat one complete YES basket as costing 1 unit of collateral,
+  rest a SELL on one outcome, then sell every other YES outcome into its bid
+  book after the maker fill.
+
+Every hedge level uses its own configured taker fee and a route is available
+only when every hedge leg has sufficient depth. For the two-market example,
+a maker BUY at `0.55` plus a taker BUY at `0.44` costs `0.99` before fees.
+That one-cent gross gap is not assumed to be profit: the evaluator subtracts
+the exact configured taker fee first and reports any estimated maker rebate
+separately.
 
 September Fed is the initial event:
 
@@ -71,7 +78,22 @@ python -m neg_risk_trading.recorder_main
 It never migrates the schema at startup. Apply the checked-in migration
 explicitly first. Public stream messages enter a bounded in-memory queue and
 are written in batches by a separate task; database I/O is not performed by
-the WebSocket event callback.
+the WebSocket event callback. New sessions persist the exact public event,
+fee, reward, asset, tick, and minimum-size contract used at bootstrap.
+Asset-less `new_market` notices are ignored; semantic top-of-book mismatches
+are recorded as value-safe anomalies and immediately force a fresh full-book
+epoch. Once an epoch had reached `READY`, this resync starts at the initial
+one-second delay rather than inheriting an unrelated exponential backoff.
+
+Replay a stored session without calling Gamma or CLOB:
+
+```powershell
+python -m neg_risk_trading.replay_main
+```
+
+Use `--session-id` for a specific immutable session. Sessions created before
+the replay contract was introduced intentionally fail closed because their
+original fee, reward, tick, and asset metadata cannot be reconstructed exactly.
 
 ## Full neg-risk catalog
 
@@ -124,15 +146,16 @@ depth, and time spent in queue.
 
 ## Development sequence
 
-1. Completed: deterministic event/book parsing and depth-aware route
-   evaluation.
+1. Completed: deterministic event/book parsing and depth-aware maker-buy and
+   maker-sell route evaluation.
 2. Completed foundation: all-asset WebSocket initial dump, local L2 updates,
    tick changes, readiness epochs, resync states, and queue-ahead bounds.
 3. Completed locally: append-only PostgreSQL persistence and a bounded
    continuous shadow recorder for the isolated `codexpoly_neg_risk` database.
 4. Completed: staging recorder and full active neg-risk Gamma catalog.
-5. Derive fill probability, trade flow, post-fill markouts, and select events
-   for dedicated L2 recording from catalog rankings.
+5. In progress: deterministic stored-session replay; next derive fill
+   probability, trade flow, post-fill markouts, and select events for
+   dedicated L2 recording from catalog rankings.
 6. Implement prepared full-basket inventory and a paper executor.
 7. Add authenticated preflight, persistent idempotency, exact-order
    supervision, and settlement recovery.

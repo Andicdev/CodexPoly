@@ -20,8 +20,14 @@ CONDITION_ID = "0x" + "a" * 64
 
 
 class _FakeResult:
-    def __init__(self, row: dict | None = None):
+    def __init__(
+        self,
+        row: dict | None = None,
+        *,
+        rows: list[dict] | None = None,
+    ):
         self._row = row
+        self._rows = rows
 
     def mappings(self) -> _FakeResult:
         return self
@@ -33,6 +39,11 @@ class _FakeResult:
 
     def one_or_none(self) -> dict | None:
         return self._row
+
+    def __iter__(self):
+        if self._rows is not None:
+            return iter(self._rows)
+        return iter(() if self._row is None else (self._row,))
 
 
 class _FakeSession:
@@ -66,13 +77,16 @@ class _FakeSession:
                     "sessions_table": self.schema_ready,
                     "messages_table": True,
                     "observations_table": True,
+                    "anomalies_table": True,
                     "sessions_columns": True,
                     "messages_columns": True,
                     "observations_columns": True,
+                    "anomalies_columns": True,
                     "message_sequence_index": True,
                     "observation_route_index": True,
                     "messages_append_only": True,
                     "observations_append_only": True,
+                    "anomalies_append_only": True,
                 }
             )
         if "INSERT INTO neg_risk_stream_sessions" in sql:
@@ -109,6 +123,47 @@ class _FakeSession:
         self.rollbacks += 1
 
 
+class _ReplayFakeSession(_FakeSession):
+    def execute(
+        self,
+        sql: str,
+        params: object = None,
+    ) -> _FakeResult:
+        self.executions.append((sql, params))
+        if (
+            "FROM neg_risk_stream_sessions" in sql
+            and "ORDER BY started_at" in sql
+        ):
+            return _FakeResult(
+                {
+                    "session_id": str(SESSION_ID),
+                    "event_id": "481717",
+                    "event_slug": (
+                        "fed-decision-in-september-762"
+                    ),
+                    "started_at": NOW,
+                    "ended_at": None,
+                    "metadata": {
+                        "quantities": ["200"],
+                    },
+                }
+            )
+        if "FROM neg_risk_stream_messages" in sql:
+            return _FakeResult(
+                rows=[
+                    {
+                        "connection_epoch": 1,
+                        "message_sequence": 1,
+                        "received_at": NOW,
+                        "payload": {
+                            "event_type": "book",
+                        },
+                    }
+                ]
+            )
+        return super().execute(sql, params)
+
+
 def _record() -> RecordedStreamMessage:
     update = StreamUpdate(
         event_type="book",
@@ -131,6 +186,7 @@ def _record() -> RecordedStreamMessage:
             "available_routes": [
                 {
                     "available": True,
+                    "route_direction": "MAKER_SELL",
                     "maker_condition_id": CONDITION_ID,
                     "maker_question": "Fed outcome?",
                     "maker_price": "0.57",
@@ -152,6 +208,7 @@ def _record() -> RecordedStreamMessage:
             "unavailable_routes": [
                 {
                     "available": False,
+                    "route_direction": "MAKER_SELL",
                     "maker_condition_id": (
                         "0x" + "b" * 64
                     ),
@@ -185,6 +242,29 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertIn(
             "trg_neg_risk_route_observations_append_only",
+            migration,
+        )
+        self.assertNotIn("DROP TABLE", migration.upper())
+
+    def test_bid_route_migration_is_append_only_and_directional(
+        self,
+    ) -> None:
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "neg_risk_trading"
+            / "migrations"
+            / "003_add_bid_routes_and_stream_anomalies.sql"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("route_direction text", migration)
+        self.assertIn("'MAKER_BUY'", migration)
+        self.assertIn("'MAKER_SELL'", migration)
+        self.assertIn(
+            "neg_risk_stream_anomalies",
+            migration,
+        )
+        self.assertIn(
+            "trg_neg_risk_stream_anomalies_append_only",
             migration,
         )
         self.assertNotIn("DROP TABLE", migration.upper())
@@ -279,6 +359,60 @@ class ObservationRepositoryTests(unittest.TestCase):
             str(raised.exception),
         )
         self.assertIn("RuntimeError", str(raised.exception))
+
+    def test_reconnect_anomaly_keeps_only_safe_diagnostics(
+        self,
+    ) -> None:
+        session = _FakeSession()
+        repository = SqlAlchemyObservationRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        repository.mark_reconnecting(
+            session_id=SESSION_ID,
+            reason_code="price_change_best_bid_mismatch",
+            connection_epoch=2,
+            observed_at=NOW,
+            diagnostics={
+                "asset_id": "10000",
+                "expected_bid": "0.40",
+                "private_key": "must-not-persist",
+            },
+        )
+
+        anomaly_calls = [
+            params
+            for sql, params in session.executions
+            if "INSERT INTO neg_risk_stream_anomalies" in sql
+        ]
+        self.assertEqual(len(anomaly_calls), 1)
+        self.assertIn('"asset_id":"10000"', anomaly_calls[0]["diagnostics"])
+        self.assertNotIn("private_key", anomaly_calls[0]["diagnostics"])
+        self.assertEqual(session.commits, 1)
+
+    def test_loads_and_streams_public_replay_rows(self) -> None:
+        session = _ReplayFakeSession()
+        repository = SqlAlchemyObservationRepository(
+            session_factory=lambda: session,
+            text_factory=lambda value: value,
+        )
+
+        replay_session = repository.load_replay_session()
+        messages = list(
+            repository.iter_replay_messages(
+                session_id=replay_session.session_id,
+            )
+        )
+
+        self.assertEqual(replay_session.session_id, SESSION_ID)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].connection_epoch, 1)
+        self.assertEqual(messages[0].message_sequence, 1)
+        self.assertEqual(
+            messages[0].payload["event_type"],
+            "book",
+        )
 
 
 if __name__ == "__main__":

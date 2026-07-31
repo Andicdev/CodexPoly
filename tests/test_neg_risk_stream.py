@@ -220,7 +220,7 @@ class LocalBookRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(
             StreamContractError,
             "^price_change_best_bid_mismatch$",
-        ):
+        ) as raised:
             self.registry.apply_message(
                 {
                     "event_type": "price_change",
@@ -248,6 +248,18 @@ class LocalBookRegistryTests(unittest.TestCase):
             self.registry.reason_code,
             "price_change_best_bid_mismatch",
         )
+        self.assertEqual(
+            raised.exception.diagnostics["asset_id"],
+            market.yes_token_id,
+        )
+        self.assertEqual(
+            raised.exception.diagnostics["expected_bid"],
+            "0.38",
+        )
+        self.assertEqual(
+            raised.exception.diagnostics["local_bid"],
+            "0.40",
+        )
 
     def test_reconnect_invalidates_books_until_every_snapshot_arrives(
         self,
@@ -271,6 +283,7 @@ class LocalBookRegistryTests(unittest.TestCase):
             StreamStatus.RESYNCING,
         )
         self.assertFalse(self.registry.ready)
+        self.assertFalse(self.registry.epoch_reached_ready)
 
     def test_tick_change_updates_order_tick(self) -> None:
         self._bootstrap()

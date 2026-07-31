@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
 
@@ -24,6 +25,11 @@ class RouteUnavailable(RuntimeError):
             raise ValueError("reason_code is required")
         super().__init__(normalized)
         self.reason_code = normalized
+
+
+class RouteDirection(str, Enum):
+    MAKER_BUY = "MAKER_BUY"
+    MAKER_SELL = "MAKER_SELL"
 
 
 def _decimal(value: object, *, name: str) -> Decimal:
@@ -398,6 +404,17 @@ class OrderBook:
             Decimal("0"),
         )
 
+    def size_at_bid(self, price: Decimal) -> Decimal:
+        normalized_price = _decimal(price, name="maker_price")
+        return sum(
+            (
+                level.size
+                for level in self.bids
+                if level.price == normalized_price
+            ),
+            Decimal("0"),
+        )
+
     def sweep_bids(self, quantity: Decimal) -> SweepResult:
         normalized_quantity = _decimal(
             quantity,
@@ -411,6 +428,33 @@ class OrderBook:
         remaining = normalized_quantity
         fills: list[DepthFill] = []
         for level in self.bids:
+            if remaining <= 0:
+                break
+            taken = min(remaining, level.size)
+            fills.append(
+                DepthFill(
+                    price=level.price,
+                    quantity=taken,
+                )
+            )
+            remaining -= taken
+        if remaining > 0:
+            raise RouteUnavailable("hedge_depth_insufficient")
+        return SweepResult(fills=tuple(fills))
+
+    def sweep_asks(self, quantity: Decimal) -> SweepResult:
+        normalized_quantity = _decimal(
+            quantity,
+            name="sweep_quantity",
+        )
+        if normalized_quantity <= 0:
+            raise NegRiskContractError("sweep_quantity_not_positive")
+        if normalized_quantity < self.minimum_order_size:
+            raise RouteUnavailable("hedge_below_minimum_order_size")
+
+        remaining = normalized_quantity
+        fills: list[DepthFill] = []
+        for level in self.asks:
             if remaining <= 0:
                 break
             taken = min(remaining, level.size)
@@ -490,6 +534,15 @@ class HedgeLeg:
 
 
 @dataclass(frozen=True)
+class BuyHedgeLeg:
+    condition_id: str
+    question: str
+    fills: tuple[DepthFill, ...]
+    gross_cost: Decimal
+    taker_fee: Decimal
+
+
+@dataclass(frozen=True)
 class MakerSellEvaluation:
     event_slug: str
     maker_condition_id: str
@@ -518,8 +571,183 @@ class MakerSellEvaluation:
         return self.profit_with_rebate / self.quantity
 
 
+@dataclass(frozen=True)
+class MakerBuyEvaluation:
+    event_slug: str
+    maker_condition_id: str
+    maker_question: str
+    maker_price: Decimal
+    quantity: Decimal
+    queue_ahead: Decimal
+    hedge_legs: tuple[BuyHedgeLeg, ...]
+    gross_cost: Decimal
+    conservative_taker_fees: Decimal
+    base_profit: Decimal
+    estimated_maker_rebate: Decimal
+    profit_with_rebate: Decimal
+    reward_daily_rate: Decimal
+    reward_minimum_size: Decimal
+    reward_maximum_spread_cents: Decimal
+    top_midpoint_spread_cents: Decimal | None
+    reward_top_of_book_candidate: bool
+
+    @property
+    def base_edge_per_share(self) -> Decimal:
+        return self.base_profit / self.quantity
+
+    @property
+    def edge_with_rebate_per_share(self) -> Decimal:
+        return self.profit_with_rebate / self.quantity
+
+
 def _price_aligned(*, price: Decimal, tick_size: Decimal) -> bool:
     return price % tick_size == 0
+
+
+def _reward_screen(
+    *,
+    book: OrderBook,
+    price: Decimal,
+    quantity: Decimal,
+    rewards: RewardConfig,
+) -> tuple[Decimal | None, bool]:
+    midpoint_spread: Decimal | None = None
+    if book.best_bid is not None and book.best_ask is not None:
+        midpoint = (
+            book.best_bid.price + book.best_ask.price
+        ) / Decimal("2")
+        midpoint_spread = abs(price - midpoint) * HUNDRED
+    candidate = (
+        rewards.daily_rate > 0
+        and quantity >= rewards.minimum_size
+        and midpoint_spread is not None
+        and midpoint_spread <= rewards.maximum_spread_cents
+    )
+    return midpoint_spread, candidate
+
+
+def evaluate_strict_maker_buy(
+    snapshot: MarketSnapshot,
+    *,
+    maker_condition_id: str,
+    quantity: Decimal,
+    maker_price: Decimal | None = None,
+    maximum_books_duration_ms: int = 2_000,
+) -> MakerBuyEvaluation:
+    snapshot.validate_batch_coherence(
+        maximum_books_duration_ms=maximum_books_duration_ms,
+    )
+    event = snapshot.event
+    if event.neg_risk is not True:
+        raise RouteUnavailable("event_not_neg_risk")
+    if event.augmented is True:
+        raise RouteUnavailable("augmented_event_not_supported")
+
+    quantity = _decimal(quantity, name="route_quantity")
+    if quantity <= 0:
+        raise NegRiskContractError("route_quantity_not_positive")
+    maker_market = event.market(maker_condition_id)
+    maker_book = snapshot.books[maker_market.condition_id]
+    if quantity < maker_book.minimum_order_size:
+        raise RouteUnavailable("maker_below_minimum_order_size")
+
+    if maker_price is None:
+        if maker_book.best_bid is None:
+            raise RouteUnavailable("maker_book_has_no_bid")
+        effective_maker_price = maker_book.best_bid.price
+    else:
+        effective_maker_price = _decimal(
+            maker_price,
+            name="maker_price",
+        )
+    if (
+        effective_maker_price <= 0
+        or effective_maker_price >= ONE
+    ):
+        raise RouteUnavailable("maker_price_out_of_range")
+    if not _price_aligned(
+        price=effective_maker_price,
+        tick_size=maker_book.tick_size,
+    ):
+        raise RouteUnavailable("maker_price_tick_misaligned")
+    if (
+        maker_book.best_ask is not None
+        and effective_maker_price >= maker_book.best_ask.price
+    ):
+        raise RouteUnavailable("maker_buy_would_cross")
+
+    gross_cost = effective_maker_price * quantity
+    conservative_taker_fees = Decimal("0")
+    hedge_legs: list[BuyHedgeLeg] = []
+    for hedge_market in event.markets:
+        if hedge_market.condition_id == maker_market.condition_id:
+            continue
+        hedge_book = snapshot.books[hedge_market.condition_id]
+        try:
+            sweep = hedge_book.sweep_asks(quantity)
+        except RouteUnavailable as exc:
+            raise RouteUnavailable(
+                f"{exc.reason_code}:{hedge_market.condition_id}"
+            ) from exc
+        leg_fee = sum(
+            (
+                hedge_market.fee_schedule.conservative_taker_fee(
+                    quantity=fill.quantity,
+                    price=fill.price,
+                )
+                for fill in sweep.fills
+            ),
+            Decimal("0"),
+        )
+        gross_cost += sweep.collateral
+        conservative_taker_fees += leg_fee
+        hedge_legs.append(
+            BuyHedgeLeg(
+                condition_id=hedge_market.condition_id,
+                question=hedge_market.question,
+                fills=sweep.fills,
+                gross_cost=sweep.collateral,
+                taker_fee=leg_fee,
+            )
+        )
+
+    base_profit = quantity - gross_cost - conservative_taker_fees
+    estimated_rebate = (
+        maker_market.fee_schedule.estimated_maker_rebate(
+            quantity=quantity,
+            price=effective_maker_price,
+        )
+    )
+    reward_config = maker_market.rewards
+    midpoint_spread, reward_candidate = _reward_screen(
+        book=maker_book,
+        price=effective_maker_price,
+        quantity=quantity,
+        rewards=reward_config,
+    )
+    return MakerBuyEvaluation(
+        event_slug=event.slug,
+        maker_condition_id=maker_market.condition_id,
+        maker_question=maker_market.question,
+        maker_price=effective_maker_price,
+        quantity=quantity,
+        queue_ahead=maker_book.size_at_bid(
+            effective_maker_price
+        ),
+        hedge_legs=tuple(hedge_legs),
+        gross_cost=gross_cost,
+        conservative_taker_fees=conservative_taker_fees,
+        base_profit=base_profit,
+        estimated_maker_rebate=estimated_rebate,
+        profit_with_rebate=base_profit + estimated_rebate,
+        reward_daily_rate=reward_config.daily_rate,
+        reward_minimum_size=reward_config.minimum_size,
+        reward_maximum_spread_cents=(
+            reward_config.maximum_spread_cents
+        ),
+        top_midpoint_spread_cents=midpoint_spread,
+        reward_top_of_book_candidate=reward_candidate,
+    )
 
 
 def evaluate_strict_maker_sell(
@@ -620,24 +848,11 @@ def evaluate_strict_maker_sell(
         )
     )
     reward_config = maker_market.rewards
-    midpoint_spread: Decimal | None = None
-    if (
-        maker_book.best_bid is not None
-        and maker_book.best_ask is not None
-    ):
-        midpoint = (
-            maker_book.best_bid.price
-            + maker_book.best_ask.price
-        ) / Decimal("2")
-        midpoint_spread = (
-            abs(effective_maker_price - midpoint) * HUNDRED
-        )
-    reward_candidate = (
-        reward_config.daily_rate > 0
-        and quantity >= reward_config.minimum_size
-        and midpoint_spread is not None
-        and midpoint_spread
-        <= reward_config.maximum_spread_cents
+    midpoint_spread, reward_candidate = _reward_screen(
+        book=maker_book,
+        price=effective_maker_price,
+        quantity=quantity,
+        rewards=reward_config,
     )
     return MakerSellEvaluation(
         event_slug=event.slug,
