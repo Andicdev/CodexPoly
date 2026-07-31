@@ -1,0 +1,21 @@
+[Unit]
+Description=Stage encrypted CodexPoly PostgreSQL backups for offsite pull
+Requires=docker.service
+After=docker.service codexpoly-postgres-backup.service
+ConditionPathExists=/etc/codexpoly/offsite-backup/production.conf
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/opt/codexpoly/config/stage-offsite-backup.sh production
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/codexpoly/backups/postgres/production
+ReadOnlyPaths=/opt/codexpoly/production/apps/database
+ReadOnlyPaths=/etc/codexpoly/offsite-backup
+ReadWritePaths=/var/backups/codexpoly/offsite

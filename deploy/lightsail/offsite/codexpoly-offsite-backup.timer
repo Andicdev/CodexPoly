@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted CodexPoly offsite backup staging
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+Unit=codexpoly-offsite-backup.service
+
+[Install]
+WantedBy=timers.target
