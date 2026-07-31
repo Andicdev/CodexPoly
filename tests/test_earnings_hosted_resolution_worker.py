@@ -142,12 +142,17 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         facts = (
             _fact(by_ticker["AAPL"], "1.90"),
             _fact(by_ticker["AMZN"], "1.83"),
+            _fact(by_ticker["ARES"], "1.28"),
             _fact(by_ticker["ARCC"], "0.48"),
             _fact(by_ticker["BA"], "-0.31"),
+            _fact(by_ticker["BEN"], "0.67"),
             _fact(by_ticker["CBRE"], "1.33"),
+            _fact(by_ticker["CBOE"], "3.50"),
             _fact(by_ticker["CI"], "7.61"),
+            _fact(by_ticker["CL"], "0.96"),
             _fact(by_ticker["CSGP"], "0.11"),
             _fact(by_ticker["CZR"], "0.06"),
+            _fact(by_ticker["CVX"], "5.33"),
             _fact(by_ticker["DLB"], "0.68"),
             _fact(by_ticker["EA"], "0.81"),
             _fact(by_ticker["EBAY"], "1.52"),
@@ -164,6 +169,7 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
             _fact(by_ticker["MA"], "4.78"),
             _fact(by_ticker["META"], "7.21"),
             _fact(by_ticker["MSFT"], "4.22"),
+            _fact(by_ticker["MRNA"], "-2.05"),
             _fact(by_ticker["NVTS"], "-0.03"),
             _fact(by_ticker["NXPI"], "3.54"),
             _fact(by_ticker["PAG"], "3.40"),
@@ -202,14 +208,14 @@ class EarningsHostedResolutionWorkerTests(unittest.TestCase):
         preparations = worker.prepare()
         result = worker.poll_once()
 
-        self.assertEqual(len(preparations), 46)
+        self.assertEqual(len(preparations), 52)
         self.assertTrue(all(item.ready for item in preparations))
         self.assertTrue(
             all(item.template_count == 2 for item in preparations)
         )
-        self.assertEqual(worker.managed_count, 46)
-        self.assertEqual(result.fact_count, 46)
-        self.assertEqual(result.completed_count, 46)
+        self.assertEqual(worker.managed_count, 52)
+        self.assertEqual(result.fact_count, 52)
+        self.assertEqual(result.completed_count, 52)
         self.assertEqual(result.failed_count, 0)
         worker.close()
 

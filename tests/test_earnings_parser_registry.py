@@ -18,13 +18,18 @@ class EarningsParserRegistryTests(unittest.TestCase):
             {
                 "AAPL",
                 "AMZN",
+                "ARES",
                 "ARCC",
                 "BA",
                 "BBBY",
+                "BEN",
                 "CBRE",
+                "CBOE",
                 "CI",
+                "CL",
                 "CSGP",
                 "CZR",
+                "CVX",
                 "DLB",
                 "EA",
                 "EBAY",
@@ -41,6 +46,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "MA",
                 "META",
                 "MSFT",
+                "MRNA",
                 "NVTS",
                 "NXPI",
                 "PAG",
@@ -69,13 +75,18 @@ class EarningsParserRegistryTests(unittest.TestCase):
             {
                 "AAPL",
                 "AMZN",
+                "ARES",
                 "ARCC",
                 "BA",
                 "BBBY",
+                "BEN",
                 "CBRE",
+                "CBOE",
                 "CI",
+                "CL",
                 "CSGP",
                 "CZR",
+                "CVX",
                 "DLB",
                 "EA",
                 "EBAY",
@@ -92,6 +103,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "MA",
                 "META",
                 "MSFT",
+                "MRNA",
                 "NVTS",
                 "NXPI",
                 "PAG",
@@ -120,7 +132,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            46,
+            52,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(
