@@ -60,6 +60,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "WAY",
                 "WING",
                 "WWD",
+                "XOM",
                 "YUM",
             },
         )
@@ -110,6 +111,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
                 "WAY",
                 "WING",
                 "WWD",
+                "XOM",
                 "YUM",
             },
         )
@@ -118,7 +120,7 @@ class EarningsParserRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             len({rule.scope_id for rule in rules}),
-            45,
+            46,
         )
 
     def test_rules_retain_market_date_but_use_official_release_time(
